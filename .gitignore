@@ -27,6 +27,16 @@ pip-unpack-*/
 matplotlib-*/
 .mplcache/
 
+# ---- 测试与运行的临时产物 ----
+# 根目录 conftest.py 已把 tempfile 指到 .tmp/（本机 Python 子进程写不进
+# 系统临时目录，tempfile 会退回 cwd，也就是项目根目录）。
+.tmp/
+# 下面两条是"没被 conftest 拦住的漏网者"的最后一道保险：
+# 万一将来有人在别的入口跑测试，也不会把随机名目录提交进仓库。
+# 注意这里是**兜底**，不是解法 —— 解法是 conftest.py 里指向 .tmp/。
+pytest-of-*/
+tmp????????/
+
 # ---- 编辑器 / 系统 ----
 .idea/
 .vscode/

@@ -133,6 +133,8 @@ PENDING → [profiling] DatasetProfile → [planning, 调 LLM] TaskPlan
 > **这一列现在的适用范围与例外**：`app/` 下的行全部按上面这套判据（只回答"模型参与了吗"）；`tests/`、`web/`、`data/`、`docs/` 行里的 `[QA]`、`[FE]`、`[LEAD]`、`[ARCH]` **仍是负责方**（那几类文件不存在"模型参与"的问题，也从来没人按 AI 参与度去读它们）。**两种含义不要混着引用。**
 >
 > **想知道某个 `app/` 文件是谁写的，看第 12 节排期表，不要看这一列。** 对照关系：`loader.py`/`store.py`/`profiler.py`/`errors.py`/`config.py`/`routes_datasets.py`/`routes_analysis.py`/`core/*` = **BE**；`tools/*`/`llm/*`/`agents/*` = **AI**（工具层可按第 12 节 D3 拆一半给 BE）；`web/*` = **FE**；`tests/*` = **QA**。
+>
+> **这条标记约定的权威说明见 `docs/DECISIONS.md`**：列语义（`app/` 下按 AI 参与度、其余目录按负责方）= **D-03**，`app/data/profiler.py` 归属 D2 = **D-04**。以后要改这条约定，**两处一起改**。
 
 ```
 ai-data-analyst-agent/
