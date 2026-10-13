@@ -21,9 +21,22 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from app.errors import ERROR_STATUS, AppError, sanitize_detail
+from app import errors as errors_module
+from app.errors import (
+    ERROR_STATUS,
+    AppError,
+    sanitize_detail,
+)
 from app.main import app, app_error_handler, unexpected_exception_handler
 from app.schemas import ApiError, ApiResponse, ErrorCode
+
+# `reset_username_patterns_cache` 故意**不用 from ... import** 取进来：
+# 它是"缓存复位"这种测试专用工具，而且这条测试的全部价值就在于
+# **能在老的、把正则冻结在 import 时刻的实现上真的跑起来并失败**。
+# 写成模块级 from-import 的话，换回老实现时整个测试文件会 ImportError 收集失败 ——
+# 看着是红的，红的却是"测试引用了不存在的名字"，不是"行为回归了"。
+# 只要能跑的失败才算证据，收集失败不算。
+reset_username_patterns_cache = getattr(errors_module, "reset_username_patterns_cache", None)
 
 
 @pytest.fixture
@@ -186,11 +199,20 @@ def test_sanitize_detail_covers_real_exception_text():
     # 结尾的引号不能被一起吃掉（否则原文结构被破坏，看起来像我们自己的 bug）
     assert cleaned.endswith("'")
 
-    # ② 含 Windows 用户名。
+    # ① 含 Windows 用户名。
     #    用户名从环境变量取，不写死成具体某个人 —— QA 指出原来的写法把
     #    "jun" 硬编码进了测试，换台机器跑，那台机器的用户名就漏出去了，
     #    而断言还照样绿（因为测的是别人机器上不存在的字符串）。
-    username = os.environ.get("USERNAME") or os.environ.get("USER") or "nobody"
+    #
+    #    但"取不到就编一个 nobody"同样是错的（QA 第三轮的新-2）：
+    #    环境里没有用户名时，用户名正则本来就是空的，拿一个**环境里不存在的**
+    #    用户名去断言"它必须被盖掉"，必然红 —— 那是在考一个不存在的功能。
+    #    取不到就诚实地跳过，并在原因里写清为什么。
+    username = os.environ.get("USERNAME") or os.environ.get("USER")
+    if not username:
+        pytest.skip("环境里没有 USERNAME/USER：用户名清洗分支本就不生效，无需断言")
+    reset_username_patterns_cache()  # 确保用的是当前环境，而不是更早某次的结果
+
     cleaned = sanitize_detail(f"权限不足: C:\\Users\\{username}\\AppData\\Local\\Temp")
     assert username.lower() not in cleaned.lower()
     assert "<path>" in cleaned
@@ -277,3 +299,78 @@ def test_sanitize_detail_is_applied_to_success_paths_too():
     """清洗函数是纯函数，不依赖 FastAPI 上下文 —— 工具/报告模块也能直接复用。"""
     assert sanitize_detail("正常文本") == "正常文本"
     assert "C:" not in sanitize_detail("C:\\Windows\\System32\\drivers\\etc\\hosts")
+
+
+@pytest.fixture(autouse=True)
+def _username_patterns_cache_is_never_leaked():
+    """每条用例前后都把"用户名正则缓存"复位，消除用例之间的执行顺序依赖。
+
+    为什么必须加这个 fixture（真实踩到的坑）：
+        下面那条 username 测试会把缓存刷成 USERNAME="someone" 算出的那一份，
+        然后 monkeypatch 在退出时把环境变量改回 "jun" —— 但**缓存不会跟着回退**。
+        于是缓存里留着的是 "someone" 的规则，而真实环境是 "jun"。
+        谁在它后面执行、谁就拿到一份和当前环境对不上的正则。
+        本文件当前的顺序（doctest 排在最后）恰好没踩上，但那是运气，
+        不是设计 —— 这种"靠文件顺序才绿"的测试，改个名字就会莫名其妙开始红。
+
+    为什么前后都要复位：
+        前面复位 = 别人留下的脏状态不影响我；
+        后面复位 = 我不把自己的脏状态留给别人（尤其是 app/errors.py 的 doctest，
+        它跑在最后且用的是 `\u4e2d\u6587` 这种与用户名无关的输入，但同样不该建立在脏缓存上）。
+    """
+    reset_cache = reset_username_patterns_cache
+    if reset_cache is not None:
+        reset_cache()
+    yield
+    if reset_cache is not None:
+        reset_cache()
+
+
+def test_username_patterns_are_resolved_at_call_time_not_import_time(monkeypatch):
+    r"""用户名正则必须是"用的时候才取"，不能是"import 的时候取一次就冻住"。
+
+    这是 QA 第三轮挖出来的真 bug（编号新-1），和第一阶段 D-2 是同一类毛病：
+    老写法把 `_current_username_patterns()` 的结果算进**模块级变量**
+    `_PATH_PATTERNS`，于是：
+
+        进程在**没有** USERNAME 的环境里启动（Linux 容器、Windows 服务、
+        计划任务、`env -i` 起的进程）→ 那一份快照里用户名正则是空的 →
+        之后就算环境变量里有了用户名，无盘符的 `Users\<名字>\...` 也永远
+        盖不住。不报错、不 500，只是**静默少了一道防护**。
+
+    怎么测才不是"假绿"？
+        **必须真的在运行期改变环境变量，再重新调用。** 如果只断言
+        "设了 USERNAME 之后能盖住"，那么老写法照样能过（因为 pytest 进程
+        启动时 USERNAME 本来就在，快照里已经有了）—— 那就是假绿。
+        所以这里先把环境变量清干净、**并让缓存重新取一次**，模拟"启动时取不到"，
+        再设上用户名重新调用。
+
+    为什么要用模块级的 `reset_username_patterns_cache = getattr(...)`？
+        因为这条测试存在的意义就是**在老的、有 bug 的实现上失败**。
+        如果测试文件里直接 `from app.errors import reset_username_patterns_cache`，
+        那么把实现换回老版本时，整个测试模块会 ImportError 收集失败 ——
+        看起来"红了"，但红的原因是测试自己引用了不存在的名字，
+        而不是"行为回归了"。**能跑的失败才算证据，收集失败的失败不算。**
+    """
+    # 第一步：模拟"启动时环境里没有用户名"，并让缓存重新取一次 ——
+    # 这一步对应真实场景：进程启动时第一次调用就把"空的"那份缓存住了。
+    monkeypatch.delenv("USERNAME", raising=False)
+    monkeypatch.delenv("USER", raising=False)
+    if reset_username_patterns_cache is not None:
+        reset_username_patterns_cache()
+
+    text = r"读取失败: Users\somebody\notes.txt"
+    assert sanitize_detail(text) == text, (
+        "环境里没有用户名时，这一条本来就不该生效（这是已知边界，不是 bug）"
+    )
+
+    # 第二步：运行期把用户名设上，再调用一次。
+    monkeypatch.setenv("USERNAME", "someone")
+    if reset_username_patterns_cache is not None:
+        reset_username_patterns_cache()
+
+    cleaned = sanitize_detail(r"读取失败: Users\someone\notes.txt")
+    assert "someone" not in cleaned.lower(), (
+        "运行期设上的用户名没有被清洗掉 —— 用户名正则被冻结在 import 时刻了"
+    )
+    assert cleaned == "读取失败: <path>"

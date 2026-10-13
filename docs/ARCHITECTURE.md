@@ -3,7 +3,7 @@
 > 文档性质：**设计方案**，不是实现。第 4 节的 Pydantic 模型只写在本文档的代码块里，落地成 `.py` 文件由对应负责人在指定日期做。
 > 版本：**v1.1**（2026-10-13 修订）。v1.0 → v1.1 按 `docs/REVIEW_ARCHITECTURE.md` 的 9 条审核意见修订，逐条落实记录见 **第 14.2 节**。
 > 适用水平：会基础 Python、会调用大模型 API、正在学 FastAPI。全文避免抽象术语；出现一个新名词时，第一次出现就给一句大白话解释。
-> 环境事实（已核实，含第一阶段返工 commit 460cf8c）：Windows 11 + PowerShell 5.1、Python 3.12.8、项目根目录 `D:\个人项目01\ai-data-analyst-agent`、虚拟环境 `.venv`（`--system-site-packages`）。已装：fastapi 0.136.3、uvicorn 0.48.0、pydantic 2.13.4、pandas 3.0.3、numpy 2.4.6、pytest 9.1.1、httpx 0.28.1、openai 2.41.0、python-dotenv 1.2.2、python-multipart 0.0.32、openpyxl 3.1.5、matplotlib 3.11.2。
+> 环境事实（已核实，含第一阶段返工 commit `460cf8c`、第二阶段契约冻结 commit `44566c6`）：Windows 11 + PowerShell 5.1、Python 3.12.8、项目根目录 `D:\个人项目01\ai-data-analyst-agent`、虚拟环境 `.venv`（`--system-site-packages`）。已装：fastapi 0.136.3、uvicorn 0.48.0、pydantic 2.13.4、pandas 3.0.3、numpy 2.4.6、pytest 9.1.1、httpx 0.28.1、openai 2.41.0、python-dotenv 1.2.2、python-multipart 0.0.32、openpyxl 3.1.5、matplotlib 3.11.2（精确快照另见 `requirements.lock.txt`，分工见第 11 节）。
 >
 > **两条已经生效的代码约定（本文档全部示例都遵守，后续所有新代码也必须遵守）**：
 > 1. **取配置一律 `from app import config` + 函数内 `config.get_settings()`**；不存在模块级 `settings` 对象，测试里改完环境变量用 `config.reset_settings_cache()`。理由见 `app/config.py` 的 docstring：模块级对象在 import 时就绑死了，测试会"静默失效"。
@@ -125,6 +125,15 @@ PENDING → [profiling] DatasetProfile → [planning, 调 LLM] TaskPlan
 
 记号：`[D?]` = 第几天实现；`[角色]`：`LEAD`=Project Lead、`ARCH`=System Architect、`BE`=Backend、`AI`=AI Agent、`FE`=Frontend、`QA`=QA。`(已存在)` = 第一阶段已写好、本设计不改动。
 
+> **`[AI]` / `[BE]` 这一列的判据（v1.1 写死，避免每加一个文件都要重新讨论一次）**：
+> - **`[BE]`** = 该模块的**每一步数值都由 Python / pandas 算出来，模型不参与**；
+> - **`[AI]`** = 该模块**有真实的 LLM 调用点**（哪怕只是兜底路径里的一次调用）。
+>
+> 所以这一列的用途是回答"**模型到底参与了哪几步**"：**数一下全树里 `[AI]` 有几个就是答案**。按此判据，`[AI]` 只出现在 **5 个文件**里 —— `llm/__init__.py`、`llm/client.py`、`llm/prompts.py`（`llm/` 整个包就是模型边界）、`agents/planner.py`（规划）、`agents/validation.py`（其中的 `build_report` 写报告），对应**三个功能区**：模型请求层 / 规划 / 报告撰写。**其余全是 `[BE]`**，包括 7 个工具、`profiler.py`、`orchestrator.py`、`analysis.py`、`charts.py` —— 这正是"执行阶段零 LLM 参与"在目录结构上的体现。
+> **这一列现在的适用范围与例外**：`app/` 下的行全部按上面这套判据（只回答"模型参与了吗"）；`tests/`、`web/`、`data/`、`docs/` 行里的 `[QA]`、`[FE]`、`[LEAD]`、`[ARCH]` **仍是负责方**（那几类文件不存在"模型参与"的问题，也从来没人按 AI 参与度去读它们）。**两种含义不要混着引用。**
+>
+> **想知道某个 `app/` 文件是谁写的，看第 12 节排期表，不要看这一列。** 对照关系：`loader.py`/`store.py`/`profiler.py`/`errors.py`/`config.py`/`routes_datasets.py`/`routes_analysis.py`/`core/*` = **BE**；`tools/*`/`llm/*`/`agents/*` = **AI**（工具层可按第 12 节 D3 拆一半给 BE）；`web/*` = **FE**；`tests/*` = **QA**。
+
 ```
 ai-data-analyst-agent/
 ├─ docs/
@@ -132,46 +141,46 @@ ai-data-analyst-agent/
 ├─ app/
 │  ├─ __init__.py                     (已存在) __version__ = "0.1.0"
 │  ├─ main.py                         (已存在) D6 追加静态文件挂载 /static 与 web 首页路由
-│  ├─ config.py                       (已存在) 已有 max_upload_mb(43) / upload_path(54) / max_upload_bytes(60)；D2 追加 max_rows、max_columns、max_workflow_seconds、charts_dir、db_path
+│  ├─ config.py                       (已存在) 已有 max_upload_mb(43) / upload_path(54) / max_upload_bytes(60) / max_rows、max_columns；D2 追加 max_workflow_seconds、charts_dir、db_path
 │  ├─ runtime.py                      (已存在) STARTED_AT + uptime_seconds()
 │  ├─ schemas.py                      (已存在) D2 追加 ApiError 新错误码
 │  ├─ schemas_dataset.py              [D2][BE] Dataset / DatasetSummary / DatasetProfile / ColumnProfile（见 4.1、4.2）
-│  ├─ schemas_tool.py                 [D3][AI] ToolResult / ChartResult / ToolSpec（见 4.7、4.8）
-│  ├─ schemas_workflow.py             [D3–D5][AI] **全部工作流相关 Pydantic 模型**（见 B-1 修订，4.3–4.6、4.9–4.11）
+│  ├─ schemas_tool.py                 [D3][BE] ToolResult / ChartResult / ToolSpec（见 4.7、4.8）
+│  ├─ schemas_workflow.py             [D3–D5][BE] **全部工作流相关 Pydantic 模型**（见 B-1 修订，4.3–4.6、4.9–4.11）
 │  ├─ errors.py                       [D2][BE] AppError 异常 + ERROR_STATUS 映射 + sanitize_detail()（去绝对路径/用户名）；**不写 HTTP handler**（handler 在 main.py）
 │  ├─ api/
 │  │  ├─ __init__.py                  (已存在)
 │  │  ├─ routes_health.py             (已存在) D1 不动
 │  │  ├─ routes_datasets.py           [D2][BE] POST /datasets/upload、GET /datasets/{id}、GET /datasets/{id}/profile
 │  │  ├─ routes_analysis.py           [D4][BE] POST /analysis（立刻返回 workflow_id）
-│  │  └─ routes_workflows.py          [D3][BE] GET /workflows/{id}、/report、/charts/{filename}
+│  │  └─ routes_workflows.py          [D6][BE] GET /workflows/{id}、/report、/charts/{filename}
 │  ├─ data/
 │  │  ├─ __init__.py                  [D2][BE]
 │  │  ├─ loader.py                    [D2][BE] load_dataframe(path, ext) → DataFrame；编码/分隔符兜底
-│  │  ├─ profiler.py                  [D3][AI] build_profile(df, dataset_id) → DatasetProfile（不调 LLM）
+│  │  ├─ profiler.py                  [D2][BE] build_profile(df, dataset_id) → DatasetProfile（纯 pandas 计算，**零 LLM 参与**；实际就在 D2 做，见 14.3）
 │  │  └─ store.py                     [D2][BE] DatasetStore：进程内 dict，存 DataFrame 与 DatasetSummary
 │  ├─ core/
 │  │  ├─ __init__.py                  [D2][BE]
 │  │  ├─ registry.py                  [D2][BE] WorkflowRegistry：只存（dict + Lock + create/get/touch），**一行模型定义都没有**（模型全在 schemas_workflow.py）
 │  │  └─ background.py                [D4][BE] submit_workflow(state) → 用 BackgroundTasks 跑线程
 │  ├─ tools/
-│  │  ├─ __init__.py                  [D3][AI]
-│  │  ├─ registry.py                  [D3][AI] ToolSpec 定义 + register/get/list_specs/to_openai_tools
-│  │  ├─ describe.py                  [D3][AI] describe_dataset、missing_values
-│  │  ├─ aggregate.py                 [D3][AI] group_aggregate、top_n
-│  │  ├─ compare.py                   [D3][AI] compare_groups、correlation
-│  │  └─ timeseries.py                [D3][AI] time_series_summary（pandas 3.0 写法，见 13.3）
+│  │  ├─ __init__.py                  [D3][BE]
+│  │  ├─ registry.py                  [D3][BE] ToolSpec 定义 + register/get/list_specs/to_openai_tools
+│  │  ├─ describe.py                  [D3][BE] describe_dataset、missing_values
+│  │  ├─ aggregate.py                 [D3][BE] group_aggregate、top_n
+│  │  ├─ compare.py                   [D3][BE] compare_groups、correlation
+│  │  └─ timeseries.py                [D3][BE] time_series_summary（pandas 3.0 写法，见 13.3）
 │  ├─ llm/
 │  │  ├─ __init__.py                  [D4][AI]
 │  │  ├─ client.py                    [D4][AI] chat(messages, tools=None) → LLMReply；超时/重试/错误封装
 │  │  └─ prompts.py                   [D4][AI] 规划 Prompt、解释 Prompt（含"不许造数"硬约束）
 │  ├─ agents/
-│  │  ├─ __init__.py                  [D4][AI]
-│  │  ├─ orchestrator.py              [D4][AI] run_workflow(state)：状态机唯一所有者
-│  │  ├─ planner.py                   [D4][AI] plan(state, profile) → TaskPlan（调 LLM，附规则式兜底）
-│  │  ├─ analysis.py                  [D4][AI] run_task(task, df) → ToolResult；需要时调图表工具
-│  │  ├─ charts.py                    [D5][AI] render_chart(ToolResult, chart_type, ...) → ChartResult
-│  │  └─ validation.py                [D5][AI] validate(state) → ValidationResult；build_report(...) → FinalReport
+│  │  ├─ __init__.py                  [D4][BE]
+│  │  ├─ orchestrator.py              [D4][BE] run_workflow(state)：状态机唯一所有者（自身不调模型，只调 planner）
+│  │  ├─ planner.py                   [D4][AI] plan(state, profile) → TaskPlan（**调 LLM**，附规则式兜底）
+│  │  ├─ analysis.py                  [D4][BE] run_task(task, df) → ToolResult；需要时调图表工具
+│  │  ├─ charts.py                    [D5][BE] render_chart(ToolResult, chart_type, ...) → ChartResult
+│  │  └─ validation.py                [D5][AI] validate(state) → ValidationResult（纯代码校验，无模型）；build_report(...) → FinalReport（**调 LLM**，所以本模块算 [AI]）
 │  └─ web/
 │     ├─ index.html                   [D6][FE] 单页：上传区 / 提问区 / 状态区 / 图表区 / 报告区
 │     ├─ app.js                       [D6][FE] fetch 调用 + 1 秒轮询 + 渲染
@@ -346,10 +355,14 @@ raise AppError(ErrorCode.NOT_FOUND, "没有这个数据集")            # → HT
 raise AppError(ErrorCode.UNSUPPORTED_FILE, "只支持 .csv / .xlsx")  # → HTTP 415
 raise AppError(ErrorCode.FILE_TOO_LARGE, "文件超过 10 MB 上限")    # → HTTP 413
 raise AppError(ErrorCode.BAD_REQUEST, "问题不能为空")             # → HTTP 400
-raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底")  # → HTTP 503
+raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底")  # → HTTP 503（枚举自带映射）
 
-# 状态码全部由 ERROR_STATUS[code] 查表得到（§7.3），**路由里不要手写状态码**；
-# status_code 参数只在极少数"同一个 code 要配不同状态码"时显式传入（v1.1 起已无调用点）。
+# 状态码全部由 ERROR_STATUS[code] 查表得到（§7.3），**路由里不要手写状态码**。
+# status_code 参数（第 4 个位置参数）目前没有调用点，**留着别删**：等真出现
+# "同一个 code 需要两个不同状态码"时从调用点传，比往枚举里塞一个新 code 更好。
+# 典型场景：将来某处想让 NOT_FOUND 之外的东西配 503，而 NOT_FOUND 在别处必须是 404 ——
+# 那时 POST /api/analysis 才会写成 AppError(..., status_code=503)；
+# 现在 503 有枚举自带的映射，所以**不需要**传。
 # 另一类来源是框架自己抛的 HTTPException / RequestValidationError，由 main.py
 # 的四个 handler 兜住（404 / 405 / 422 / 500），业务代码不需要操心。
 ```
@@ -366,7 +379,28 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 `app/data/store.py`、`app/core/registry.py` 这类**模块级单例**（`_frames`、`_workflows` 字典）可以存在，但要和 `config.py` 的处理保持一致：**字典在模块级、访问一律走模块函数**（`store.get_frame(...)`、`registry.get(...)`），不要在别的模块里 `from app.data.store import _frames` 直接操作内部字典。
 
-### 4.0.1 关键决定：`pd.DataFrame` 不放进任何 Pydantic 模型
+### 4.0.1 配置项总表（`app/config.py`，**已有字段照抄，不要重命名**）
+
+为什么给一张表：`Settings` 里已经有 11 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
+
+| 字段 | 类型 / 约束 | 默认值 | 对应环境变量 | 用途 | 状态 |
+|---|---|---|---|---|---|
+| `app_name` | `str` | `"AI Data Analyst Agent"` | `APP_NAME` | 健康检查返回的展示名 | 已存在 |
+| `app_version` | `str` | `"0.1.0"` | `APP_VERSION` | 同上 | 已存在 |
+| `upload_dir` | `str` | `"data/uploads"` | `UPLOAD_DIR` | 上传目录（相对项目根）；用 `settings.upload_path` 取 `Path` | 已存在 |
+| `max_upload_mb` | `int`，`gt=0, le=200` | `10` | `MAX_UPLOAD_MB` | 单文件**字节数**上限；代码里用 `settings.max_upload_bytes`（= `mb * 1024 * 1024`） | 已存在 |
+| `max_rows` | `int`，`gt=0, le=5_000_000` | `200_000` | `MAX_ROWS` | 解析后**行数**上限（第 10 节第 2b 条） | **v1.1 新增** |
+| `max_columns` | `int`，`gt=0, le=2_000` | `200` | `MAX_COLUMNS` | 解析后**列数**上限（同上） | **v1.1 新增** |
+| `llm_base_url` | `str` | `""` | `LLM_BASE_URL` | 模型服务地址（DeepSeek 等 OpenAI 兼容端点） | 已存在 |
+| `llm_model` | `str` | `""` | `LLM_MODEL` | 模型名 | 已存在 |
+| `llm_api_key` | `str`，`repr=False` | `""` | `LLM_API_KEY` | 密钥；**任何日志/响应里都不许出现** | 已存在 |
+| `llm_timeout_seconds` | `int`，`gt=0, le=300` | `60` | `LLM_TIMEOUT_SECONDS` | 单次模型调用超时 | 已存在 |
+| `llm_max_retries` | `int`，`ge=0, le=5` | `2` | `LLM_MAX_RETRIES` | 模型调用重试上限 | 已存在 |
+| `charts_dir` / `max_workflow_seconds` / `db_path` / `tool_call_limit` | 见第 5、8 节 | — | — | 出图目录 / 工作流总时长 / SQLite 路径 / 工具调用上限 | **D2–D6 追加**（尚未在 `config.py` 里，写之前先加字段） |
+
+三个**计算属性**（不是配置项，别去 `.env` 里找）：`settings.upload_path`（`Path` 形式的上传目录，`main.py` 的 lifespan 已用它 `mkdir`）、`settings.max_upload_bytes`（字节数）、`settings.llm_configured`（`llm_base_url` 与 `llm_api_key` 都非空才为 `True`，**兜底模式的判定依据**）。
+
+### 4.0.2 关键决定：`pd.DataFrame` 不放进任何 Pydantic 模型
 
 原因：DataFrame 是可变的大对象，Pydantic 校验会尝试复制/序列化它，既慢又容易在 FastAPI 响应里报 `is not JSON serializable`。所以：
 
@@ -1112,6 +1146,7 @@ async function pollWorkflow(workflowId) {
 |---|---|---|---|
 | 1 | 上传格式白名单 | 只允许扩展名 `.csv` / `.xlsx`（大小写不敏感）。`.xls`、`.csv.gz`、`.zip`、`.parquet`、无扩展名一律拒绝。**只信扩展名 + 解析成功这两道关，不信 `Content-Type`**（浏览器给的 `Content-Type` 经常是 `application/octet-stream`，参考价值低） | `routes_datasets.py` + `loader.py` |
 | 2 | 大小限制 | 在**读之前**用 `UploadFile.size` 或分块累加判断，超过 `settings.max_upload_bytes`（默认 10 MB）立刻返回 `FILE_TOO_LARGE`，并且**不把已经读到的内容写进磁盘**。README 里写清"超过 10 MB 请先在 Excel 里裁剪" | `routes_datasets.py` |
+| 2b | **行数与列数两道闸**（v1.1 追加） | **字节数上限挡不住"很小但很宽/很长"的文件**：200 列 × 20 万行的 CSV 可能只有 3 MB，却能把内存拖死（每列一个 object/float64 数组 + 画像逐列统计）。所以 `app/config.py` 已有 `max_rows`（默认 **200000**，`Field(gt=0, le=5_000_000)`）与 `max_columns`（默认 **200**，`Field(gt=0, le=2_000)`），`.env.example` 有 `MAX_ROWS` / `MAX_COLUMNS`。**判在哪一步**：读文件时无法知道行数（CSV 得先解析），所以先用 `pd.read_csv(..., nrows=settings.max_rows + 1)` / `read_excel(...)` 读**前 N+1 行**——读到第 N+1 行说明超限，立刻抛 `AppError(ErrorCode.BAD_REQUEST, "行数超过上限 200000")`；列数在拿到 DataFrame 后立刻判 `df.shape[1] > settings.max_columns`。两个上限都用 `BAD_REQUEST`（400）而不是 413：**413 的语义是"请求体太大"，而这里限制的是解析后的形状**，报文本身可能只有 3 MB | `loader.py`（读时判行、读完判列）|
 | 3 | 路径穿越防护 | ① 落盘名一律用 `{uuid4().hex}.{ext}`，**用户文件名只写进数据库/内存字段，从不参与拼路径**；② 读取时再做一次确认：`resolved = target.resolve(); assert resolved.parent == upload_path.resolve()`（用 `Path.resolve()` 消掉 `..` 之后比较父目录）；③ 文件名黑名单：含 `..`、`/`、`\`、`:`、`\0` 直接拒绝 | `routes_datasets.py`、`data/store.py` |
 | 4 | 安全文件命名 | 图表文件名只由 `chart_id`（12 位 hex）决定；`ChartResult.filename` 用正则 `^[0-9a-f]{12}\.png$` 校验后才允许读；工作流目录名只由 `workflow_id`（32 位 hex）决定 | `routes_workflows.py`、`agents/charts.py` |
 | 5 | 密钥管理 | 密钥只从 `.env` 读（`pydantic-settings`），`.env` 已在 `.gitignore`；`Settings.llm_api_key` 已带 `repr=False`，任何 `print(settings)` 都不会带出原文；**任何 API 响应与日志里都不允许出现密钥**（测试用 `assert "sk-" not in resp.text` 之类的方式兜底，不要只靠人工检查） | `config.py`（已做）+ QA 测试 |
@@ -1172,7 +1207,7 @@ def test_unexpected_error_response_has_no_local_path(client):
 ```
 | 10 | CORS 收紧 | 已经只允许 127.0.0.1 / localhost 的 8000 与 5500，`allow_credentials=False`。**不要为了图省事改成 `["*"]`** | `main.py`（已做） |
 | 11 | 上传文件不执行 | 绝不把上传目录放到 Python 的 import 路径上，也不用 `pandas.read_pickle` / `read_json`（pickle 反序列化能执行任意代码）。只允许 `read_csv` / `read_excel` | `loader.py` |
-| 12 | Excel 炸弹与超宽表 | 行数上限（例 20 万行）与列数上限（例 200 列）超过即 `BAD_REQUEST`；公式不计算（`openpyxl` 读值不读公式）；避免 `read_excel` 把整个工作簿所有 sheet 都读进来（只读第一个 sheet 或指定 sheet） | `loader.py` |
+| 12 | Excel 炸弹与超宽表 | 行数上限与列数上限超过即 `BAD_REQUEST`。**具体数值以 `app/config.py` 为准**（`max_rows=200000`、`max_columns=200`，v1.1 已加），实现细节见第 10 节第 2b 条（读前 `nrows=max_rows+1` 判行、读后判列）。公式不计算（`openpyxl` 读值不读公式）；避免 `read_excel` 把整个工作簿所有 sheet 都读进来（只读第一个 sheet 或指定 sheet） | `loader.py` |
 
 ---
 
@@ -1193,6 +1228,15 @@ def test_unexpected_error_response_has_no_local_path(client):
 | **SSE / WebSocket** | 实时进度推送 | 1 秒一次轮询，实现 10 行，够用 | 需要秒级以内的实时性、或轮询请求量成为瓶颈（见 8.3 第 4 条） |
 
 **新依赖的总闸门**：任何新增第三方依赖，必须先在 `requirements.txt` 的注释里写一行"用途 + 不用的替代方案"，否则不合并。这条规则本身也写进 README。
+
+**`requirements.txt` 与 `requirements.lock.txt` 的分工**（v1.1 追加，两份都要保留）：
+
+| 文件 | 写什么 | 谁在用 | 为什么不能只留一份 |
+|---|---|---|---|
+| `requirements.txt` | 版本**区间**（`fastapi>=0.110` 这类下界），是允许范围 | 别人 clone 后 `pip install -r requirements.txt`，允许装到更新的小版本 | 写成精确锁会把"在更新版本上也能跑"这件事变成不可能，而且 3.10–3.12 的兼容性无法覆盖 |
+| `requirements.lock.txt` | **本机实测通过的精确版本**（12 个直接依赖，`importlib.metadata.version()` 逐个取值，不用 `pip freeze`——`.venv` 是 `--system-site-packages` 建的，freeze 会带出整台机器的 185 个包） | 面试官/评审要"一字节不差复现这套版本"时 `pip install -r requirements.lock.txt` | 复现问题（"我这儿跑不起来"）时最需要的是**当时验证过的确切版本**，区间给不出这个信息 |
+
+已实测的 12 个直接依赖：`fastapi==0.136.3`、`uvicorn==0.48.0`、`pydantic==2.13.4`、`pydantic-settings==2.15.0`、`python-multipart==0.0.32`、`pandas==3.0.3`、`numpy==2.4.6`、`matplotlib==3.11.2`、`openpyxl==3.1.5`、`openai==2.41.0`、`pytest==9.1.1`、`httpx==0.28.1`。**注意 `requirements.lock.txt` 是快照不是约束**：区间仍以 `requirements.txt` 为准。
 
 ---
 
@@ -1311,7 +1355,7 @@ D1 骨架 ──▶ D2 数据层/上传 ──▶ D3 工具层 ──▶ D4 LLM+
 |---|---|---|---|---|
 | 1 | **[阻塞] A-1** HTTP 状态码自相矛盾 | ✅ 已改 | §7 开头统一约定、**新增 §7.0 状态码映射表**、§7 接口表错误码列、**新增 §7.3 `ERROR_STATUS`**、§4.0 代码约定、§14.1 | 删除"业务错误一律 HTTP 200"整句；照抄 A-1 表 12 行（200/202/400/404/405/413/415/422/500/503 + `WORKFLOW_TIMEOUT`→200）；接口表每格写成 `**415** UNSUPPORTED_FILE` 形式；`POST /api/analysis` 改 **202**；补 4 条"禁止绕过统一外壳"约束 |
 | 2 | **[阻塞] A-2** `charts` 三处不一致 | ✅ 已改 | §4.8、§7 接口 6 / 接口 8、**新增 §7.1.1**、§9.1 E 区 | 写死 `ChartResult` 字段与 `url` **由后端拼好** `/api/workflows/{workflow_id}/charts/{filename}`；§7.1.1 给出前端唯一正确写法 `img.src = c.url`（不拼字符串），并说明"前端拼接会让 404 的图片链接无法被 pytest 覆盖" |
-| 3 | **[阻塞] A-3** 目录设计冲突 | ✅ 已改 | §2 目录树、**§2.1**、§3 | 收口为 `app/data/{loader,store,profiler}.py` + `app/errors.py` + `app/api/routes_datasets.py` 一份清单；同一处（**§2.1 末尾**，不是 §2.2）标注"`app/datasets.py` 与 `app/security/files.py` 这两个提法已作废"（保留此说明是为了让后来者知道它们**不是**被漏掉） |
+| 3 | **[阻塞] A-3** 目录设计冲突 | ✅ 已改 | §2 目录树、**§2.1**、§3 | 收口为 `app/data/{loader,store,profiler}.py` + `app/errors.py` + `app/api/routes_datasets.py` 一份清单；同一处（§2.1 末尾）标注"`app/datasets.py` 与 `app/security/files.py` 这两个提法已作废"（保留此说明是为了让后来者知道它们**不是**被漏掉） |
 | 4 | B-1 `WorkflowState` 定义位置分裂 | ✅ 已改 | §4.0 判据、§4.5 | 全部模型定义在 `app/schemas_workflow.py`；`app/core/registry.py` **一行模型定义都没有**；判据一句话："数据长什么样"进 `schemas_*.py`，"数据放在哪、怎么同步"进 `core/` |
 | 5 | B-2 锁说明矛盾 + 漏"登记图表" | ✅ 已改 | **新增 §8.2.1 / §8.2.2 / §8.2.3** | ① `_lock` 只保护 registry 的 dict，`state` 内部字段**不需要**加锁（附"禁止到处加锁 / 禁止返回 deepcopy"两条禁令）；② `charts.py` 不许改 `state`，由 `analysis.py` 在**同一函数体内连续两行**写文件 + `state.charts.append(chart)`，并说明"写"与"登记"分离会产生孤儿 PNG + 接口 404；③ `DatasetStore` 同属进程内，单进程限制同样适用，要一起写进 README |
 | 6 | B-3 源码扫描测试做法 | ✅ 已改 | §10 第 7 条 | 改为 `ast.parse` + `ast.walk` 判断 `ast.Call` 的 `eval/exec/compile/__import__`（附约 25 行测试代码）；写明"注释与 docstring 天然不在语法树里"；并诚实标注 AST 检查**防不住** `getattr(obj, name)()` 这类间接调用，真正的边界是工具白名单注册表 |
@@ -1343,13 +1387,55 @@ A-1 表里"外部依赖不可用（模型未配置且无法兜底）"原本配�
 - **附带结论（我写进 §7.3 第 3 条）**：`AppError.__init__` 的第 4 个参数 `status_code` 现在**没有调用点了**。它不删——将来出现"同一个 `code` 要配两个状态码"时不必改构造函数签名；但默认不传。
 - **代价**：枚举 2 个值 + 映射表 2 行 + `DEFAULT_MESSAGE` 2 行，与我在回报里估的"约 2 行"同量级。
 
-**这件事的做法本身也记一笔**（Lead 明确认可，值得后来者照做）：发现"按字面执行验收会损害文档价值"时，**先提出替代口径和代价，而不是闷头把字符串删干净让验收数字好看**。本次具体表现：审核要求"文档里不得出现 `app/datasets.py` / `app/security/files.py` / `sales_sample.csv`"，而前两个名字在 **§2.1 的"已作废"说明**和 §14.2 的变更记录里**必须**出现（否则后来者会以为是被漏掉的）。**最终口径（Lead 已正式采纳）**：
+**正式口径（引用就用这一版，Lead 于 v1.1 定稿）**：
 
-> `docs/ARCHITECTURE.md` **正文**（除 **§2.1**「已作废」说明与 §14.2 变更记录外）不得出现 `app/datasets.py`、`app/security/files.py`、`sales_sample.csv`；不得出现"业务错误一律 HTTP 200"作为**设计表述**。
+> `docs/ARCHITECTURE.md` **正文**（除 §2.1 末尾「已作废」说明与 §14.2 变更记录外）不得出现 `app/datasets.py`、`app/security/files.py`、`sales_sample.csv`；不得把"业务错误一律 HTTP 200"写成设计表述。
 
-> 口径里的小修正：Lead 原话写的是"§2.2"，但文档里没有 §2.2 —— 那句"这两个提法已作废"在 **§2.1 依赖方向**的末尾（表格之后那一段）。**按 §2.1 执行**；这处编号笔误由我在本节改正，避免后来者按 §2.2 去核对（那里是 §8.2.2 之类的其他节）。
+**怎么自己核这条口径（不要照抄某个固定数字）**：本节的变更记录本身**必须**提到这些字符串（否则无法追溯到"删了什么、为什么留"），所以**计数会随本节编辑而变**——本次逐处核对的结果是：三个旧文件名/路径里，只有"已作废"那一条出现在 §2.1 末尾，其余**全部集中在本节**；`sales_sample.csv` 与"业务错误一律 HTTP 200"更是只在本节出现。**结论口径是"§2.1 与 §14.2 之外为 0 处"，不是"全文档 0 处"。** 想复核就跑下面这条（PowerShell，逐处打印行号与所属节标题，比单看一个数字可靠）：
 
-按此口径自证（v1.1 收尾，逐节统计）：`sales_sample.csv` 共 3 处、**全部在 §14.2**；`app/datasets.py` 与 `app/security/files.py` 各 5 处（**§2.1 各 1 处 + §14.2 各 4 处**）；`业务错误一律 HTTP 200` 共 3 处（全在 §14.2，均为变更记录里的引用）；**正文其他位置 0 处**。
+```powershell
+# 两个坑，都必须写进脚本里，否则判据本身不可信：
+# ① 大小写：显式用 -imatch。PowerShell 的 -match 默认就不区分大小写（-cmatch 才区分），
+#    但判据要写死成"不区分大小写"才严密 —— 否则 http 200 / HTTP 200、
+#    Sales_Sample.CSV 这类写法会被漏检。（-notmatch / -inotmatch 同理。）
+# ② 编码：必须 -Encoding UTF8。PowerShell 5.1 的 Get-Content 默认按**系统 ANSI 代码页**
+#    读文件，本机是 GBK —— 用它读 UTF-8 的中文文档，一行会变成乱码，而且**行号会错**
+#    （实测：同一份 1458 行的文档，加 -Encoding UTF8 得 1458 行、行号与编辑器一致；
+#    不加只有 1068 行，行号整体前移，报出来的位置没法用来核对）。Select-String 同理。
+$f = "docs\ARCHITECTURE.md"
+$sec = ""; $n = 0; $bad = 0
+Get-Content $f -Encoding UTF8 | ForEach-Object {
+    $n++
+    if ($_ -imatch '^#{2,3} ') { $sec = $_.Trim() }
+    if ($_ -imatch 'app/datasets\.py|app/security/files\.py|sales_sample\.csv|业务错误一律\s*http\s*200') {
+        $ok = $sec -imatch '^### (2\.1|14\.2|14\.3)'
+        if (-not $ok) { $bad++ }
+        "{0}  {1,5}  {2}  ::  {3}" -f $(if ($ok) { "OK " } else { "BAD" }), $n, $sec, $_.Trim().Substring(0, [Math]::Min(60, $_.Trim().Length))
+    }
+}
+"非白名单节命中 = $bad（判据：必须为 0，不分大小写）"
+# 期望：命中行全部落在 §2.1（1 处"已作废"说明）与 §14.2 / §14.3（变更记录）里，
+#       最后一行打印 非白名单节命中 = 0。
+```
+
+> ⚠️ **本节里出现的任何"共 N 处"数字都会随本节编辑而变大**（因为这些字符串就写在 §14.2 里），**不要把它当验收基线**。当次核对（v1.1 收尾时）的真实分布是：`sales_sample.csv` → 仅 §14.2；`app/datasets.py` / `app/security/files.py` → §2.1 末尾「已作废」说明 1 处 + §14.2 若干处；`业务错误一律 HTTP 200` → 仅 §14.2。**验收判据请用上面那段 PowerShell 的结论（"§2.1 与 §14.2 之外为 0 处"），不要用数字。**
+
+### 14.3 第二阶段契约冻结（commit `44566c6`）后的文档同步记录
+
+基线：`git log --oneline -5` = `44566c6`（第二阶段契约冻结）← `fe155af`（统一错误契约落地）← `460cf8c` ← `9d37bcb`。本轮同步只改 `docs/ARCHITECTURE.md`，未触碰任何 `.py`。
+
+| # | Lead 要求 / 我发现的事项 | 处理 |
+|---|---|---|
+| 1 | `app/config.py` 追加 `max_rows`（默认 200000，`gt=0, le=5_000_000`）与 `max_columns`（默认 200，`gt=0, le=2_000`），`.env.example` 已有 `MAX_ROWS`/`MAX_COLUMNS` | §10 **新增第 2b 条**（字节数之外的两道闸 + `nrows=max_rows+1` 的判行写法 + 为什么用 400 而不是 413）；§13 第 12 条改为"数值以 `config.py` 为准"；§2 目录树 config.py 行标注为**已有**；**新增 §4.0.1 配置项总表** |
+| 2 | 验收口径定稿（引用版本） | §14.2 只保留**一版**正式口径（即上一段引用的那一版），删掉了口径草稿与相关解释性文字，避免同一口径在文档里出现两种写法 |
+| 3 | `requirements.lock.txt`（12 个直接依赖的实测精确版本）已同步 | §11 新增"两份 requirements 的分工"表（区间 vs 快照，以及**为什么不用 `pip freeze`**：`.venv` 是 `--system-site-packages` 建的，freeze 会带出整台机器 185 个包）；文档头的环境事实补 `44566c6` |
+| 4 | `profiler.py` 的标注（**改了两次，最终定案**） | Lead 先说改 `[D2][BE]`、后说"标 `[D3][AI]` 是对的，不用改"，第三次讲清了判据并定案：**排期表不是承诺，实际做完的那天才是记录** —— `profiler.py` 今天就随 task-8 在实现，文档却写 D3，会让后续对进度的人对不上。**最终：`[D2][BE]`**，并保留括注"纯 pandas 计算，**零 LLM 参与**；实际就在 D2 做" |
+| 5 | `[AI]` / `[BE]` 这一列到底是什么意思（Lead 指出"问题在那一列本身，不在 `profiler.py` 这一格"） | §2 记号表下方**新增列语义定义**：`[BE]` = 每一步数值都由 Python/pandas 算出、模型不参与；`[AI]` = 有真实 LLM 调用点（哪怕只在兜底路径）。按此判据把 `app/` 下所有行重新标了一遍（`tools/*`、`schemas_tool.py`、`schemas_workflow.py`、`orchestrator.py`、`analysis.py`、`charts.py` 等从 `[AI]` 改成 `[BE]`），**全树 `[AI]` 只剩 5 个文件**（`llm/` 三个 + `planner.py` + `validation.py`）。这一句同时把"不能只靠换系统提示词就声称做了多智能体"变成**可数判据**：数 `[AI]` 就知道模型参与了几步 |
+| 6 | `routes_workflows.py` 标 `[D3]`、正文放在 D6 | 已改 `[D6][BE]`。Lead 给的**通用规则**（以后不用再问）：**标注/编号与正文事实打架时，一律以正文事实为准并改标注** |
+| 7 | 验收脚本要**不区分大小写**；另发现**编码会让行号错** | §14.2 的 PowerShell 改为显式 `-imatch`（并注明 `-match` 默认就不区分大小写、`-cmatch` 才区分，但判据写死不靠默认行为），正则用 `业务错误一律\s*http\s*200` 兜住 `HTTP 200` / `http 200`，脚本末尾直接打印 `非白名单节命中 = N` 作判据。**同时补了第 ② 个坑（实测发现）**：`Get-Content` 在 PowerShell 5.1 下按系统 ANSI 代码页（本机 GBK）读文件，读 UTF-8 中文文档会**乱码且行号整体前移**——同一份文档加 `-Encoding UTF8` 得 1463 行、行号与编辑器一致，不加只有 1068 行。所以脚本里必须 `-Encoding UTF8`（`Select-String` 同理） |
+| 8 | `app/main.py` 的第 4 个 handler（兜底 `Exception` → 500） | 此前已在 §7 补上"四个 handler"，本轮核对无误 |
+
+**给后来者的一条提醒**：本轮的全部改动都是"**把已有代码的事实写进文档**"，没有一处是新增设计。这类同步的价值在于：`Settings` 字段名、`ERROR_STATUS` 映射、`requirements.lock.txt` 版本这些内容**写错不会报错、只会静默失效**（例如自己造一个 `max_dataset_rows`，默认值一直在起作用，看起来代码没问题）。所以每次契约冻结后都应该做一次这样的核对，而不是等到写代码时才发现名字对不上。
 
 ---
 
@@ -1372,7 +1458,7 @@ A-1 表里"外部依赖不可用（模型未配置且无法兜底）"原本配�
 | 已存在文件 | 本文档的处理方式 |
 |---|---|
 | `app/schemas.py` | **不改**已有 `ApiResponse`/`ApiError`/`ErrorCode`；D2 只在 `ErrorCode` 里追加 `WORKFLOW_TIMEOUT`（追加不算破坏） |
-| `app/config.py` | **不改**已有字段；D2 追加 `charts_dir`、`max_workflow_seconds`、`tool_call_limit`、`max_dataset_rows` |
+| `app/config.py` | **不改**已有字段；已在的 11 个以 **§4.0.1 的配置项总表**为准（`app_name`/`app_version`/`upload_dir`/`max_upload_mb`/`max_rows`/`max_columns`/`llm_base_url`/`llm_model`/`llm_api_key`/`llm_timeout_seconds`/`llm_max_retries`）。D2 追加 `charts_dir`、`max_workflow_seconds`、`db_path`（若 D6 做 SQLite） |
 | `app/main.py` | D6 追加静态文件挂载与首页路由；CORS 白名单保持不动 |
 | `app/runtime.py` | 不动 |
 | `tests/test_health.py` | 不动（如果 D6 把 `/` 改成返回 HTML，**这条测试会失败**——届时必须同步修改测试并在 README 记一笔，这是唯一预期会改动的已有测试） |

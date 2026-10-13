@@ -34,6 +34,7 @@ HTTP 状态码在说谎，排查问题时打开浏览器开发者工具满屏都
 那样等于绕过统一外壳，早晚会出现漏掉某个字段的接口。
 """
 
+import functools
 import os
 import re
 
@@ -131,6 +132,10 @@ class AppError(Exception):
 #   ② 它是一道**兜底防线**，不是许可证 —— 写 detail 时仍然不应该主动拼本机路径。
 #   ③ 用户名靠 os.environ["USERNAME"] 动态取；取不到时（例如以后放进 Linux
 #      容器）跳过用户名匹配，此时用户名会跟着盘符一起被 <path> 盖住。
+#   ④ 用户名匹配**只在第一次用到时编译一次**（_username_patterns 的 lru_cache）。
+#      取不到用户名的那次结果会被缓存住，所以启动后再设 USERNAME 需要显式
+#      reset_username_patterns_cache()。正常情况下没人会这么干，这里写出来
+#      是为了让测试能验证"运行期真的会重新取"，而不是靠 import 期的一份快照。
 
 PATH_PLACEHOLDER = "<path>"
 USER_PLACEHOLDER = "<user>"
@@ -163,16 +168,36 @@ def _current_username_patterns() -> list[str]:
     ]
 
 
-# 顺序有讲究：用户名的模式排在前面，这样 "Users\jun\x.csv" 这种**没有盘符**的
-# 片段不会因为缺少盘符而漏掉；有盘符时先被用户名规则吃掉一部分，
-# 剩下的盘符段仍会被下一条规则吃掉。
-_PATH_PATTERNS: list[re.Pattern[str]] = [
-    *[re.compile(p) for p in _current_username_patterns()],
-    # C:\... 或 d:/... ：一个字母 + 冒号 + 斜杠，后面全是路径字符
-    re.compile(rf"(?i)\b[a-z]:[\\/]{_PATH_END}*"),
-    # UNC 路径 \\服务器\共享\文件
-    re.compile(rf"\\\\{_PATH_END}+"),
-]
+# 为什么这个也要缓存，而不像 _current_username_patterns() 那样每次都重新拼？
+#   正则编译不便宜，而 sanitize_detail 是错误路径上的函数 —— 它被调用时
+#   往往已经有别的东西出问题了，不该再给它添开销。
+#
+# 为什么这个缓存不会重演"配置冻结在 import 时刻"的老毛病（第一阶段踩过）？
+#   区别在**取值时机**：老写法是模块 import 时就把结果算进模块级变量，
+#   之后无论环境怎么变都永远用那一份；现在改成了"第一次真正要用的时候才算"，
+#   而第一次真要用，必然是某个请求出错的时候 —— 那时代码早就启动完了。
+#   也就是说，它拿到的一定是"启动完成后的环境"，这正是我们想要的。
+@functools.lru_cache(maxsize=1)
+def _username_patterns() -> tuple[re.Pattern[str], ...]:
+    """取（并缓存）跟用户名相关的路径正则。环境里没有用户名时返回空元组。"""
+    return tuple(re.compile(p) for p in _current_username_patterns())
+
+
+def reset_username_patterns_cache() -> None:
+    """清掉用户名正则缓存，让下次调用重新读环境变量。
+
+    正常业务流程里**不需要**调它（没有人会在服务跑起来之后改 USERNAME）。
+    它存在的唯一理由是让测试能证明"运行期确实会重新取"，
+    而不是像第一阶段那样绑死在 import 时刻。
+    """
+    _username_patterns.cache_clear()
+
+
+# 不依赖环境变量的两条规则，模块级编译一次即可。
+# "C:\..." 或 "d:/..."：一个字母 + 冒号 + 斜杠，后面全是路径字符。
+_DRIVE_PATTERN = re.compile(rf"(?i)\b[a-z]:[\\/]{_PATH_END}*")
+# UNC 路径 \\服务器\共享\文件
+_UNC_PATTERN = re.compile(rf"\\\\{_PATH_END}+")
 
 
 def sanitize_detail(text: str | None) -> str | None:
@@ -194,12 +219,19 @@ def sanitize_detail(text: str | None) -> str | None:
        而不是本机目录结构；文件名在上传场景下本来也是 uuid，没有信息量。
     2. 不含盘符的用户名路径换成 `<user>` 而不是 `<path>`：`Users\jun\x.csv`
        没有盘符时说明不了"在哪个盘"，但用户名的泄露是确定的，所以单独兜住。
+       这一条**只在环境变量里有 USERNAME/USER 时才生效**（详见文件顶部的边界③）。
     """
     if not text:
         return text
 
     result = text
-    for pattern in _PATH_PATTERNS:
+
+    # 顺序有讲究：用户名规则排在前面，这样 "Users\jun\x.csv" 这种**没有盘符**的
+    # 片段不会因为缺少盘符而漏掉；带盘符的路径先被用户名规则吃掉一段，
+    # 剩下的盘符段仍会被盘符规则吃掉，最终整体变成 <path>。
+    patterns = (*_username_patterns(), _DRIVE_PATTERN, _UNC_PATTERN)
+
+    for pattern in patterns:
         # count=1 + 循环，而不是一次性 sub 全部：subn 会给出一共替换了几处，
         # 用它当循环条件比"再搜一遍看还有没有匹配"更直接。
         # 一段文本里可能同时有 C:\ 和 D:\ 两条路径，所以不能只替换一次。
