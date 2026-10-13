@@ -6,7 +6,7 @@
 
 > **项目状态：第 2 天 / 共 7 天 —— 上传与数据理解已完成并通过独立 QA 复验。**
 > 已完成：应用骨架、配置层、健康检查、统一错误格式、**文件上传（CSV / xlsx）**、
-> **数据预览与详情**、**数据画像（缺失值 / 重复行 / 类型识别 / 五数概括）**、136 项自动化测试。
+> **数据预览与详情**、**数据画像（缺失值 / 重复行 / 类型识别 / 五数概括）**、137 项自动化测试。
 > 分析工具、多智能体调度、大模型接入在第 3 天起逐步加入。
 > README 只写实际跑通的东西，不会提前写"已完成"。
 
@@ -102,7 +102,7 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**136 passed**（135 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**137 passed**（136 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
@@ -144,7 +144,7 @@ ai-data-analyst-agent/
 │     ├─ loader.py             # 读 CSV / xlsx：编码、分隔符、最小清洗、上限
 │     ├─ store.py              # 进程内数据集仓库（不写盘）
 │     └─ profiler.py           # 数据画像：缺失值、重复行、语义类型、五数概括
-├─ tests/                      # 136 项，覆盖 loader / store / profiler / 接口 / 安全
+├─ tests/                      # 137 项，覆盖 loader / store / profiler / 接口 / 安全
 ├─ data/
 │  └─ uploads/                 # 上传文件落地目录（内容不进 git）
 ├─ docs/

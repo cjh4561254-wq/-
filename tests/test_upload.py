@@ -216,7 +216,17 @@ def test_upload_header_only_file_is_400_and_cleaned_up(client, upload_dir):
     response = _upload(client, "名称,数量\n".encode("utf-8"), filename="header.csv")
 
     assert response.status_code == 400
-    assert response.json()["error"]["message"] == "文件里只有表头，没有数据行"
+    error = response.json()["error"]
+    assert error["message"] == "文件里只有表头，没有数据行"
+    # detail 必须是"哪个文件"，不能是兜底的请求路径。
+    # 注意这里说的是**落盘名**（{dataset_id}.csv），不是用户上传时的 header.csv ——
+    # loader 只拿到磁盘路径，原始文件名在它这一层根本不存在。
+    # 这个落盘名对排错够用：拿着它能在 data/uploads/ 里找到那个文件。
+    # 如果 AppError 没给 detail，app/main.py 会填成 request.url.path，
+    # 用户看到的就是 "/api/datasets/upload" —— 一句没有信息量的话。
+    assert error["detail"].startswith("file=")
+    assert error["detail"].endswith(".csv")
+    assert error["detail"] != "/api/datasets/upload"
     assert _stored_names(upload_dir) == []
 
 

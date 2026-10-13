@@ -38,9 +38,21 @@ from app.schemas import ErrorCode
 # CSV 编码按这个顺序试。
 # 为什么 utf-8-sig 排第一：它是"会顺手去掉 BOM 的 utf-8"。对没有 BOM 的普通
 # UTF-8 文件它照样能读，于是"带 BOM"和"不带 BOM"合并成一种情况，少写一次判断。
+# 注意它带来一个副作用：绝大多数没有 BOM 的普通 UTF-8 文件也是它读成功的，
+# 所以**解码器名字 ≠ 文件真的带 BOM**。对外报的编码要另外看一眼文件头，
+# 见 _describe_encoding()。
 # 为什么 gbk 排在 gb18030 前面：gb18030 是 gbk 的超集，能读的情况更多，但同一个
 # 字节在两者里可能解出不同的字；先让更常见的 gbk 拿主意，它对不上时再交给 gb18030。
+#
+# 这里**故意不**接 `LookupError`（QA 提过：万一有人把某个名字打错，Python 找不到
+# 这个编码会抛 LookupError，用户会看到 500 而不是 400）。不接的理由：打错编码名
+# 是我们的 bug，不是用户的文件有问题。把它翻译成"无法识别这个 CSV 的编码"会让
+# 用户去反复检查自己那个完全正常的文件 —— 那是拿谎话换一个好看的状态码。
+# 500 + 完整 traceback 才是这件事的实话，`app/main.py` 的兜底处理器已经负责它。
 CSV_ENCODINGS: tuple[str, ...] = ("utf-8-sig", "utf-8", "gbk", "gb18030")
+
+# UTF-8 的 BOM。用来区分"文件真的带 BOM"和"utf-8-sig 顺手读成功了"。
+UTF8_BOM: bytes = b"\xef\xbb\xbf"
 
 # 分隔符先看这几个。谁在第一行里出现得最多就用谁，一个都没出现就按逗号。
 CSV_SEPARATORS: tuple[str, ...] = (",", ";", "\t")
@@ -62,8 +74,9 @@ def load_dataframe(path: Path, ext: str) -> tuple[pd.DataFrame, str | None]:
 
     返回
     ----
-    `(df, encoding)`：encoding 是 CSV 实际读成功的那种编码
-    （utf-8-sig / utf-8 / gbk / gb18030 之一）；xlsx 固定是 None。
+    `(df, encoding)`：encoding **描述这个文件实际是什么编码**
+    （utf-8-sig / utf-8 / gbk / gb18030 之一，`utf-8-sig` 只在文件真的带 BOM 时
+    才出现，见 `_describe_encoding`）；xlsx 固定是 None。
 
     抛错
     ----
@@ -75,6 +88,9 @@ def load_dataframe(path: Path, ext: str) -> tuple[pd.DataFrame, str | None]:
 
     if ext == "csv":
         df, encoding = _read_csv(path)
+        # 报出去的编码要描述**文件**，不是描述"哪个解码器读成功了"。
+        # 理由见 _describe_encoding()。
+        encoding = _describe_encoding(path, encoding)
     elif ext == "xlsx":
         df = _read_excel(path)
         encoding = None
@@ -105,7 +121,14 @@ def load_dataframe(path: Path, ext: str) -> tuple[pd.DataFrame, str | None]:
     if len(df.columns) == 0:
         raise AppError(ErrorCode.BAD_REQUEST, "文件里没有解析出任何列")
     if len(df) == 0:
-        raise AppError(ErrorCode.BAD_REQUEST, "文件里只有表头，没有数据行")
+        # detail 特意给一句能对照的：调用方拿到的 detail 如果缺省，会被
+        # app/main.py 兜底填成请求路径（"/api/datasets/upload"），
+        # 那句对排错没有信息量 —— 看到 file=xxx.csv 才知道是哪个文件。
+        raise AppError(
+            ErrorCode.BAD_REQUEST,
+            "文件里只有表头，没有数据行",
+            detail=f"file={path.name}",
+        )
 
     df = _clean(df)
 
@@ -201,6 +224,34 @@ def _read_csv(path: Path) -> tuple[pd.DataFrame, str]:
         "无法识别这个 CSV 的编码（已依次尝试 utf-8-sig / utf-8 / gbk / gb18030）",
         detail=str(decode_error),
     ) from decode_error
+
+
+def _describe_encoding(path: Path, encoding: str) -> str:
+    """把"哪个解码器读成功了"翻译成"这个文件实际是什么编码"。
+
+    为什么需要这一步（实测过的真实现象）：
+    `CSV_ENCODINGS` 的第一位是 `utf-8-sig`，而 Python 的 `utf-8-sig` 解码器
+    对**没有 BOM** 的普通 UTF-8 文件同样能正常解码（BOM 只是可选前缀）。
+    于是第一个就命中并返回，永远走不到 `"utf-8"`：
+        带 BOM 的文件 → 报 utf-8-sig（对）
+        不带 BOM 的普通 UTF-8 文件 → 也报 utf-8-sig（**不对，文件里没有 BOM**）
+
+    后果不是算错数，而是**日志在说一件不真实的事**（路由层会把这句写进
+    `[upload] ... 编码 xxx`），排错的人会照着"这是带 BOM 的文件"去查。
+
+    修法刻意选最小的一种：探测顺序与解码逻辑一个字不动（那是核心逻辑，
+    动它要重跑整套编码测试），只在读成功之后回头看一眼文件头三个字节。
+    这样"怎么读的"和"怎么报的"分开，两边都能单独讲清楚。
+    """
+    if encoding != "utf-8-sig":
+        return encoding
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(len(UTF8_BOM))
+    except OSError:
+        # 读不了文件头就照原样报，不为一句日志把上传搞失败。
+        return encoding
+    return "utf-8-sig" if head == UTF8_BOM else "utf-8"
 
 
 def _first_non_empty_line(path: Path, encoding: str) -> str:

@@ -55,13 +55,35 @@ def test_load_utf8_csv_returns_frame_and_encoding(tmp_path):
 
     df, encoding = load_dataframe(path, "csv")
 
-    # 没有 BOM 的普通 UTF-8 也会被第一种编码（utf-8-sig）读成功：
-    # 它只是"会顺手去掉 BOM 的 utf-8"，不带 BOM 时照样能读。
-    assert encoding == "utf-8-sig"
+    # 报的是"文件实际是什么编码"，不是"哪个解码器读成功了"。
+    # 这个文件用 utf-8 写、没有 BOM，所以必须报 utf-8。
+    # 为什么强调这一点：`CSV_ENCODINGS` 第一位是 utf-8-sig，而它对**没有 BOM**
+    # 的文件同样能解码，所以读成功的那一个永远是 utf-8-sig。如果直接把它报出去，
+    # 日志会对绝大多数普通 UTF-8 文件说"编码 utf-8-sig"—— 一件不真实的事。
+    # 翻译在 loader._describe_encoding()，那里面有完整的来龙去脉。
+    assert encoding == "utf-8"
     assert list(df.columns) == ["日期", "地区", "销售额"]
     assert df.shape == (2, 3)
     assert df["地区"].tolist() == ["华东", "华北"]
     assert df["销售额"].tolist() == [100, 200]
+
+
+def test_csv_with_bom_is_reported_as_utf8_sig(tmp_path):
+    """带 BOM 的文件才报 utf-8-sig —— 这是上一条的对照。
+
+    两条必须一起看：单看"带 BOM 报 utf-8-sig"或者单看"不带 BOM 报 utf-8"，
+    一个恒真的实现（永远返回 utf-8-sig、或永远返回 utf-8）都能骗过其中一条。
+    """
+    path = tmp_path / "bom.csv"
+    # encoding="utf-8-sig" 写入时会在文件最前面加上 EF BB BF 三个字节。
+    path.write_text("地区,销售额\n华东,100\n", encoding="utf-8-sig")
+
+    df, encoding = load_dataframe(path, "csv")
+
+    assert encoding == "utf-8-sig"
+    # 顺手确认 BOM 没有跑进第一个列名里（这是 utf-8-sig 解码器的职责）。
+    assert list(df.columns) == ["地区", "销售额"]
+    assert df["地区"].tolist() == ["华东"]
 
 
 def test_load_gbk_csv_reads_chinese_correctly(tmp_path):

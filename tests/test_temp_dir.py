@@ -163,14 +163,26 @@ def test_startup_pins_temp_files_into_the_project(tmp_path):
 
 
 def test_without_startup_tempfiles_do_not_go_into_the_project_dir(tmp_path):
-    """故障演示：**没启动应用**时，`.tmp/` 不是临时目录。
+    """对照：**没启动应用**时，临时目录不是"启动后该是"的那一个。
 
-    这条是上面那条的对照。它证明"落到 .tmp"确实来自启动逻辑，而不是碰巧：
-    如果哪天有人把设置挪回 import 时刻，上面那条可能仍然绿，而这条会红。
+    这条是上面那条的对照，用来说明"落到 .tmp"确实来自启动逻辑，而不是碰巧。
 
-    这里只断言"不是 `.tmp/`"，不断言"等于 cwd"：后者依赖"系统临时目录全都
-    不可写"，在别的机器上不成立（本机 `tempfile` 会退回 cwd，而正常机器会
-    退回 `C:\\Windows\\Temp`）。断言必须与机器配置无关。
+    **它到底证明了什么（别把它的判别力想大了）**：断言是"不**恰好等于**
+    `TEMP_DIR`"，不是"不在项目内"。这两种写法差别很大：
+
+    - 本机（Windows）系统临时目录不可写，`tempfile` 退回 cwd，而本用例的
+      子进程 cwd 是 `tmp_path`，即 `<root>/.tmp/pytest/<用例名>/` —— 也就是
+      **它本来就在项目 `.tmp/` 之下**，只是不等于 `TEMP_DIR` 这个精确路径。
+    - Linux 上会退到 `/tmp`，连"在 .tmp 之下"都不成立。
+
+    QA 在 24aeac1 上插桩实测过这件事（打印出子进程自己看到的 gettempdir，
+    确认就在 `.tmp/pytest/...` 里）。所以**这条用例的判别力是平台相关的**，
+    原先注释里"断言必须与机器配置无关"的说法不成立，已改掉。
+
+    为什么仍然保留精确相等而不是改成 `EXPECTED_TEMP_DIR not in resolved.parents`：
+    后者在 Windows 上会立刻红，而红的不是缺陷、是本机的 cwd 兜底事实。
+    真正要抓的"有人在 import 时刻就把 TEMP 设成 `TEMP_DIR`"由上面那条用例的
+    第 ① 步（import 前后逐键比较环境变量）负责，那条与平台无关。
     """
     lines = _run_in_clean_process(
         "import tempfile; print(tempfile.gettempdir())", cwd=tmp_path

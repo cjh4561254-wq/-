@@ -250,9 +250,30 @@ import 的模块）。**这个做法已被推翻**，原因两条，第二条是
 
 **还没被覆盖的另一半**：把仓库解压到 `%TEMP%` 下时**连 pytest 都起不来**（`FileNotFoundError: No usable temporary directory found in [...]`，四个历史提交都如此）。即本方案的前提是"项目根可写"。项目本身若落在 Python 写不了的位置，仍然救不了。
 
-**影响到**：`conftest.py`、`.gitignore`（`/tmp????????/` 与 `/pytest-of-*/` 兜底，**开头的斜杠不能省**——不带 `/` 的 pattern 在任意层级生效，实测会误伤 `app/tmp_uploads/`、`data/tmp_uploads/`）、所有人的测试写法、README 的测试章节。
+**影响到**：`conftest.py`、`.gitignore`（`/pytest-of-*/`、`/tmp????????`、`/tmp????????_*` 兜底，**开头的斜杠不能省**——不带 `/` 的 pattern 在任意层级生效，实测会误伤 `app/tmp_uploads/`、`data/tmp_uploads/`；另外**不能带尾斜杠**，带了只匹配目录，而 Starlette spool 出来的正是同名格式的普通文件）、所有人的测试写法、README 的测试章节。
 
-**状态**：已落地，commit `dde1115`（第 1 条）、`9cf7f4c`（第 2、3 条 + `.gitignore` 锚定）、`8c9b02c`（第 2 条的两个前提 + `app/` 收集）。全部实测过，反证见这三个提交的提交信息。
+**状态**：已落地，commit `dde1115`（第 1 条）、`9cf7f4c`（第 2、3 条 + `.gitignore` 锚定）、`8c9b02c`（第 2 条的两个前提 + `app/` 收集）、`24aeac1`（第 4 条修订：生产入口改由 lifespan 显式设置）。全部实测过，反证见这几个提交的提交信息。
+
+**另一条兜底（`24aeac1` 之后补的）**：`.gitignore` 原先是 `/tmp????????/`（带尾斜杠），**只匹配目录**。决定性的证据是在一个临时 git 仓库里做的 A/B（旧规则 vs 新规则各建一个仓库、真的把目录和文件建出来、用 `git check-ignore -q` 的退出码判定）：
+
+```
+--- 旧规则 '/tmp????????/' ---
+    tmpabcd1234    (文件) ignored=False   ← 漏
+    tmpdir12345    (目录) ignored=True
+    tmpwd4n6n_2    (文件) ignored=False   ← 漏
+--- 新规则 '/tmp????????' + '/tmp????????_*' ---
+    tmpabcd1234    (文件) ignored=True
+    tmpdir12345    (目录) ignored=True
+    tmpwd4n6n_2    (文件) ignored=True
+```
+
+漏掉的正是最该拦的那种：Starlette 处理 >1 MB 上传时用 `SpooledTemporaryFile`，滚盘生成的是**文件**。现在改成三条（`/pytest-of-*/`、`/tmp????????`、`/tmp????????_*`，第三条管 tempfile 撞名重试的 `_1`/`_2` 后缀）。反向样本也验过（共 21 条，正反样本全对）：`pytest-of-jun.txt`、`app/tmp_uploads/x.csv`、`data/tmp_uploads/x.csv`、`tmp_short`、`tmp12345678901`、`docs/tmpabcd1234`、`app/tmpabcd1234` 都**不**被忽略，而 `data/uploads/.gitkeep`（被 `!` 规则救回）也不被忽略。
+
+**验证这件事本身有两个坑，都踩过**：
+1. **判据必须是 `git check-ignore -q` 的退出码，不能用 `-v` 的退出码。** `-v` 只要"有规则命中"就退出 0，**否定规则（`!xxx`）命中时它也退出 0** —— 于是 `.gitkeep` 会被误判成"被忽略"（第一版探针就报了这条假警报）。
+2. **`--no-index` 问一个不存在的路径时，带尾斜杠的规则无从判断**（git 不知道它是不是目录），会答"不忽略"。所以目录类正样本必须先真的建出来再问。
+
+需要说清的是：这是**兜底不是解法** —— 真正的解法是上面第 4 条把 spool 落点钉进 `.tmp/`。兜底只保证"万一又漏到仓库根，它不会出现在 `git status` 里"。
 
 **本轮已补齐**：下面两条原来挂在这里当"待补"，现在各自成节，不再重复：
 - 上传字节处理顺序 → **D-09**
@@ -317,7 +338,15 @@ import 的模块）。**这个做法已被推翻**，原因两条，第二条是
 **影响到**：`app/api/routes_datasets.py`、`app/data/store.py`
 （`register()` 只登记不落盘，落盘在路由层）、`app/config.py`（`max_upload_bytes`）。
 
-**状态**：决策已定，实现在 task-8 之后的路由层（`app/api/routes_datasets.py` 尚未存在）。
+**状态**：**已实现**。路由层 `app/api/routes_datasets.py` 在提交 `9441429`
+（task-3，上传/详情/画像三个接口）落地，七步顺序与上面写的一致；
+`tests/test_upload.py:173` `test_upload_over_the_size_limit_is_413_and_writes_nothing`
+钉住"超限时磁盘上什么都不留"，`tests/test_upload.py:204/215/230` 钉住三种
+解析失败同样不留文件。
+
+（原先这里写的是"实现在 task-8 之后的路由层（`app/api/routes_datasets.py` 尚未存在）"。
+那句在 `9441429` 之后就已经过期 —— 留着会让后来读文档的人以为这个决策还悬着。
+文档里的"状态"行属于会腐烂的那类信息，改动落库时应该顺手一起改。）
 
 ---
 
@@ -387,5 +416,78 @@ dtype、语义类型、缺失值数量与比例、唯一值数量、五数概括
 
 **状态**：已确认。三次真实失败分别发生在修复 `tests/test_loader.py` 假绿断言、
 补 D-06 文字、验证 `git show` 输出时。
+
+---
+
+## D-12 报给用户的编码，描述**文件实际的样子**，不描述"哪个解码器读成功了"
+
+**背景（QA 提的次要问题，被实验证实是真问题）**：`CSV_ENCODINGS` 的第一位是
+`utf-8-sig`，而 Python 的 `utf-8-sig` 解码器对**没有 BOM** 的普通 UTF-8 文件
+同样能正常解码（BOM 只是可选前缀）。于是第一个就命中并 `return df, encoding`，
+**永远走不到 `"utf-8"`**。
+
+实测（同一份内容，只有 BOM 有无之别）：
+
+```
+probe_bom.csv  （带 BOM）→ reported encoding = 'utf-8-sig'   ✓
+probe_nobom.csv（无 BOM）→ reported encoding = 'utf-8-sig'   ✗ 文件里没有 BOM
+```
+
+后果不是算错数，而是**日志在说一件不真实的事**：`app/api/routes_datasets.py:171-174`
+会打印 `[upload] xxx.csv 解析成功：N 行 M 列，编码 utf-8-sig`，
+排错的人会照着"这是带 BOM 的文件"去查。
+
+**决定**
+- **解码逻辑一个字不动**（`CSV_ENCODINGS` 的顺序、`_read_csv` 的循环都不改）。
+  那是核心逻辑，动它要重跑整套编码测试，收益与风险不成比例。
+- 在读成功之后加一步翻译：`app/data/loader.py` 的 `_describe_encoding(path, encoding)`
+  —— 只有当命中的是 `utf-8-sig` 时才回头读文件头 3 字节，是 `EF BB BF` 就报
+  `utf-8-sig`，否则报 `utf-8`；其他编码原样返回。
+- `load_dataframe` 的 docstring 相应改成"encoding **描述这个文件实际是什么编码**"。
+
+**为什么这样切**："怎么读的"和"怎么报的"分开，两边都能单独讲清楚；
+翻译函数的 docstring 里留了完整来龙去脉，后来的人不会以为它多余。
+
+**真实端到端证据**（起真实 uvicorn，三个文件各上传一次，看服务端日志原文）：
+
+```
+[upload] eeecf930....csv 解析成功：2 行 2 列，编码 utf-8       ← 普通 UTF-8（无 BOM）
+[upload] 6b00face....csv 解析成功：2 行 2 列，编码 utf-8-sig   ← 真的带 BOM
+[upload] 360f8079....csv 解析成功：1 行 2 列，编码 gbk
+```
+
+**有牙的证据**：把翻译那行注释掉 → `tests/test_loader.py` 与
+`tests/test_data_layer_e2e.py` 共 `2 failed`，红在
+`AssertionError: assert 'utf-8-sig' == 'utf-8'`；恢复后 137 passed。
+
+**测试为什么是两条而不是一条**：单看"带 BOM 报 utf-8-sig"或单看"不带 BOM 报 utf-8"，
+一个恒真的实现（永远返回 `utf-8-sig`、或永远返回 `utf-8`）都能骗过其中一条。
+`test_load_utf8_csv_returns_frame_and_encoding` 与
+`test_csv_with_bom_is_reported_as_utf8_sig` 必须一起看。
+
+**影响到**：`app/data/loader.py`、`tests/test_loader.py`、
+`tests/test_data_layer_e2e.py`、`app/api/routes_datasets.py`（只消费不修改）。
+
+**状态**：已实现，`137 passed`（仓库根与 `tests/` 子目录两个入口都验过）。
+
+---
+
+## D-13 `_read_csv` 故意不接 `LookupError`
+
+**背景**：QA 指出 `_read_csv` 只 `except UnicodeDecodeError / EmptyDataError / ParserError`，
+不接 `LookupError`。如果将来有人把 `CSV_ENCODINGS` 里某个编码名打错，
+Python 找不到这个编码会抛 `LookupError`，用户会看到 500 而不是 400。
+
+**决定：不接。** 打错编码名是**我们的 bug**，不是用户的文件有问题。
+把它翻译成"无法识别这个 CSV 的编码（已依次尝试……）"，用户会去反复检查自己那个
+完全正常的文件 —— 那是拿谎话换一个好看的状态码。500 + 完整 traceback 才是这件事的实话，
+`app/main.py` 的兜底处理器已经负责它。
+
+**当前不可利用**：`CSV_ENCODINGS` 是模块常量，用户碰不到。这条记下来是为了
+"下次有人想接 `LookupError`"时知道这不是疏忽。
+
+**影响到**：`app/data/loader.py`（注释写在 `CSV_ENCODINGS` 上方）。
+
+**状态**：已定，无需改动代码。
 
 ---

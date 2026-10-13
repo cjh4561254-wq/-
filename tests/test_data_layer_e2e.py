@@ -116,7 +116,10 @@ def test_chain_cleans_the_table_the_way_we_promised(chain):
     assert df.shape == (5, 6)  # 末尾那行全空被删掉
     assert list(df.index) == [0, 1, 2, 3, 4]  # 行号抹平
     assert list(df.columns) == ["订单号", "日期", "地区", "销售额", "备注", "销售额_2"]
-    assert chain["encoding"] == "utf-8-sig"  # 候选编码里第一个能读通的
+    # 文件是 SALES_CSV.encode("utf-8") 写出来的，没有 BOM，所以报 utf-8。
+    # （读成功的是 utf-8-sig 解码器 —— 它对无 BOM 的文件也能解码 —— 但报出去的
+    #   是文件实际的样子，翻译在 loader._describe_encoding()。）
+    assert chain["encoding"] == "utf-8"
     assert df.loc[0, "销售额"] == "1,200"  # 单元格原值没有被改写
 
 
