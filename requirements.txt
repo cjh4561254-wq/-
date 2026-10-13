@@ -6,27 +6,31 @@
 #   .\.venv\Scripts\Activate.ps1
 #   python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 #
-# 说明：这里写的是"下界"（>=），不锁死精确版本，
-#       方便你在 Python 3.10 / 3.11 / 3.12 上都能装上。
-#       如果要做可复现部署，用 `pip freeze > requirements.lock.txt`。
+# 关于版本号写法：
+#   下界（>=）保证功能可用；上界（<）挡住下一个大版本 ——
+#   大版本会带破坏性改动。比如 pandas 在 3.0 改了链式赋值的语义
+#   （CoW），openai 在 1.x→2.x 改过参数名，这类改动会让"别人的机器上
+#   跑不起来"，而你的代码一个字都没改。
+#   如果你需要"一字不差复现"，用：
+#       python -m pip freeze > requirements.lock.txt
 # ============================================================
 
 # ---- 基础 Web 层（第一阶段）----
-fastapi>=0.115
-uvicorn[standard]>=0.30
-pydantic>=2.7
-pydantic-settings>=2.3          # 把 .env 读成有类型的配置对象
-python-multipart>=0.0.9         # FastAPI 解析上传文件（multipart/form-data）必需
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0        # 把 .env 读成有类型的配置对象
+python-multipart>=0.0.9,<1.0       # FastAPI 解析上传文件 multipart/form-data 必需
 
 # ---- 数据处理与图表（第二阶段起）----
-pandas>=2.2
-numpy>=1.26
-matplotlib>=3.8                 # 服务端出图，必须用非交互后端 Agg
-openpyxl>=3.1                   # 读写 .xlsx
+pandas>=2.2,<4.0
+numpy>=1.26,<3.0
+matplotlib>=3.8,<4.0               # 服务端出图，必须用非交互后端 Agg
+openpyxl>=3.1,<4.0                 # 读写 .xlsx
 
 # ---- 大模型调用（第四阶段起）----
-openai>=1.40                    # 兼容 OpenAI 协议的服务都能用
+openai>=1.40,<3.0                  # 兼容 OpenAI 协议的服务都能用
 
 # ---- 测试（贯穿始终）----
-pytest>=8.0
-httpx>=0.27                     # FastAPI TestClient 依赖它
+pytest>=8.0,<10.0
+httpx>=0.27,<1.0                   # FastAPI TestClient 依赖它

@@ -4,9 +4,10 @@
 由主控智能体调度专业子智能体，用真实的 Python 工具完成统计计算与图表生成，
 并校验报告中的关键数字。
 
-> **项目状态：第 1 天 / 共 7 天 —— 骨架已跑通，业务功能尚未实现。**
-> 已完成的只有应用骨架、配置层和健康检查接口。上传、分析、智能体调度等
-> 在后续阶段逐步加入。README 会随阶段更新，不会提前写"已完成"。
+> **项目状态：第 1 天 / 共 7 天 —— 骨架已跑通并通过独立 QA 复验，业务功能尚未实现。**
+> 已完成：应用骨架、配置层、健康检查接口、统一错误格式、16 项自动化测试。
+> 上传、分析、智能体调度等在第 2 天起逐步加入。
+> README 只写实际跑通的东西，不会提前写"已完成"。
 
 ---
 
@@ -47,6 +48,13 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
+需要"一字不差复现别人的环境"时：
+
+```powershell
+python -m pip freeze > requirements.lock.txt   # 导出精确版本
+python -m pip install -r requirements.lock.txt # 按精确版本安装
+```
+
 ## 配置
 
 ```powershell
@@ -61,6 +69,9 @@ Copy-Item .env.example .env
 | `LLM_BASE_URL` | 兼容 OpenAI 协议的接口地址 | `https://api.deepseek.com/v1` |
 | `LLM_MODEL` | 模型名 | `deepseek-chat` |
 | `LLM_API_KEY` | 密钥，**只放在 `.env` 里** | `sk-...` |
+
+安全上做了三件事：密钥只从环境变量 / `.env` 读取；`Settings.llm_api_key`
+设置了 `repr=False`，打印配置不会带出密钥原文；`.gitignore` 排除 `.env`。
 
 ## 启动
 
@@ -86,7 +97,15 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：全部通过。测试用 FastAPI 的 `TestClient`，**不需要先启动服务，也不占用端口**。
+预期：**16 passed**。测试用 FastAPI 的 `TestClient`，**不需要先启动服务，也不占用端口**。
+
+测试特意做到"三种环境下都通过"，因为第 4 天你填上真实密钥后测试不该变红：
+
+| 场景 | 用途 |
+|---|---|
+| `.env` 为空 | 默认开发状态 |
+| `.env` 已填 `LLM_*` | 第 4 天之后的真实状态 |
+| `.env` 文件根本不存在 | 别人刚 clone 下来时 |
 
 ## 目录结构
 
@@ -94,15 +113,16 @@ python -m pytest
 ai-data-analyst-agent/
 ├─ app/
 │  ├─ __init__.py
-│  ├─ main.py                  # FastAPI 应用实例、CORS、路由挂载
+│  ├─ main.py                  # FastAPI 实例、CORS、启动钩子、统一错误处理
 │  ├─ config.py                # Settings：把 .env 读成有类型的配置对象
-│  ├─ schemas.py               # ApiResponse 统一响应外壳、错误码
+│  ├─ schemas.py               # ApiResponse 统一响应外壳、ApiError、错误码
 │  ├─ runtime.py               # 进程级运行时状态（启动时刻 / uptime）
 │  └─ api/
 │     ├─ __init__.py
 │     └─ routes_health.py      # GET /api/health
 ├─ tests/
-│  ├─ test_health.py           # 第 1 天验收测试
+│  ├─ test_health.py           # 接口、配置、密钥安全
+│  ├─ test_error_format.py     # 404/405/422 统一格式、CORS
 │  └─ __init__.py
 ├─ data/
 │  └─ uploads/                 # 上传文件落地目录（内容不进 git）
@@ -114,16 +134,30 @@ ai-data-analyst-agent/
 
 ## 接口约定
 
-所有接口返回同一个外壳：
+### 成功
 
 ```json
-{ "ok": true,  "data": { }, "error": null }
-{ "ok": false, "data": null, "error": { "code": "BAD_REQUEST", "message": "…", "detail": null } }
+{ "ok": true, "data": { }, "error": null }
 ```
 
-前端只需要写一次解析逻辑：先看 `ok`，为真读 `data`，为假读 `error.message`。
+### 失败
 
-目前已实现：
+```json
+{
+  "ok": false,
+  "data": null,
+  "error": { "code": "NOT_FOUND", "message": "Not Found", "detail": "/api/nope" }
+}
+```
+
+**失败也走同一个外壳**，这一点是特意做的：FastAPI 默认失败时返回 `{"detail": ...}`，
+结构和成功响应不一样。前端如果只写一套解析逻辑，就会在报 404 的那一刻崩掉 ——
+而那正是最需要把错误提示给用户的时刻。所以 `app/main.py` 里注册了异常处理器，
+把框架自己抛的 404 / 405 / 参数校验错误也翻译成上面的格式。
+
+错误码取值：`BAD_REQUEST`、`NOT_FOUND`、`UNSUPPORTED_FILE`、`FILE_TOO_LARGE`、`INTERNAL_ERROR`。
+
+### 已实现
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -131,11 +165,31 @@ ai-data-analyst-agent/
 | GET | `/api/health` | 服务状态与配置自检 |
 | GET | `/docs` | Swagger 接口文档（FastAPI 自动生成） |
 
+`/api/health` 返回示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "status": "healthy",
+    "app_name": "AI Data Analyst Agent",
+    "version": "0.1.0",
+    "uptime_seconds": 7.77,
+    "llm_configured": false,
+    "upload_dir_ready": true
+  },
+  "error": null
+}
+```
+
+`upload_dir_ready` 为 `false` 说明上传目录建不出来（权限等问题）。
+这个检查放在启动钩子里做，让环境问题在启动日志里就暴露，而不是等用户点上传才报错。
+
 ## 安全约定
 
 - API Key 只从环境变量 / `.env` 读取，仓库内不存任何真实密钥。
 - `Settings.llm_api_key` 设置了 `repr=False`，打印配置不会带出密钥原文。
-- `.gitignore` 排除 `.env`、`.venv`、`data/uploads/*`。
+- `.gitignore` 排除 `.env`、`.venv`、`data/uploads/*`、matplotlib 缓存。
 - CORS 只允许本机来源，不使用通配符 `*`。
 - 上传文件的格式与大小校验在第 2 天实现。
 
@@ -143,8 +197,8 @@ ai-data-analyst-agent/
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 第 1 天 | 项目骨架、配置、健康检查、测试 | 进行中 |
-| 第 2 天 | 文件上传与数据预览、Pandas 分析工具、参数校验 | 未开始 |
+| 第 1 天 | 项目骨架、配置、健康检查、统一错误格式、测试 | ✅ 完成（16 项测试通过，经独立 QA 复验） |
+| 第 2 天 | 文件上传与数据预览、示例数据集 | 未开始 |
 | 第 3 天 | 工作流数据结构、主控智能体、数据理解智能体 | 未开始 |
 | 第 4 天 | 接入大模型 API、Tool Calling、数据分析智能体 | 未开始 |
 | 第 5 天 | 可视化智能体、结果校验、报告生成、串通完整流程 | 未开始 |

@@ -2,14 +2,14 @@
 
 作用：
     1. 前端 / 监控 / 你自己确认"服务活着"。
-    2. 提前暴露配置错误 —— 比如上传目录建不出来，这里就能发现，
+    2. 提前暴露配置问题 —— 比如上传目录建不出来，这里就能如实报告，
        而不是等到用户上传文件时才炸。
 """
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.config import settings
+from app import config
 from app.runtime import uptime_seconds
 from app.schemas import ApiResponse
 
@@ -24,11 +24,17 @@ class HealthData(BaseModel):
     version: str
     uptime_seconds: float
     llm_configured: bool
+    upload_dir_ready: bool
 
 
 @router.get("/health", response_model=ApiResponse[HealthData], summary="健康检查")
 def health() -> ApiResponse[HealthData]:
-    """返回服务状态与关键配置的自检结果。"""
+    """返回服务状态与关键配置的自检结果。
+
+    注意这里用的是 config.get_settings() 而不是 import 进来的 settings 对象：
+    每次请求现取配置，测试里 cache_clear() 之后才能真正生效。
+    """
+    settings = config.get_settings()
     return ApiResponse[HealthData](
         ok=True,
         data=HealthData(
@@ -37,5 +43,6 @@ def health() -> ApiResponse[HealthData]:
             version=settings.app_version,
             uptime_seconds=uptime_seconds(),
             llm_configured=settings.llm_configured,
+            upload_dir_ready=settings.upload_path.is_dir(),
         ),
     )

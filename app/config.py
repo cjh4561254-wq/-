@@ -71,11 +71,22 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """返回全局唯一的配置对象。
 
-    加 lru_cache 是为了只读一次 .env；测试里想换配置时调用
-    get_settings.cache_clear() 即可。
+    为什么要包成函数、而不是直接写 `settings = Settings()`？
+        因为模块级对象在 import 时就固定了。测试里想换一个配置（比如把
+        max_upload_mb 改成 1 来测超限），改环境变量后 `cache_clear()` 并不
+        影响别人早就 import 走的那份引用 —— 测试会"静默失效"，看着绿其实
+        没测到东西。包成函数后，业务代码每次现取，测试才有真正的控制权。
+
+    使用约定（重要）：
+        业务模块请 `from app import config`，然后在函数内部调用
+        `config.get_settings()`。
+        不要写 `from app.config import settings` —— 那样又会在 import 时
+        绑定死，回到上面那个坑里。
     """
     return Settings()
 
 
-# 便捷引用：`from app.config import settings`
-settings = get_settings()
+def reset_settings_cache() -> None:
+    """清空配置缓存。测试里改完环境变量后调用它。"""
+    get_settings.cache_clear()
+
