@@ -19,6 +19,7 @@ import pytest
 
 from app import config
 from app.tools.jsonable import ensure_jsonable, to_jsonable
+from app.tools.registry import to_openai_tools
 from app.tools.validate import ToolValidationError, validate_call
 
 SAMPLE_CSV = config.PROJECT_ROOT / "data" / "samples" / "sales.csv"
@@ -597,6 +598,64 @@ def test_tool_validation_error_carries_code_message_and_detail(df: pd.DataFrame)
     assert "城市" in error.error_message
     assert error.detail == "数据集一共 9 列"
     assert str(error) == error.error_message
+
+
+# ------------------------------------------------- 空列表参数：拒掉，但别拒过头
+
+
+def test_empty_column_list_is_rejected_for_every_tool(df: pd.DataFrame) -> None:
+    """`columns: []` / `group_by: []` 必须是 BAD_PARAMS，不能"成功但空"。
+
+    为什么这条重要：模型给出的参数里出现空数组是完全现实的（它想表达"我不限制"）。
+    如果放行，工具会返回 `{"columns": [], "stats": []}` 且 `ok=true` —— 一个**看着成功、
+    实则什么都没算**的结果会一路流进报告，而报告里"该有表格的地方是空的"很难被当成错误
+    发现（前端不会报错、日志里没有异常）。这类"看起来能跑、语义错了"正是本项目最防的失败。
+    """
+    empty_list_calls = {
+        "describe_dataset": {"columns": []},
+        "group_aggregate": {"group_by": [], "metric": "销售额", "agg": "sum"},
+        "top_n": {"by": "销售额", "n": 5, "columns": []},
+        "missing_values": {"columns": []},
+        "correlation": {"columns": []},
+    }
+    for name, params in empty_list_calls.items():
+        message = expect_code(df, name, params, "BAD_PARAMS")
+        assert "至少要" in message, f"{name} 的消息没说清下限：{message}"
+
+
+@pytest.mark.parametrize("name", ["describe_dataset", "missing_values", "correlation"])
+def test_omitting_the_column_list_still_means_all_columns(df: pd.DataFrame, name: str) -> None:
+    """上一条的对照组：**不传** `columns` 必须仍然成功，且真的覆盖了全部相关列。
+
+    两条测试必须一起看。只测"空列表被拒"的话，一个"把 `columns` 一律拒掉"的坏实现
+    照样能过——而那个坏实现会让模型永远无法使用默认行为。
+    """
+    data = call(df, name, {})
+    if name == "correlation":
+        # 默认 = 全部数值列（销售额、利润、销量、单价、客户评分）
+        assert data["columns"] == ["销量", "单价", "销售额", "利润", "客户评分"]
+    elif name == "describe_dataset":
+        assert data["columns"] == ["销量", "单价", "销售额", "利润", "客户评分"]
+        assert len(data["stats"]) == 5
+    else:
+        # missing_values 默认看全部 9 列（含文本列）
+        assert len(data["columns"]) == 9
+        assert {item["column"] for item in data["columns"]} == set(df.columns)
+
+
+def test_min_items_appears_in_the_schema_sent_to_the_model(df: pd.DataFrame) -> None:
+    """`min_items` 必须出现在 `to_openai_tools()` 里，不能只活在校验器内部。
+
+    理由：校验器拦住空数组只是"事后拒绝"；把 `minItems` 写进发给模型的 JSON Schema，
+    模型**一开始就不会生成**空数组。少一轮"失败 → 重试"就是少一次 API 调用。
+    """
+    tools = {tool["function"]["name"]: tool["function"]["parameters"] for tool in to_openai_tools()}
+    assert tools["describe_dataset"]["properties"]["columns"]["minItems"] == 1
+    assert tools["missing_values"]["properties"]["columns"]["minItems"] == 1
+    assert tools["correlation"]["properties"]["columns"]["minItems"] == 2
+    assert tools["group_aggregate"]["properties"]["group_by"]["minItems"] == 1
+    assert tools["group_aggregate"]["properties"]["group_by"]["maxItems"] == 3
+
 
 
 # =============================================================== jsonable

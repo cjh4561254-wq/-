@@ -171,6 +171,7 @@ def _builtin_specs() -> list[ToolSpec]:
                 "properties": {
                     "columns": {
                         "type": "list[str]",
+                        "min_items": 1,
                         "column": True,
                         "numeric_column": True,
                         "description": "要统计的数值列；不传则统计全部数值列",
@@ -289,6 +290,7 @@ def _builtin_specs() -> list[ToolSpec]:
                 "properties": {
                     "columns": {
                         "type": "list[str]",
+                        "min_items": 1,
                         "column": True,
                         "description": "要看哪些列；不传则看全部列",
                     }

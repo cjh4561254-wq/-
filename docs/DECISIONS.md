@@ -617,3 +617,54 @@ FAILED tests/test_sample_data.py::test_running_the_script_reproduces_the_committ
 **状态**：已落地。主工作区全量 149 passed；干净检出里 `tests/test_sample_data.py` 12 passed、md5 `910d6723…`。
 
 ---
+
+## D-16 验证"全局状态有没有残留"必须用**独立进程**，且要当场读
+
+**背景**：D3 复验（QA task-16）发现 `tests/test_workflow_registry.py` 只在 `setup_function()`
+里 `registry.clear()`，没有 teardown，于是**最后一条用例**登记的工作流会活到整个会话结束。
+QA 实测：正序跑完 `registry.count()=0`、**反序跑完 =1**，两次都是绿灯 —— 用例之间已经通过
+全局状态连在一起了，只是碰巧还没有别的文件去数注册表里有几条。
+
+**Lead 修完之后做了变异测试（拿掉 teardown，期望残留变回 1），结果两次都是 0** ——
+差点得出"这个改动什么都没修"的错误结论。真正的原因是**探针自己的 bug**，有两层：
+
+1. **同一个进程里连跑两次 `pytest.main()`，第二次跑的是内存里的旧模块。**
+   `tests/*.py` 在第一次就被 import 进 `sys.modules`，源码改动对第二次无效。
+   pytest 其实**警告过**：
+   ```
+   PytestAssertRewriteWarning: Module already imported so cannot be rewritten; reverse_plugin
+   ```
+   被我当成噪声漏看了。
+2. 修成独立进程后，我又把 `subprocess` 的 `env` 手动收窄成一个"最小环境"
+   （只留 `SYSTEMROOT`/`PATH`/`PYTHONIOENCODING`/`PYTHONPATH`），结果子进程
+   `exit=1`、残留文件根本没生成，被读成 `-1` —— **又一个假红**。
+
+**决定**
+
+1. **验证进程级全局状态（注册表、`tempfile` 缓存、`sys.modules`）的残留，一律起独立进程**，
+   并让被测进程在**会话结束的那一刻**（`pytest_sessionfinish` 钩子）把值写到文件里再读，
+   不要在宿主机进程里"跑完再看"。
+2. **不要手工构造 `subprocess` 的 `env`**。继承父进程环境，只覆盖必须改的那几个键
+   （这里是 `PYTHONIOENCODING`、`PYTHONPATH`）。为了"干净"而收窄环境，会把
+   `SystemRoot` 之外的路径、`TEMP`、`USERPROFILE` 之类一起砍掉，得到的是一个
+   与被测环境无关的假红。
+3. 变异测试的**期望值必须来自已观测的事实**，并在脚本里写死：
+   本次是"有 teardown → 0、无 teardown → 1"（QA 实测过的两个数）。
+   两边相同就说明探针无效，**不能**据此宣布修复有效。
+
+**最终证据**（独立进程 + `pytest_sessionfinish` 读值）：
+
+| 实现 | 反序跑完 `registry.count()` |
+|---|---|
+| 有 `teardown_function` | **0** |
+| 无 `teardown_function` | **1** |
+
+与 QA 的原始观测逐字一致。**探针无效时的"0"和真修好的"0"长得一模一样** ——
+这就是为什么变异那一半不能省。
+
+**影响到**：`tests/test_workflow_registry.py`（新增 `teardown_function`）、
+后续所有"验证全局状态"的探针（`.tmp/residual_plugin.py` 的写法可复用）。
+
+**状态**：已落地。全量 352 passed；反序跑完残留 0。
+
+---

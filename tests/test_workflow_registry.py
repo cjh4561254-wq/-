@@ -39,6 +39,21 @@ def setup_function() -> None:
     registry.clear()
 
 
+def teardown_function() -> None:
+    """每条用例后也清空（**不能只靠 setup**）。
+
+    只清"前面"是不够的：最后一条用例登记的工作流会活到**整个测试会话结束**，
+    于是别的测试文件（或同文件的反序执行）看到的是一个非空的全局注册表。
+    QA 实测过这个差异：正序跑完 `workflows_left=0`，反序跑完 `workflows_left=1` ——
+    两次都是绿灯，但"用例之间已经通过全局状态连在一起了"。
+
+    这就是**顺序耦合**：今天不出错只是因为碰巧没有别的文件去数注册表里有几条。
+    以后 `routes_analysis.py` 的测试要断言"注册表里有 1 条工作流"时，
+    它会因为这里漏下的一条而莫名其妙地红，而排查方向会完全跑偏（去看路由代码）。
+    """
+    registry.clear()
+
+
 def test_create_then_get_returns_the_same_object() -> None:
     """`get()` 必须返回**同一个对象引用**（架构文档 §8.2.1 规则 2）。
 
