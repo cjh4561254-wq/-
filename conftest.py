@@ -26,7 +26,7 @@
 1. 跑一次测试，仓库根目录就多出 `pytest-of-jun/`（pytest 的 basetemp）和
    若干 `tmpXXXXXXXX/`（各测试里 `tmp_path`／`tempfile.mkdtemp()` 的产物）。
 2. 更危险的是：**只要有人手滑执行一次 `git add -A`，这些垃圾就进仓库了** ——
-   这正是本项目 `docs/DECISIONS.md` D-05 记录的那类事故。
+   而"手滑 `git add -A`"正是本项目 `docs/DECISIONS.md` D-05 记录的那次真实事故。
 3. 它还会掩盖问题：`git status` 看着"脏"，但脏的并不是谁的代码。
 
 这里把三个环境变量**显式指到项目内的 `.tmp/`**（已加入 .gitignore），
@@ -55,7 +55,7 @@ pytest 保证 rootdir 下的 `conftest.py` 在任何测试模块被导入之前�
 
 目前这不构成实际风险：全仓库只有本文件直接调用 `tempfile`；matplotlib 的
 缓存由 `app/config.py` 里的 `MPLCONFIGDIR` 单独兜住。但这个"同源问题的
-另一半没被覆盖"是知道的，已记录在 `docs/DECISIONS.md`（D-05）。
+另一半没被覆盖"是知道的，已记录在 `docs/DECISIONS.md`（D-07）。
 真要修，得把改环境变量挪到 `app/__init__.py`，代价是"import 库就改全局
 环境"这种副作用更脏 —— 不值得，所以选择记录而不是修。
 """

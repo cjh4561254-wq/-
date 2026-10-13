@@ -144,4 +144,41 @@ pytest 红"，无法判断到底修没修。**修复是真的，证据是假的*
 **影响到**：所有人的验收流程。提交信息里含中文或引号时，用 here-string
 写入临时文件再 `git commit -F`，不要写成内联字符串。
 
-**状态**：已落地。基线演进：`9d37bcb` → `460cf8c` → `fe155af` → `44566c6` → `ff5b5cd`。
+**状态**：已落地。基线演进：`9d37bcb` → `460cf8c` → `fe155af` → `44566c6` → `ff5b5cd` → `87c3019` → `dde1115` → `9cf7f4c`。
+
+---
+
+## D-07 测试临时产物必须落在项目内，且"只覆盖 pytest"是已知边界
+
+**背景（实测出来的环境事实，不是预防性措施）**：本项目所在机器上，**Python 子进程无法写入系统临时目录**。实测：
+
+```
+os.environ["TEMP"]                    -> 'C:\Users\jun\AppData\Local\Temp'
+open(%TEMP%\probe, "w")               -> PermissionError [Errno 13] Permission denied
+tempfile.gettempdir()   (cwd=项目根)   -> 'D:\个人项目01\ai-data-analyst-agent'
+tempfile.mkdtemp()                    -> 'D:\个人项目01\ai-data-analyst-agent\tmpwd4n6n_2'
+```
+
+注意有个会骗人的不对称：**PowerShell 的 `Set-Content` 写得进 `%TEMP%`，Python 写不进**。所以"我在 shell 里验证过临时目录可用"是假绿，必须用 Python 子进程验证。
+
+`tempfile` 在所有候选目录都失败后会退回 `cwd`，于是跑一次测试就在**仓库根**留下 `pytest-of-jun/` 和一串 `tmpXXXXXXXX/`；只要有人手滑 `git add -A`（正是 D-05 那次事故的入口），垃圾就进仓库了。
+
+**决定**
+1. `conftest.py` 把 `TMPDIR` / `TEMP` / `TMP` 指向项目内 `.tmp/`，并清 `tempfile.tempdir` 缓存（不清不生效）。
+2. **第 2 道独立保险**：`pytest_configure` 里显式钉住 `basetemp = .tmp/pytest`。只靠第 1 条不够——那条链路上任何一环变了（有人命令行传 `--basetemp`、别的插件动过缓存、下面第 3 条降级了）产物就回项目根。
+3. `.tmp/` 建不出来时**降级为 warning + 继续跑**，不抛异常。曾经的后果：有人把 `.tmp` 建成同名文件 → `FileExistsError` 停在 conftest → `ImportError while loading conftest`，**整个会话起不来**，看起来像"测试全坏了"。取舍很明确：**脏目录可接受，起不来测试不可接受**。
+4. 测试里**只用 pytest 的 `tmp_path` / `tmp_path_factory`，不许用 `tempfile.mkdtemp()`**。
+
+**已知边界（选择记录而不是修）**：以上只覆盖 pytest。`python -m uvicorn app.main:app` 或手工脚本在项目根启动时，`gettempdir()` 仍是项目根——因为改环境变量的是 conftest，它们不加载它。
+
+不修的理由：全仓库只有 `conftest.py` 直接调用 `tempfile`（`app/`、`tests/` 都没有），matplotlib 的缓存由 `app/config.py` 的 `MPLCONFIGDIR` 单独兜住，所以**当前不产生任何实际产物**。真要修，得把"import 就改全局环境变量"挪进 `app/__init__.py`——那比问题本身更脏（任何 `import app` 的进程环境都被改）。所以选择**留下痕迹**：下一个接手的人应当知道这个边界是知道的，而不是漏的。
+
+**还没被覆盖的另一半**：把仓库解压到 `%TEMP%` 下时**连 pytest 都起不来**（`FileNotFoundError: No usable temporary directory found in [...]`，四个历史提交都如此）。即本方案的前提是"项目根可写"。项目本身若落在 Python 写不了的位置，仍然救不了。
+
+**影响到**：`conftest.py`、`.gitignore`（`/tmp????????/` 与 `/pytest-of-*/` 兜底，**开头的斜杠不能省**——不带 `/` 的 pattern 在任意层级生效，实测会误伤 `app/tmp_uploads/`、`data/tmp_uploads/`）、所有人的测试写法、README 的测试章节。
+
+**状态**：已落地，commit `dde1115`（第 1 条）与 `9cf7f4c`（第 2、3 条 + `.gitignore` 锚定）。两条独立保险都已实测，反证见这两个提交的提交信息。
+
+**待补（还没做，别当成已完成）**
+- 本文件尚未记录 **D2 上传"分块读进内存 + 累计大小、超限立刻 raise"** 的决策（选了它而不是"边写边算 + 失败删文件"：换来"磁盘上不留半个文件"，代价是峰值内存 ≈ 上限 + 一次 chunk，`MAX_UPLOAD_MB` 放到几百 MB 时要改回边写边算）。
+- 本文件尚未记录 **`.xls` 明确不支持、只收 `.csv` / `.xlsx`** 的决策与"请另存为 .xlsx"的提示口径。
