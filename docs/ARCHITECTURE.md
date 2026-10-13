@@ -138,32 +138,40 @@ PENDING → [profiling] DatasetProfile → [planning, 调 LLM] TaskPlan
 
 ```
 ai-data-analyst-agent/
+├─ .env.example  .gitignore  .gitattributes  pytest.ini  requirements.txt  requirements.lock.txt  README.md   (已存在)
+├─ conftest.py                    (已存在, dde1115) 把 pytest 的临时目录钉进项目内 `.tmp/`；见 D-07
 ├─ docs/
-│  └─ ARCHITECTURE.md                 [D1][ARCH] 本文档（唯一架构交付物）
+│  ├─ ARCHITECTURE.md                 [D1][ARCH] 本文档（唯一架构交付物）
+│  ├─ DECISIONS.md                    (已存在) 决策记录 D-01..D-15；文档与代码冲突时以本文档的"当时"为准
+│  ├─ REVIEW_ARCHITECTURE.md          (已存在) 对本表的第一轮审核意见（v1.0 → v1.1 的 9 条修订来源）
+│  └─ STAGE2_ACCEPTANCE.md            (已存在, 0833ff2) 第二阶段（上传/预览/画像/示例数据）验收报告
+├─ scripts/
+│  ├─ __init__.py                     (已存在, c15aa92) 只为让测试能 import scripts.make_sample_data
+│  └─ make_sample_data.py             (已存在, c15aa92) 固定 seed 生成 data/samples/sales.csv（可复现性由 .gitattributes 保证，见 D-15）
 ├─ app/
 │  ├─ __init__.py                     (已存在) __version__ = "0.1.0"
 │  ├─ main.py                         (已存在) D6 追加静态文件挂载 /static 与 web 首页路由
-│  ├─ config.py                       (已存在) 已有 max_upload_mb(43) / upload_path(54) / max_upload_bytes(60) / max_rows、max_columns；D2 追加 max_workflow_seconds、charts_dir、db_path
-│  ├─ runtime.py                      (已存在) STARTED_AT + uptime_seconds()
-│  ├─ schemas.py                      (已存在) D2 追加 ApiError 新错误码
-│  ├─ schemas_dataset.py              [D2][BE] Dataset / DatasetSummary / DatasetProfile / ColumnProfile（见 4.1、4.2）
+│  ├─ config.py                       (已存在) Settings 共 12 个字段（见 §4.0.1，字段表为准，别信本文行号）；含 temp_dir/temp_path；D3 追加 max_workflow_seconds、charts_dir
+│  ├─ runtime.py                      (已存在) STARTED_AT + uptime_seconds() + runtime_environment()（lifespan 里设临时目录，见 D-07）
+│  ├─ schemas.py                      (已存在) ApiError / ApiResponse[T] / ErrorCode（8 个码，见 §7.0）
+│  ├─ schemas_dataset.py              (已存在, 44566c6) Dataset / DatasetSummary / DatasetProfile / ColumnProfile（见 4.1、4.2）
 │  ├─ schemas_tool.py                 [D3][BE] ToolResult / ChartResult / ToolSpec（见 4.7、4.8）
 │  ├─ schemas_workflow.py             [D3–D5][BE] **全部工作流相关 Pydantic 模型**（见 B-1 修订，4.3–4.6、4.9–4.11）
-│  ├─ errors.py                       [D2][BE] AppError 异常 + ERROR_STATUS 映射 + sanitize_detail()（去绝对路径/用户名）；**不写 HTTP handler**（handler 在 main.py）
+│  ├─ errors.py                       (已存在, fe155af) AppError 异常 + ERROR_STATUS 映射 + sanitize_detail()（去绝对路径/用户名）；**不写 HTTP handler**（handler 在 main.py，共 4 个）
 │  ├─ api/
 │  │  ├─ __init__.py                  (已存在)
 │  │  ├─ routes_health.py             (已存在) D1 不动
-│  │  ├─ routes_datasets.py           [D2][BE] POST /datasets/upload、GET /datasets/{id}、GET /datasets/{id}/profile
+│  │  ├─ routes_datasets.py           (已存在, 9441429) POST /datasets/upload、GET /datasets/{id}、GET /datasets/{id}/profile
 │  │  ├─ routes_analysis.py           [D4][BE] POST /analysis（立刻返回 workflow_id）
 │  │  └─ routes_workflows.py          [D6][BE] GET /workflows/{id}、/report、/charts/{filename}
 │  ├─ data/
-│  │  ├─ __init__.py                  [D2][BE]
-│  │  ├─ loader.py                    [D2][BE] load_dataframe(path, ext) → DataFrame；编码/分隔符兜底
-│  │  ├─ profiler.py                  [D2][BE] build_profile(df, dataset_id) → DatasetProfile（纯 pandas 计算，**零 LLM 参与**；实际就在 D2 做，见 14.3）
-│  │  └─ store.py                     [D2][BE] DatasetStore：进程内 dict，存 DataFrame 与 DatasetSummary
+│  │  ├─ __init__.py                  (已存在, 34dd3a9)
+│  │  ├─ loader.py                    (已存在, 34dd3a9) load_dataframe(path, ext) → (DataFrame, encoding)；编码/分隔符兜底
+│  │  ├─ profiler.py                  (已存在, 34dd3a9) build_profile(df, dataset_id) → DatasetProfile（纯 pandas 计算，**零 LLM 参与**；实际就在 D2 做，见 14.3）
+│  │  └─ store.py                     (已存在, 34dd3a9) DatasetStore：进程内 dict，存 DataFrame 与 DatasetSummary；**不写盘**（落盘在路由层）
 │  ├─ core/
-│  │  ├─ __init__.py                  [D2][BE]
-│  │  ├─ registry.py                  [D2][BE] WorkflowRegistry：只存（dict + Lock + create/get/touch），**一行模型定义都没有**（模型全在 schemas_workflow.py）
+│  │  ├─ __init__.py                  [D3][BE]
+│  │  ├─ registry.py                  [D3][BE] WorkflowRegistry：只存（dict + Lock + create/get/touch），**一行模型定义都没有**（模型全在 schemas_workflow.py）
 │  │  └─ background.py                [D4][BE] submit_workflow(state) → 用 BackgroundTasks 跑线程
 │  ├─ tools/
 │  │  ├─ __init__.py                  [D3][BE]
@@ -188,12 +196,18 @@ ai-data-analyst-agent/
 │     ├─ app.js                       [D6][FE] fetch 调用 + 1 秒轮询 + 渲染
 │     └─ style.css                    [D6][FE] 原生 CSS，不用框架
 ├─ tests/
+│  ├─ __init__.py                     (已存在) 让 tests/ 成为一个包（与 app/ 下同名测试文件不冲突）
 │  ├─ test_health.py                  (已存在) D1 不动
-│  ├─ test_error_format.py            (已存在, 460cf8c) 404/405/422/路由抛错的统一外壳 + CORS 来源限制；**不要动**
-│  ├─ test_loader.py                  [D2][QA] 正常 CSV / GBK CSV / xlsx / 空文件 / 只有表头
-│  ├─ test_upload_api.py              [D2][QA] 上传成功、超限、非法扩展名、路径穿越文件名
+│  ├─ test_error_format.py            (已存在, 460cf8c) 404/405/422/路由抛错的统一外壳 + CORS 来源限制
+│  ├─ test_errors.py                  (已存在, fe155af) AppError 状态码表、sanitize_detail 的路径/用户名清洗
+│  ├─ test_loader.py                  (已存在, 34dd3a9) 正常 CSV / GBK CSV / xlsx / 空文件 / 只有表头 / 编码口径（见 D-12）
+│  ├─ test_store.py                   (已存在, 34dd3a9) register / build_stored_filename / 32 位 hex 与白名单两道校验
+│  ├─ test_profiler.py                (已存在, 34dd3a9) 画像字段与缺失值/重复行统计 / semantic_type 八例
+│  ├─ test_data_layer_e2e.py          (已存在, 34dd3a9) 三个模块串起来跑真实文件，末端 json.dumps(allow_nan=False)
+│  ├─ test_upload.py                  (已存在, 9441429) 上传成功、超限、非法扩展名、路径穿越文件名、惰性画像缓存（**注意文件名是 test_upload.py，不是 test_upload_api.py**）
+│  ├─ test_temp_dir.py                (已存在, 24aeac1) 启动前不 import 副作用 / 启动中 gettempdir 在项目内 / 退出后还原
+│  ├─ test_sample_data.py             (已存在, c15aa92) 示例数据的字节可复现、脏数据数量、销售额=销量×单价
 │  ├─ test_tools.py                   [D3][QA] 7 个工具的正确性 + 5 类校验的拒绝路径
-│  ├─ test_profiler.py                [D3][QA] 画像字段与缺失值/重复行统计
 │  ├─ test_workflow_state.py          [D4][QA] 状态迁移、重试上限、超时收尾
 │  ├─ test_analysis_api.py            [D4][QA] 未配 LLM 时降级返回、workflow 生命周期
 │  ├─ test_validation.py              [D5][QA] 报告里塞入假数字必须被校验拦下
@@ -203,8 +217,7 @@ ai-data-analyst-agent/
 │  ├─ uploads/.gitkeep                (已存在) 上传原件，文件名 = uuid4().hex + 安全扩展名
 │  ├─ charts/.gitkeep                 [D5][BE] 生成的 PNG
 │  └─ samples/
-│     └─ sales.csv                    [D3][LEAD] 唯一演示数据（中文列名，含缺失值/重复行/日期列）；定名就是 `data/samples/sales.csv`，第 6 天有富余再加第二份数据
-├─ .env.example  .gitignore  pytest.ini  requirements.txt  README.md   (已存在)
+│     └─ sales.csv                    (已存在, c15aa92) 唯一演示数据（2168 行 × 9 列，中文列名，故意含缺失值/重复行/异常值）；行尾由 .gitattributes 钉成 LF（见 D-15）
 ```
 
 ### 2.1 依赖方向（只允许箭头指向的方向）
@@ -1440,6 +1453,28 @@ Get-Content $f -Encoding UTF8 | ForEach-Object {
 
 **给后来者的一条提醒**：本轮的全部改动都是"**把已有代码的事实写进文档**"，没有一处是新增设计。这类同步的价值在于：`Settings` 字段名、`ERROR_STATUS` 映射、`requirements.lock.txt` 版本这些内容**写错不会报错、只会静默失效**（例如自己造一个 `max_dataset_rows`，默认值一直在起作用，看起来代码没问题）。所以每次契约冻结后都应该做一次这样的核对，而不是等到写代码时才发现名字对不上。
 
+### 14.4 第二阶段门禁（task-5）的对齐记录
+
+基线：`eb276df`（第 2 天收尾）→ `7465e8e`（DECISIONS 计数口径）→ `2c2d2c1`（本节）。核对方法：脚本把 §2 目录树点名的文件、§4.0.1 的字段名分别与真实仓库做集合比对（**不靠人眼扫**，因为这类偏差的特征正是"看不出来"）。
+
+**查出的偏差（都是"文档说 A、代码做 B"，没有一条会让测试变红）**：
+
+| # | 偏差 | 处理 |
+|---|---|---|
+| 1 | §4.0.1 表里没有 `temp_dir`（代码 12 个字段 vs 表里 11 个） | 表格补一行（含"不是给业务代码读的"这句用途说明）；表头"11 个字段"改 12；`app/config.py` 的 `temp_path` docstring 一并扩写。提交 `2c2d2c1` |
+| 2 | §2 目录树把已交付的文件仍标成计划（`schemas_dataset.py`、`errors.py`、`routes_datasets.py`、`data/` 三个、`test_profiler.py`） | 全部改为 `(已存在, <首次交付的 commit>)` |
+| 3 | §2 目录树漏了 11 个真实存在的文件（`conftest.py`、`.gitattributes`、`scripts/`、`docs/DECISIONS.md`、`docs/STAGE2_ACCEPTANCE.md`、`docs/REVIEW_ARCHITECTURE.md`、`tests/__init__.py`、`tests/test_errors.py`、`tests/test_store.py`、`tests/test_data_layer_e2e.py`、`tests/test_temp_dir.py`、`tests/test_sample_data.py`） | 全部补进树 |
+| 4 | 树里写的 `tests/test_upload_api.py` **不存在**，真实文件名是 `tests/test_upload.py`（`9441429` 交付） | 改名并加一句"**注意文件名是 test_upload.py，不是 test_upload_api.py**" |
+| 5 | 树里 `app/runtime.py` 只写 `STARTED_AT + uptime_seconds()`，漏了 `24aeac1` 新增的 `runtime_environment()` | 补上 |
+| 6 | 树里 `config.py` 行写"已有 max_upload_mb(43) / upload_path(54) / max_upload_bytes(60)"——**行号是硬编码的，早就不对了** | 改成指向 §4.0.1 并写明"字段表为准，别信本文行号" |
+| 7 | `core/` 两个文件标 `[D2][BE]`，正文与排期表都是 D3 | 改 `[D3][BE]`（沿用 §14.2 第 6 条定的通用规则：**标注与正文打架时以正文为准**） |
+| 8 | 附录 B 仍写"已在的 11 个"、`ErrorCode` 仍写"D2 只在其中追加 `WORKFLOW_TIMEOUT`" | 分别改成 12 个与"共 8 个码"；`app/runtime.py` 那行从"不动"改成"已改过（24aeac1）"；补上 `app/errors.py` 一行（含"`AppError.status_code` 留着别删"） |
+| 9 | §2 树把 `data/samples/sales.csv` 标 `[D3][LEAD]` | 改 `(已存在, c15aa92)`；行尾策略指向 D-15 |
+
+**查证无误、不动的**：`HealthData` 含 `upload_dir_ready`；§7.3 的两个代码块与 `app/errors.py` 逐行一致（8 个码、顺序 400/404/405/413/415/503/200/500）；§6.4 的 7 个工具与 `TOOL_NAMES` 一致；"业务错误一律 HTTP 200"只出现在 §14.2 的变更记录里；`app/datasets.py` / `app/security/files.py` / `sales_sample.csv` 三个作废名字只在 §2.1 末尾与 §14.2 里。
+
+**留下的教训（与 §14.3 末尾那条同源）**：目录树和字段表这类"清单式文档"的腐烂方式是**加法腐烂**——代码只增不减，文档不加就悄悄落后；而它偏偏不会让任何测试变红。所以核对方式必须是脚本做集合比对，并且要**双向比**（文档有代码无 / 代码有文档无），只比一个方向会漏掉一半。
+
 ---
 
 ## 附录 A：术语速查（给基础 Python 水平读者）
@@ -1460,9 +1495,10 @@ Get-Content $f -Encoding UTF8 | ForEach-Object {
 
 | 已存在文件 | 本文档的处理方式 |
 |---|---|
-| `app/schemas.py` | **不改**已有 `ApiResponse`/`ApiError`/`ErrorCode`；D2 只在 `ErrorCode` 里追加 `WORKFLOW_TIMEOUT`（追加不算破坏） |
-| `app/config.py` | **不改**已有字段；已在的 11 个以 **§4.0.1 的配置项总表**为准（`app_name`/`app_version`/`upload_dir`/`max_upload_mb`/`max_rows`/`max_columns`/`llm_base_url`/`llm_model`/`llm_api_key`/`llm_timeout_seconds`/`llm_max_retries`）。D2 追加 `charts_dir`、`max_workflow_seconds`、`db_path`（若 D6 做 SQLite） |
-| `app/main.py` | D6 追加静态文件挂载与首页路由；CORS 白名单保持不动 |
-| `app/runtime.py` | 不动 |
-| `tests/test_health.py` | 不动（如果 D6 把 `/` 改成返回 HTML，**这条测试会失败**——届时必须同步修改测试并在 README 记一笔，这是唯一预期会改动的已有测试） |
+| `app/schemas.py` | **不改**已有 `ApiResponse`/`ApiError`/`ErrorCode`；`ErrorCode` 现在共 **8 个码**（`BAD_REQUEST`/`NOT_FOUND`/`METHOD_NOT_ALLOWED`/`FILE_TOO_LARGE`/`UNSUPPORTED_FILE`/`SERVICE_UNAVAILABLE`/`WORKFLOW_TIMEOUT`/`INTERNAL_ERROR`，与 §7.0 表逐行对应）。后三个是 `fe155af` 追加的（追加不算破坏） |
+| `app/config.py` | **不改**已有字段；已在的 **12 个**以 **§4.0.1 的配置项总表**为准（`app_name`/`app_version`/`upload_dir`/`temp_dir`/`max_upload_mb`/`max_rows`/`max_columns`/`llm_base_url`/`llm_model`/`llm_api_key`/`llm_timeout_seconds`/`llm_max_retries`）。D3 追加 `charts_dir`、`max_workflow_seconds`、`db_path`（若 D6 做 SQLite） |
+| `app/main.py` | D6 追加静态文件挂载与首页路由；CORS 白名单保持不动。**已存在的 4 个异常处理器不要动**（`AppError` / `StarletteHTTPException` / `RequestValidationError` / 兜底 `Exception`，见 §7） |
+| `app/runtime.py` | **已改过（`24aeac1`）**：除 `STARTED_AT` / `uptime_seconds()` 外新增 `runtime_environment(settings)`，由 `main.py` 的 lifespan 包住 `yield`。文档不重复它的实现，原因见 `docs/DECISIONS.md` D-07 |
+| `app/errors.py` | **已存在（`fe155af`）**，本文档 §7.3 的两个代码块要与它逐行一致；`AppError.status_code` 目前没有调用点，**留着别删**（将来"模型不可用"想返回 503 时从调用点传，不要往枚举里塞新码） |
+| `tests/test_health.py` | 已随第一阶段返工改过（不再硬断言 `llm_configured is False`，改为"接口报的值 == 配置真实值"）。D6 若把 `/` 改成返回 HTML，**`test_root_returns_documentation_hint` 会失败**——届时必须同步修改测试并在 README 记一笔，这是唯一预期会改动的已有测试 |
 | `README.md` | 属于 Project Lead，本设计不改；第 12 节 D7 的工作里包含 README 更新清单 |
