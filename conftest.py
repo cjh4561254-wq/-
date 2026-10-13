@@ -45,13 +45,29 @@ pytest 保证 rootdir 下的 `conftest.py` 在任何测试模块被导入之前�
 所以放在这里，`tests/` 里所有 `tmp_path` 以及被测代码里的 `tempfile` 调用
 都会走 `.tmp/`。放在 `app/config.py` 里则太早（`pytest` 自己收集阶段的
 `tmp_path` 还没用到）也太隐晦（那是业务配置，不该管测试产物）。
+
+
+已知边界：这里只覆盖 pytest，覆盖不了别的入口
+--------------------------------------------
+
+`python -m uvicorn app.main:app` 或手工脚本在项目根启动时，`gettempdir()`
+仍然会指向项目根 —— 因为改环境变量的是本文件，而它们不加载本文件。
+
+目前这不构成实际风险：全仓库只有本文件直接调用 `tempfile`；matplotlib 的
+缓存由 `app/config.py` 里的 `MPLCONFIGDIR` 单独兜住。但这个"同源问题的
+另一半没被覆盖"是知道的，已记录在 `docs/DECISIONS.md`（D-05）。
+真要修，得把改环境变量挪到 `app/__init__.py`，代价是"import 库就改全局
+环境"这种副作用更脏 —— 不值得，所以选择记录而不是修。
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
+import warnings
 from pathlib import Path
+
+import pytest
 
 # 项目根目录 = 本文件所在目录（tests/ 与 app/ 的同级）
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -59,13 +75,46 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # 测试产物的统一落点。用点号开头：一眼能看出是"运行时生成、不属于源码"。
 # 必须在 .gitignore 里（已加），否则等于把垃圾从根目录挪到子目录而已。
 TEMP_DIR = PROJECT_ROOT / ".tmp"
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# 让 tempfile 模块以及一切读这三个变量的第三方库（matplotlib、openpyxl 等）
-# 都把临时文件写到这里。
-os.environ["TMPDIR"] = str(TEMP_DIR)
-os.environ["TEMP"] = str(TEMP_DIR)
-os.environ["TMP"] = str(TEMP_DIR)
+# ── 第 1 道保险：把 tempfile 的三个环境变量指到 .tmp/ ──────────────────────
+# 这一步**不能让它把整个测试会话搞崩**。曾经的真实后果：有人把 .tmp 建成了一个
+# 同名文件，于是 mkdir 抛 FileExistsError，报错停在 conftest 里、pytest 直接
+# 起不来（ImportError while loading conftest），看起来像"测试全坏了"，实际
+# 跟被测代码毫无关系。所以这里降级为 warning + 继续跑：脏目录是可接受的，
+# 起不来测试是不可接受的。
+_TEMP_ENV_SETUP_OK = True
+try:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as exc:  # 权限不足、同名文件挡路等
+    _TEMP_ENV_SETUP_OK = False
+    warnings.warn(
+        f"无法创建测试临时目录 {TEMP_DIR}（{type(exc).__name__}: {exc}）。"
+        "已跳过 tempfile 重定向，本次会话的临时文件可能落到项目根目录"
+        f"（.gitignore 里有 /tmp????????/ 与 pytest-of-*/ 兜底）。"
+        "测试会照常运行，但这台机器上的临时产物不受控。",
+        stacklevel=1,
+    )
 
-# 清掉缓存，否则上面三行不生效（tempfile 会把第一次算出的结果缓存起来）。
-tempfile.tempdir = None
+if _TEMP_ENV_SETUP_OK:
+    # 让 tempfile 模块以及一切读这三个变量的第三方库（matplotlib、openpyxl 等）
+    # 都把临时文件写到这里。
+    os.environ["TMPDIR"] = str(TEMP_DIR)
+    os.environ["TEMP"] = str(TEMP_DIR)
+    os.environ["TMP"] = str(TEMP_DIR)
+
+    # 清掉缓存，否则上面三行不生效（tempfile 会把第一次算出的结果缓存起来）。
+    tempfile.tempdir = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """第 2 道保险：直接钉住 pytest 自己的 basetemp。
+
+    为什么环境变量还不够：`tmp_path` / `tmp_path_factory` 的落点由 pytest 的
+    `basetemp` 决定，而 `basetemp` 的默认值是 `tempfile.gettempdir()/pytest-of-<user>`。
+    只要那条链路上任何一环变了（有人在命令行传 --basetemp、tempfile 的缓存被
+    别的插件改过、我们上面的 mkdir 失败降级了），产物就会跑回项目根目录。
+    显式指定相对路径 `.tmp/pytest` 后，pytest 会相对 rootdir 解析它并自己创建，
+    与上面成功与否都无关 —— 两道保险叠加，产物的落点是确定的。
+    """
+    if not config.option.basetemp:
+        config.option.basetemp = ".tmp/pytest"
