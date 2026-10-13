@@ -48,12 +48,16 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
-需要"一字不差复现别人的环境"时：
+需要"一字不差复现这台机器上验证过的那组版本"时，用同目录的 `requirements.lock.txt`
+（只列本项目直接依赖的 12 个包及其实测版本）：
 
 ```powershell
-python -m pip freeze > requirements.lock.txt   # 导出精确版本
-python -m pip install -r requirements.lock.txt # 按精确版本安装
+python -m pip install -r requirements.lock.txt
 ```
+
+不要用 `python -m pip freeze > requirements.lock.txt` 自己生成：本项目的 `.venv`
+是用 `--system-site-packages` 建的，`freeze` 出来是整台机器上百个包（torch、pymilvus……），
+不是这个项目的锁，别人拿它安装会装一堆无关的东西。
 
 ## 配置
 
@@ -97,7 +101,17 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**16 passed**。测试用 FastAPI 的 `TestClient`，**不需要先启动服务，也不占用端口**。
+预期：**36 passed**（35 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+**不需要先启动服务，也不占用端口**。
+
+其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
+（`pytest.ini` 里开了 `--doctest-modules`，`testpaths = tests app`）。
+为什么要跑它：docstring 里写着"输入这个会输出那个"，那就是承诺；不跑的话，
+代码改了而注释没改，注释会一直骗人。
+
+> 收集阶段会 import 整个 `app` 包，所以以后往 `app` 里加模块时，
+> **不要在模块顶层做有副作用的事**（建目录、读 .env、发网络请求）——
+> 那会在"收集测试"时就发生。
 
 测试特意做到"三种环境下都通过"，因为第 4 天你填上真实密钥后测试不该变红：
 

@@ -18,6 +18,12 @@ from app.schemas import ErrorCode
 
 client = TestClient(app)
 
+# 注意上面这行**没有**用 `with`，所以 lifespan 不会执行（startup 钩子跑不到）。
+# 需要验证"启动时真的建了上传目录"的测试，必须自己写 `with TestClient(app) as c:`。
+# 这是被 QA 抓出来的一个假绿测试：旧注释写"TestClient 会跑 lifespan"，
+# 而那条断言能过只是因为 data/uploads/.gitkeep 被 git 跟踪、目录碰巧存在。
+# 一旦换一台干净机器或改 UPLOAD_DIR，它就红 —— 看起来像代码坏了，其实是测试写错了。
+
 # 大模型相关配置的三个来源：真实环境变量、.env 文件、代码默认值。
 # 下面的 fixture 把前两个都按住，这样"未配置基线"才是真的未配置。
 LLM_ENV_VARS = ("LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY")
@@ -62,8 +68,10 @@ def test_health_envelope_shape():
     assert data["app_name"] == config.get_settings().app_name
     assert data["version"] == config.get_settings().app_version
     assert data["uptime_seconds"] >= 0
-    # 上传目录由 lifespan 启动时创建，TestClient 会跑 lifespan，所以这里必须是 True
-    assert data["upload_dir_ready"] is True
+    # 这里**只断言类型**，不断言 True：lifespan 没跑时它本来就可能是 False，
+    # 那条断言会变成"依赖 checkout 里碰巧有 data/uploads 目录"的假绿。
+    # "启动时真的建目录"由下面的 test_lifespan_creates_upload_dir 负责。
+    assert isinstance(data["upload_dir_ready"], bool)
 
 
 def test_health_matches_config_regardless_of_env():
@@ -136,19 +144,70 @@ def test_settings_cache_can_actually_be_reset(monkeypatch):
 
     旧写法在模块顶部 `settings = get_settings()`，业务模块 `from app.config
     import settings` 把它绑死在 import 时刻。结果是：测试改了环境变量、
-    调了 cache_clear()，业务模块用的却还是旧对象 —— 测试"看着绿，其实没测到"。
+    调了 cache_clear()，业务模块用的却还是旧对象。
 
-    现在业务模块改为每次 config.get_settings() 现取。
-    本测试锁死这个行为：重置缓存 + 改环境变量后，必须能读到新值。
+    **这条测试的写法被 QA 返工过一次，值得记住为什么。**
+
+    第一版只断言了 `config.get_settings().llm_model == 新值` 和
+    `接口的 version == config.get_settings().app_version`，看起来合理，
+    但 QA 拿它在**旧的有 bug 的树上**跑，两条断言全是 True —— 也就是说
+    bug 回来了它也照样绿，等于没测。
+
+    原因：旧代码的 config.get_settings 本身也是 lru_cache 函数，
+    cache_clear() 之后它自己当然会返回新值（第一条必然成立）；第二条比的是
+    两个都来自 get_settings() 的 app_version，同源必然相等。
+
+    要真正区分新旧实现，必须让断言穿过**那个曾经被绑死的引用**：
+    改 APP_NAME → 重置缓存 → 问 HTTP 接口。接口拿到的值必须跟着变。
     """
+    monkeypatch.setenv("APP_NAME", "renamed-by-test")
     monkeypatch.setenv("LLM_MODEL", "model-from-test")
     config.reset_settings_cache()
     try:
+        # ① 配置层本身能读到新值（这条新旧实现都成立，保留它只是先挡住最外层的错）
         assert config.get_settings().llm_model == "model-from-test"
-        # 接口是现取配置的，所以它也必须跟着变
-        assert client.get("/api/health").json()["data"]["version"] == config.get_settings().app_version
+
+        # ② 关键断言：接口里那次 config.get_settings() 必须是**现取**的。
+        #    旧实现下接口返回的是 import 时刻的旧对象，这里会红。
+        assert client.get("/api/health").json()["data"]["app_name"] == "renamed-by-test"
+        assert client.get("/").json()["data"]["app"] == "renamed-by-test"
     finally:
-        config.reset_settings_cache()  # 还原，避免影响其他测试
+        # 清缓存让后续测试重新读取 monkeypatch（已还原）的环境变量。
+        # 这里不需要手动还原环境变量：monkeypatch 在本测试结束后自动还原。
+        config.reset_settings_cache()
+
+
+def test_lifespan_creates_upload_dir(monkeypatch, tmp_path):
+    """startup 钩子必须真的把上传目录建出来（原来的测试根本没跑到 lifespan）。
+
+    为什么单独测这个？
+        上传目录是第一个接口就要用的东西。建不出来时最坏的情况是：
+        启动日志看着一切正常，直到有人上传文件才报 FileNotFoundError，
+        而那时你正在给别人演示。
+
+    做法：把 UPLOAD_DIR 指向一个还不存在的新目录（tmp_path 只是拿来拼路径，
+    真正建目录的是 lifespan 自己），然后用 `with TestClient(app)` 触发 lifespan。
+
+    注意 config.reset_settings_cache() 这行**不能省**，它也是刻意的：
+    上面的 test_settings_cache_can_actually_be_reset 已经清过一次缓存，
+    所以这条测试实际上依赖"测试执行顺序"才能抓住漏改的现取写法 ——
+    单独跑它时，旧写法也能过（因为缓存是冷的）。这类隐性依赖越少越好，
+    所以这里显式清缓存，让它在任何顺序下都测同一件事。
+    """
+    target = tmp_path / "brand-new-uploads"
+    assert not target.exists()  # 前提：先确认它真的不存在，否则这条测试没意义
+
+    monkeypatch.setenv("UPLOAD_DIR", str(target))
+    config.reset_settings_cache()
+    try:
+        # 这里**必须**用 with：TestClient 只有在上下文管理器里才会跑 lifespan。
+        with TestClient(app) as started:
+            body = started.get("/api/health").json()
+
+        assert body["data"]["upload_dir_ready"] is True
+        assert target.is_dir()  # 接口说 True 不够，要落到文件系统上确认
+    finally:
+        config.reset_settings_cache()
 
 
 # ---------------- 统一错误格式 ----------------

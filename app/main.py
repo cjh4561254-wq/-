@@ -8,6 +8,7 @@ r"""FastAPI 应用入口。
 """
 
 from contextlib import asynccontextmanager
+import traceback
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,6 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import config
 from app.api.routes_health import router as health_router
+from app.errors import AppError, sanitize_detail
 from app.schemas import ApiError, ApiResponse, ErrorCode
 
 
@@ -60,7 +62,43 @@ app.add_middleware(
 # ---------------- 统一错误响应 ----------------
 # FastAPI 默认的错误格式是 {"detail": ...}，和我们成功的 {"ok":true,"data":...}
 # 是两套结构。前端如果只写一套解析逻辑，遇到 404 / 参数错误就会解析失败。
-# 下面把框架自己抛的错误也翻译成同一个外壳，前端只需要认一种格式。
+# 下面把框架自己抛的错误、以及我们自己的 AppError 都翻译成同一个外壳，
+# 前端只需要认一种格式。
+#
+# 两个概念不要混：
+#   HTTP 状态码 —— 由 handler 原样透传（404 就是 404，413 就是 413）
+#   error.code  —— 业务语义，由 AppError.code 决定（见 app/errors.py）
+# 细节和完整映射表都写在 app/errors.py 的模块注释里。
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    """把业务错误（AppError）翻译成统一外壳。
+
+    业务代码里只写 `raise AppError(ErrorCode.NOT_FOUND, "数据集不存在")`，
+    状态码由 AppError.status_code 决定（它来自 app/errors.py 的 ERROR_STATUS 表）。
+    """
+    body = ApiResponse[None](
+        ok=False,
+        data=None,
+        error=ApiError(
+            code=exc.code,
+            message=exc.message,
+            detail=sanitize_detail(exc.detail) if exc.detail else request.url.path,
+        ),
+    )
+    return JSONResponse(status_code=exc.status_code, content=body.model_dump(mode="json"))
+
+
+# 框架抛的状态码 → 业务错误码。
+# 为什么 405 不能也归到 BAD_REQUEST？因为前端会按 error.code 决定文案：
+# 归到 BAD_REQUEST 会让"你用错了 HTTP 方法"提示成"请检查你的输入"，
+# 而用户真正看到的多半是我们自己前端写错了 URL —— 提示指错了方向，
+# 排查时就得多绕一圈。
+_FRAMEWORK_STATUS_CODES: dict[int, ErrorCode] = {
+    404: ErrorCode.NOT_FOUND,
+    405: ErrorCode.METHOD_NOT_ALLOWED,
+}
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -77,15 +115,27 @@ async def http_exception_handler(
     路由里可以写 `raise HTTPException(status_code=404, detail="没有这个数据集")`，
     客户端拿到的仍然是标准失败格式。
     """
-    # 404 归到 NOT_FOUND，其余归到 BAD_REQUEST。
-    # 具体业务错误码（FILE_TOO_LARGE 等）由路由自己返回 ApiResponse，不走这里。
-    code = ErrorCode.NOT_FOUND if exc.status_code == 404 else ErrorCode.BAD_REQUEST
+    # FastAPI / Starlette 自己抛的这几个状态码，翻译成最接近的业务码。
+    # 需要精确业务码（FILE_TOO_LARGE / UNSUPPORTED_FILE 等）时用 AppError，
+    # 它的状态码会跟着错误码一起变（见 app/errors.py 的 ERROR_STATUS 表）。
+    code = _FRAMEWORK_STATUS_CODES.get(exc.status_code, ErrorCode.BAD_REQUEST)
     body = ApiResponse[None](
         ok=False,
         data=None,
-        error=ApiError(code=code, message=str(exc.detail), detail=request.url.path),
+        error=ApiError(
+            code=code,
+            message=str(exc.detail),
+            detail=sanitize_detail(request.url.path),
+        ),
     )
-    return JSONResponse(status_code=exc.status_code, content=body.model_dump(mode="json"))
+    # exc.headers 必须转发：405 的 Allow 头（RFC 7231 §6.5.5 要求）和
+    # 401 的 WWW-Authenticate 都挂在这里。自定义 handler 里漏掉它，
+    # 客户端就再也拿不到这些头了 —— 这类"静默丢失"只有对着原始响应头看才发现。
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=body.model_dump(mode="json"),
+        headers=getattr(exc, "headers", None),
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -103,10 +153,41 @@ async def validation_exception_handler(
         error=ApiError(
             code=ErrorCode.BAD_REQUEST,
             message="请求参数校验失败",
-            detail=str(exc.errors()),
+            detail=sanitize_detail(str(exc.errors())),
         ),
     )
     return JSONResponse(status_code=422, content=body.model_dump(mode="json"))
+
+
+@app.exception_handler(Exception)
+async def unexpected_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """兜底：任何没被上面三个 handler 接住的异常，也返回统一外壳。
+
+    为什么需要它？
+        权限不一致、文件句柄没关、第三方库抛出的意外异常……这些都会走到这里。
+        没有这个 handler 时，FastAPI 会返回纯文本 "Internal Server Error"，
+        前端 json() 解析直接抛异常，页面上只会看到一个转圈或者空白 ——
+        用户拿不到任何有用信息，我们也不知道发生了什么。
+
+    三条纪律：
+        ① HTTP 仍然是 500，绝不为了"好看"改成 200；
+        ② detail 清洗掉本机路径，并且截断到 500 字符，避免把整个堆栈丢给客户端；
+        ③ 控制台打印完整异常（traceback），**排查信息留在服务端日志里**，
+           不要放在响应体里 —— 响应体会被截图、会被贴进 issue。
+    """
+    print(f"[error] 未预期的异常 {request.method} {request.url.path}: {exc!r}")
+    traceback.print_exc()
+
+    body = ApiResponse[None](
+        ok=False,
+        data=None,
+        error=ApiError(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="服务器内部错误，请查看服务端日志",
+            detail=sanitize_detail(str(exc))[:500] if str(exc) else None,
+        ),
+    )
+    return JSONResponse(status_code=500, content=body.model_dump(mode="json"))
 
 
 # 所有业务路由统一挂在 /api 前缀下

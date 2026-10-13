@@ -18,12 +18,21 @@ T = TypeVar("T")
 
 
 class ErrorCode(str, Enum):
-    """错误码。前端可以据此决定是提示用户、还是重试。"""
+    """错误码。前端可以据此决定是提示用户、还是重试。
+
+    注意区分两个层次（这是本项目的核心接口约定之一）：
+        HTTP 状态码 —— HTTP 层面发生了什么（404 找不到 / 413 太大 / 415 类型不支持）
+        error.code  —— 业务层面发生了什么（NOT_FOUND / FILE_TOO_LARGE / ...）
+    两者同时给出、不冲突。错误码到状态码的映射集中在 app/errors.py 的 ERROR_STATUS。
+    """
 
     BAD_REQUEST = "BAD_REQUEST"
     NOT_FOUND = "NOT_FOUND"
+    METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"  # HTTP 方法不对（框架抛的 405）
     UNSUPPORTED_FILE = "UNSUPPORTED_FILE"
     FILE_TOO_LARGE = "FILE_TOO_LARGE"
+    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"  # 依赖不可用（例：没配大模型密钥）
+    WORKFLOW_TIMEOUT = "WORKFLOW_TIMEOUT"  # 工作流超时（HTTP 仍是 200，见 errors.py 的说明）
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
