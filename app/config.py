@@ -53,10 +53,27 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, gt=0, le=300)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
 
+    # 第五阶段（图表）才写入文件，但字段现在就加：架构文档 §4.0.1 给这张表定过一条
+    # 纪律 —— "写配置相关代码前先在表里查一下，不要自己造名字相近的字段"，
+    # 造出来还不报错，只是永远不生效。这里一次把 D4/D5 要用的三个补齐。
+    charts_dir: str = Field(default="data/charts", min_length=1)
+
+    # 整条工作流的总时长上限（秒）。轮询接口按 heartbeat_at 惰性判定超时。
+    max_workflow_seconds: int = Field(default=180, gt=0, le=3600)
+
+    # 一条工作流里所有工具调用次数的总上限。防"模型重试 + 任务重试"组合成死循环。
+    tool_call_limit: int = Field(default=20, ge=1, le=200)
+
     @property
     def upload_path(self) -> Path:
         """上传目录的绝对路径。"""
         p = Path(self.upload_dir)
+        return p if p.is_absolute() else PROJECT_ROOT / p
+
+    @property
+    def charts_path(self) -> Path:
+        """图表目录的绝对路径（`charts_dir` 是配置字符串，这个是可直接用的 Path）。"""
+        p = Path(self.charts_dir)
         return p if p.is_absolute() else PROJECT_ROOT / p
 
     @property

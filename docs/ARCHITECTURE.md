@@ -151,12 +151,13 @@ ai-data-analyst-agent/
 ├─ app/
 │  ├─ __init__.py                     (已存在) __version__ = "0.1.0"
 │  ├─ main.py                         (已存在) D6 追加静态文件挂载 /static 与 web 首页路由
-│  ├─ config.py                       (已存在) Settings 共 12 个字段（见 §4.0.1，字段表为准，别信本文行号）；含 temp_dir/temp_path；D3 追加 max_workflow_seconds、charts_dir
+│  ├─ config.py                       (已存在) Settings 共 15 个字段（见 §4.0.1，字段表为准，别信本文行号）；含 temp_dir/temp_path；D4 冻结时追加 charts_dir（+ charts_path 属性）、max_workflow_seconds、tool_call_limit
 │  ├─ runtime.py                      (已存在) STARTED_AT + uptime_seconds() + runtime_environment()（lifespan 里设临时目录，见 D-07）
 │  ├─ schemas.py                      (已存在) ApiError / ApiResponse[T] / ErrorCode（8 个码，见 §7.0）
 │  ├─ schemas_dataset.py              (已存在, 44566c6) FileExt / ALLOWED_EXTENSIONS / SemanticType 三个模块级别名常量 + Dataset / DatasetSummary / DatasetProfile / ColumnProfile（见 4.1、4.2）
 │  ├─ schemas_tool.py                 (已存在, de86db2) ToolErrorCode / ChartType / ToolResult / ChartResult（见 4.7、4.8；**ToolSpec 不在这个文件**，它按 §6.1 定义在 `tools/registry.py`）
-│  ├─ schemas_workflow.py             (已存在, de86db2) **全部工作流相关 Pydantic 模型**（见 B-1 修订，4.3–4.6、4.9–4.12）
+│  ├─ schemas_workflow.py             (已存在, de86db2) **全部工作流相关 Pydantic 模型**（见 B-1 修订，4.3–4.6、4.9–4.12）；D4 冻结时新增 AnalysisAccepted（见 4.14.1）
+│  ├─ schemas_llm.py                  (已存在, D4 冻结时新建) LLMToolCall / LLMReply：**模型请求层的边界类型**；"必须回传 reasoning_content"的校验在这里（见 4.14.1、4.14.2）
 │  ├─ errors.py                       (已存在, fe155af) AppError 异常 + ERROR_STATUS 映射 + sanitize_detail()（去绝对路径/用户名）；**不写 HTTP handler**（handler 在 main.py，共 4 个）
 │  ├─ api/
 │  │  ├─ __init__.py                  (已存在)
@@ -172,7 +173,7 @@ ai-data-analyst-agent/
 │  ├─ core/
 │  │  ├─ __init__.py                  (已存在, c41afc0)
 │  │  ├─ registry.py                  (已存在, c41afc0) WorkflowRegistry：只存（dict + Lock + create/get/touch），**一行模型定义都没有**（模型全在 schemas_workflow.py）
-│  │  └─ background.py                [D4][BE] submit_workflow(state) → 用 BackgroundTasks 跑线程
+│  │  └─ background.py                [D4][BE] submit(state, tasks) → BackgroundTasks；_run_safely 用 except BaseException 兜底 + finally 收尾（见 8.2）
 │  ├─ tools/
 │  │  ├─ __init__.py                  (已存在, 15edd69)
 │  │  ├─ registry.py                  (已存在, 15edd69) ToolSpec 定义 + register/get/list_specs/to_openai_tools；**7 个工具函数**在这里登记（见 §6）
@@ -190,7 +191,7 @@ ai-data-analyst-agent/
 │  ├─ agents/
 │  │  ├─ __init__.py                  (已存在, c41afc0)
 │  │  ├─ orchestrator.py              [D4][BE] run_workflow(state)：状态机唯一所有者（自身不调模型，只调 planner）
-│  │  ├─ planner.py                   (已存在, c41afc0) plan(state, profile) → TaskPlan（**调 LLM**，附规则式兜底；今天只有规则路径，LLM 路径 D4 加，所以仍标 [AI]）
+│  │  ├─ planner.py                   (已存在, c41afc0) plan_with_rules(question, profile, max_steps) → TaskPlan（**规则兜底，已落地**）+ plan(question, profile, max_steps)（**调 LLM**，D4 加；签名见 4.14.3，所以本文件标 [AI]）
 │  │  ├─ analysis.py                  (已存在, c41afc0) run_task(task, df) → ToolResult；需要时调图表工具
 │  │  ├─ charts.py                    [D5][BE] render_chart(ToolResult, chart_type, ...) → ChartResult
 │  │  └─ validation.py                [D5][AI] validate(state) → ValidationResult（纯代码校验，无模型）；build_report(...) → FinalReport（**调 LLM**，所以本模块算 [AI]）
@@ -216,6 +217,7 @@ ai-data-analyst-agent/
 │  ├─ test_analysis_agent.py          (已存在, c41afc0) 执行层：run_task 串工具、工具失败不炸整个任务（312 行）
 │  ├─ test_planner_rules.py           (已存在, c41afc0) 规则兜底计划器：关键词 → 工具/参数、越界问题不硬编（372 行）
 │  ├─ test_contracts_d3.py            (已存在, 555cb80) Lead 钉 D3 契约：model_dump(mode="json") + json.dumps(allow_nan=False) 必须过、ChartResult 的 filename/url/chart_id 三者一致、WorkflowState 派生字段与限额（544 行 / 24 个 test 函数 / pytest 收集 **32 项**）
+│  ├─ test_contracts_d4.py            (已存在, D4 冻结时新建) Lead 钉 D4 契约：LLMReply 必须携带 reasoning_content（含三条反例）、AnalysisAccepted 四字段不泄漏内部字段、三个新配置字段的默认值与边界，以及五个 D4 函数签名的**棘轮**（未写则 skip、写了但与契约不符则 fail；D4 结束时跳过条数应为 0）
 │  ├─ test_workflow_state.py          [D4][QA] 状态迁移、重试上限、超时收尾
 │  ├─ test_analysis_api.py            [D4][QA] 未配 LLM 时降级返回、workflow 生命周期
 │  ├─ test_validation.py              [D5][QA] 报告里塞入假数字必须被校验拦下
@@ -404,7 +406,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 ### 4.0.1 配置项总表（`app/config.py`，**已有字段照抄，不要重命名**）
 
-为什么给一张表：`Settings` 里已经有 12 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
+为什么给一张表：`Settings` 里已经有 15 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
 
 | 字段 | 类型 / 约束 | 默认值 | 对应环境变量 | 用途 | 状态 |
 |---|---|---|---|---|---|
@@ -420,9 +422,12 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `llm_api_key` | `str`，`repr=False` | `""` | `LLM_API_KEY` | 密钥；**任何日志/响应里都不许出现** | 已存在 |
 | `llm_timeout_seconds` | `int`，`gt=0, le=300` | `60` | `LLM_TIMEOUT_SECONDS` | 单次模型调用超时 | 已存在 |
 | `llm_max_retries` | `int`，`ge=0, le=5` | `2` | `LLM_MAX_RETRIES` | 模型调用重试上限 | 已存在 |
-| `charts_dir` / `max_workflow_seconds` / `db_path` / `tool_call_limit` | 见第 5、8 节 | — | — | 出图目录 / 工作流总时长 / SQLite 路径 / 工具调用上限 | **D2–D6 追加**（尚未在 `config.py` 里，写之前先加字段） |
+| `charts_dir` | `str`，`min_length=1` | `"data/charts"` | `CHARTS_DIR` | 生成的 PNG 落地目录（相对项目根）；用 `settings.charts_path` 取 `Path`。接口 8 按文件名从这里取图 | **D4 冻结时新增** |
+| `max_workflow_seconds` | `int`，`gt=0, le=3600` | `180` | `MAX_WORKFLOW_SECONDS` | 整条工作流总时长上限；轮询接口按 `heartbeat_at` **惰性**判定超时（§8.2 边界 4）。必须再兜一层的原因：模型超时重试会叠加，只靠单次超时会让前端一直转圈 | **D4 冻结时新增** |
+| `tool_call_limit` | `int`，`ge=1, le=200` | `20` | `TOOL_CALL_LIMIT` | 一条工作流允许的模型工具调用总数；防"模型重试 × 任务重试"组合成死循环，也顺带防住无限花钱 | **D4 冻结时新增** |
+| `db_path` | `str` | — | `DB_PATH` | SQLite 历史归档路径（决策 3：只做归档写入，内存态仍是唯一事实来源） | **D6 追加**（尚未在 `config.py` 里） |
 
-三个**计算属性**（不是配置项，别去 `.env` 里找）：`settings.upload_path`（`Path` 形式的上传目录，`main.py` 的 lifespan 已用它 `mkdir`）、`settings.max_upload_bytes`（字节数）、`settings.llm_configured`（`llm_base_url` 与 `llm_api_key` 都非空才为 `True`，**兜底模式的判定依据**）。
+四个**计算属性**（不是配置项，别去 `.env` 里找）：`settings.upload_path`（`Path` 形式的上传目录，`main.py` 的 lifespan 已用它 `mkdir`）、`settings.charts_path`（同上，图表目录）、`settings.max_upload_bytes`（字节数）、`settings.llm_configured`（`llm_base_url` / `llm_model` / `llm_api_key` **三项都非空**才为 `True`，**兜底模式的判定依据**）。
 
 ### 4.0.2 关键决定：`pd.DataFrame` 不放进任何 Pydantic 模型
 
@@ -694,14 +699,97 @@ has_report=state.report is not None,      # 注意：不是抄 state.has_report
 | `app/schemas.py`（已存在） | `ErrorCode`（8 个码）、`ApiError`、`ApiResponse[T]`、`T`（`TypeVar`） | D1 |
 | `app/schemas_dataset.py`（已存在, `44566c6`） | `FileExt`、`ALLOWED_EXTENSIONS`（模块级 `frozenset`）、`SemanticType`（`Literal` 别名，`ALLOWED_EXTENSIONS` 是它的取值集合）、`DatasetSummary`、`Dataset`、`ColumnProfile`、`DatasetProfile`——**共 7 个顶层定义** | D2 |
 | `app/schemas_tool.py`（已存在, `de86db2`） | `ToolErrorCode`、`ChartType`（两个 `Literal` 别名）、`ToolResult`、`ChartResult` | D3 |
-| `app/schemas_workflow.py`（已存在, `de86db2`） | `TaskStatus`、`WorkflowStatus`、`TERMINAL_STATUSES`（模块级 `frozenset`）、`WorkflowStep`（`Literal`）、`ChartRequest`、`AnalysisTask`、`TaskPlan`、`ValidationIssue`、`ValidationResult`、`ReportSection`、`FinalReport`、`WorkflowState`、`QuestionRequest`、`WorkflowStatusData`、`TaskBrief`——**共 15 个顶层定义** | D3–D5 |
+| `app/schemas_workflow.py`（已存在, `de86db2`） | `TaskStatus`、`WorkflowStatus`、`TERMINAL_STATUSES`（模块级 `frozenset`）、`WorkflowStep`（`Literal`）、`ChartRequest`、`AnalysisTask`、`TaskPlan`、`ValidationIssue`、`ValidationResult`、`ReportSection`、`FinalReport`、`WorkflowState`、`QuestionRequest`、`AnalysisAccepted`（D4 冻结时新增）、`WorkflowStatusData`、`TaskBrief`——**共 16 个顶层定义** | D3–D5 |
+| `app/schemas_llm.py`（已存在, D4 冻结时新建） | `LLMToolCall`、`LLMReply`——**共 2 个顶层定义**。`message` 必须带 `reasoning_content` 的校验在这里，理由见 §4.14.2 | D4 |
 | `app/tools/registry.py` | `ToolSpec`（**只在这里定义**，见 §6.1）。`schemas_tool.py` 里**没有**它 | D3 |
+
+**`LLMReply` 为什么不放 `schemas_workflow.py`**：判据是 §4.0 的"数据长什么样"。`schemas_workflow.py` 回答的是"**一条工作流**长什么样"，而 `LLMReply` 回答的是"**一次模型调用**返回了什么"——它既不属于工作流也不属于工具，是 `app/llm/` 这个包的边界类型。放进去还会让 `schemas_workflow.py` 被迫承载"模型请求层"的概念，而 D5 的 `charts.py`/`validation.py` 都不需要知道模型调用的形状。
 
 **`ToolSpec` 为什么不放 `schemas_tool.py`**：它的 `func` 字段是"怎么执行这个工具"，属于**工具层怎么被调用**，不属于"数据长什么样"；放进 `schemas_*.py` 还会让模型文件被迫依赖 pandas/`Callable` 的类型注解。文件归属的判据见 §4.0。
 
 **怎么自检这张表**（别靠眼睛——这类偏差的特征正是"看不出来"）：用 `ast.parse` 读两个模型文件，取顶层 `ClassDef`/`Assign`/`AnnAssign` 的名字集合，与上表做**双向**集合差（"代码有、表里没有"和"表里有、代码没有"都要打出来）。只比一个方向会漏掉一半。方法与当次输出见 §14.5。
 
 **不动 `app/schemas.py` 已有的三个模型**——因为它们被 `routes_health.py` 和 `tests/test_health.py` 依赖，改了会破坏第一天的验收。
+
+### 4.14 D4 契约冻结：模型请求层与受理回执（`de86db2` 之后新增）
+
+D4 是本项目**最大风险点**（第 12.2 节），也是唯一需要"AI / BE / QA 三方同时开工"的一天。所以这一天开工前先把**函数签名与数据形状**钉死：三个人对着同一份契约写，谁都不用等谁。本节的每个签名都已在代码里落地（见 §14.7 的基线）。
+
+#### 4.14.1 新增两个模型文件/模型（代码已落地）
+
+| 位置 | 模型 | 字段 |
+|---|---|---|
+| `app/schemas_llm.py`（**新文件**） | `LLMToolCall` | `id: str`（模型给的调用 id）、`name: str`（**可能是白名单外的名字**）、`arguments: str`（**原始 JSON 字符串，刻意不解析成 dict**） |
+| 同上 | `LLMReply` | `message: dict[str, Any]`、`content: str \| None`、`reasoning_content: str \| None`、`tool_calls: list[LLMToolCall]`、`model: str`、`finish_reason: str \| None`、`prompt_tokens/completion_tokens/total_tokens: int \| None`、`elapsed_ms: int`、`attempts: int` |
+| `app/schemas_workflow.py` | `AnalysisAccepted` | `workflow_id`（正则 `^[0-9a-f]{32}$`）、`dataset_id`、`status: WorkflowStatus`（默认 `PENDING`）、`created_at: datetime`；另有 `from_state(state)` classmethod |
+
+**`LLMToolCall.arguments` 为什么是 `str` 不是 `dict`**：模型可能给出非法 JSON（第 13 节风险 1 就列了这一条）。解析 + 三层容错是 `planner.py` 的职责，不是"数据形状"的职责；而且**保留原文**才能在重试时把"你的 JSON 不合法：<原文>"附回 Prompt。解析放在 `planner` 里，坏输入就成了它自己的分支，而不是让模型层的构造直接抛异常。
+
+**`AnalysisAccepted` 为什么必须单独定义**：第 8.2 节的示例代码 `response_model=ApiResponse[AnalysisAccepted]` 从 D1 就在用这个名字，但直到 D4 冻结契约时才真正落地 —— **"引用先于定义出现"**正是 §14.5 第 4 条记下的那类偏差（读起来自洽，实际有个洞）。它只带 4 个字段的理由：接口 5 的语义是"已受理"，此刻后台线程可能还没启动；回完整状态会让前端误以为"已经在跑了"。
+
+#### 4.14.2 `LLMReply.message`：把"必须回传 `reasoning_content`"变成构造期约束
+
+这是本阶段**唯一一个"写错就直接 400"**的坑，所以单独成节。
+
+DeepSeek 官方文档（思考模式）原文：
+
+> 携带了 `tools` 参数的请求，在后续所有请求中，必须完整回传 `reasoning_content` 给 API —— 即使该轮模型未实际进行工具调用。若您的代码中未正确回传 `reasoning_content`，API 会返回 400 报错。
+
+**注意后果是 400 而不是降级**。而 openai SDK 的 `response.choices[0].message` 之所以能直接 `messages.append(...)` 回传，是因为 SDK 把未知字段塞进了 `model_extra` 并原样序列化 —— 这是 **SDK 的版本相关行为，不是 API 契约**（换版本可能静默丢掉，而丢掉的后果是线上 400）。
+
+因此契约规定两件事：
+
+```python
+# ① client.chat() 内部：手工拼 message，不把 SDK 对象透传给上层
+message = {
+    "role": "assistant",
+    "content": choice.message.content,
+    "tool_calls": [tc.model_dump() for tc in (choice.message.tool_calls or [])],
+}
+if reasoning := getattr(choice.message, "reasoning_content", None):
+    message["reasoning_content"] = reasoning     # ← 少了这行，下一轮 400
+
+# ② 上层回填：原样 append，不做任何加工
+messages.append(reply.message)
+```
+
+`LLMReply` 上的 `@model_validator(mode="after")` 把这条约定变成**构造时就拦得住**的约束，检查三件事：`message["role"]` 必须是 `"assistant"`；拿到了 `reasoning_content` 就**必须**出现在 `message` 里；`tool_calls` 数量必须与 `message["tool_calls"]` 对得上。
+
+**为什么放模型里而不是写进 client 的注释**：注释拦不住改动，而这个校验在**任何**构造 `LLMReply` 的地方都会跑（包括将来新增的调用点）。
+
+#### 4.14.3 D4 要实现的五个函数签名（三方照此开工）
+
+```python
+# app/llm/client.py                                        [D4][AI]
+def chat(messages: list[dict], tools: list[dict] | None = None) -> LLMReply: ...
+    # 未配置 LLM → 抛 LLMNotConfigured（调用方转兜底，不是 500）
+    # 超时/连接错误/429/5xx → 按 settings.llm_max_retries 重试，间隔 time.sleep(1.5 * attempt)
+    # 401/402/400/422 → 不重试，直接抛 LLMCallError（重试没有意义，只是白花时间）
+
+# app/agents/planner.py                                     [D4][AI]
+def plan(question: str, profile: DatasetProfile, max_steps: int = 6) -> TaskPlan: ...
+    # LLM 路径：调 client.chat(messages, tools=to_openai_tools())，三层解析（json.loads → 正则抽 {...} → 重试）
+    # 任何一步失败（未配置/超时/JSON 坏/工具名全非法）→ 退回 plan_with_rules()，source="rule_fallback"
+    # 恒不抛异常：这个函数必须永远返回一个可执行的 TaskPlan
+
+# app/agents/orchestrator.py                                [D4][BE]
+def run_workflow(state: WorkflowState) -> None: ...
+    # 原地更新 state；唯一有权改 status/step/retry_count 的地方；不 import FastAPI；不直接调 LLM
+
+# app/core/background.py                                    [D4][BE]
+def submit(state: WorkflowState, tasks: BackgroundTasks) -> None: ...
+def _run_safely(state: WorkflowState) -> None: ...        # except BaseException 兜底 + finally 收尾
+
+# app/api/routes_analysis.py                                [D4][BE]
+@router.post("/analysis", status_code=202, response_model=ApiResponse[AnalysisAccepted])
+def start_analysis(req: QuestionRequest, background: BackgroundTasks) -> ApiResponse[AnalysisAccepted]: ...
+```
+
+**`planner.plan()` 恒不抛异常**这条要写清楚理由：它是"永远有规则兜底"（第 13 节风险 1 第 ⑤ 条）在代码层面的落点。模型彻底失败时系统仍然可用 —— 这是 D4 的验收项之一，所以兜底不能是"尽量"，必须是"函数签名保证"。
+
+#### 4.14.4 D4 新增三个配置字段（已进 `app/config.py`，见 §4.0.1）
+
+`charts_dir`（`data/charts`，D5 用）、`max_workflow_seconds`（`180`）、`tool_call_limit`（`20`），外加计算属性 `settings.charts_path`。**一次补齐**的理由：§4.0.1 表定过纪律"写配置相关代码前先在表里查一下，不要自己造名字相近的字段"—— 造出来还不报错，只是永远不生效。
 
 ---
 
@@ -1104,7 +1192,8 @@ def _run_safely(state: WorkflowState) -> None:
 
 ```python
 # 零件 3：接口（app/api/routes_analysis.py）
-@router.post("/analysis", response_model=ApiResponse[AnalysisAccepted])
+# status_code=202：语义是"已受理"，不是"已完成"（§7.0 状态码表）
+@router.post("/analysis", status_code=202, response_model=ApiResponse[AnalysisAccepted])
 def start_analysis(req: QuestionRequest, background: BackgroundTasks) -> ApiResponse[AnalysisAccepted]:
     # 1) 校验 dataset_id 存在（不存在 → ok:false, NOT_FOUND）
     # 2) 建 WorkflowState(status=PENDING) → registry.create()
@@ -1672,6 +1761,56 @@ B. app/ 下未出现在树里的 .py: 无
 **本轮明确没动的部分**：`app/llm/`、`app/agents/{orchestrator,charts,validation}.py`、`app/api/routes_analysis.py`、`app/core/background.py`、`app/web/`、以及 `tests/` 里那 5 个 D4–D6 计划项——它们尚未落地，保留计划标注。
 
 **§2 与 §14.6 里 `test_contracts_d3.py` 那一行已按 Lead 的提交 `555cb80` 更新**（原文写的是"工作区新增未提交"）。这条本身也是个教训：**文档里"尚未提交"这类状态词一定会过期**，而它不会让任何测试变红 —— 所以写文档时能写 hash 就写 hash，写不了 hash 就写"截至 <基线>"。
+
+### 14.7 第四天契约冻结（D4）的同步记录
+
+**基线**：`5123fb7`（D3 收尾完成，全量 352 passed）。本节记录 D4 开工前**冻结契约**这一轮的改动，以及**为什么先做这件事**。
+
+**为什么要先冻结**：D4 是第 12.2 节点名的"最大风险点"，也是唯一需要三方同时开工的一天（AI 写 `llm/` + `planner.plan()` + `orchestrator.py`；BE 写 `core/background.py` + `routes_analysis.py`；QA 写 `test_workflow_state.py` / `test_analysis_api.py`）。三方并行时，"接口长什么样"必须由一份**已提交的**文档定义，而不是靠三个人在聊天里对齐 —— 后者会产生"我以为你会传 dict，你传了 Pydantic 对象"这类只能在集成时才暴露的错。所以本轮**先写契约、再派单**。
+
+**本轮改动的 6 个文件**：
+
+| 文件 | 改动 | 为什么 |
+|---|---|---|
+| `app/schemas_llm.py` | **新建**（`LLMToolCall` / `LLMReply` + `reasoning_content` 校验） | §4.14.2：漏传 `reasoning_content` 的后果是 API 400，不是降级。把它做成构造期约束 |
+| `app/schemas_workflow.py` | 新增 `AnalysisAccepted`（16 个顶层定义，原 15） | §8.2 的示例代码从 D1 就在用这个名字，但代码里一直没有它 —— **"引用先于定义出现"** |
+| `app/config.py` | 新增 `charts_dir` / `max_workflow_seconds` / `tool_call_limit` + `charts_path` 属性（12 → 15 字段） | §4.0.1 定过纪律"写配置相关代码前先查表"；一次补齐，避免 D5 再造一个名字相近的字段 |
+| `.env.example` | 补 4 个键（`CHARTS_DIR` / `MAX_WORKFLOW_SECONDS` / `TOOL_CALL_LIMIT`）+ DeepSeek 填法示例 | 用户已选 DeepSeek 官方 API。示例里写明模型名是 `deepseek-flash`，因为旧文档的 `deepseek-chat` 已不是推荐写法 |
+| `docs/ARCHITECTURE.md` | 新增 §4.14（4 小节）、§14.7（本节）；同步 §4.0.1（12→15 字段 + 4 个计算属性）、§4.13（新增 `schemas_llm.py` 行、`schemas_workflow.py` 15→16）、§2 目录树（`config.py`/`schemas_workflow.py`/新增 `schemas_llm.py`/`planner.py`/`background.py`/`test_contracts_d4.py`） | 新增的代码让这四处表格全部过期 |
+| `tests/test_contracts_d4.py` | **新建**（25 项：19 passed + 6 skipped） | 见下 |
+
+**`test_contracts_d4.py` 的"棘轮"设计**：D3 的契约测试只能钉已存在的模型，D4 还要冻结**五个还没写的函数签名**（`chat` / `plan` / `run_workflow` / `submit` / `start_analysis`）。所以：
+
+- 模块或函数**不存在** → `pytest.skip`（D4 开工前这是正常的，不制造假红）
+- 存在但参数名/顺序/默认值与 §4.14.3 不符 → **fail**（有人改了约定就必须回来看契约）
+
+**"跳过条数应当在 D4 结束时归零"是一个可数的验收判据** —— 而不是"感觉写完了"。这也是本设计的主要目的：把"契约有没有被遵守"变成一条 `pytest` 输出里能直接读到的数字。
+
+**变异测试（`docs/DECISIONS.md` D-16 第 3 条：期望值必须来自已观测事实）**：基线 `(19, 0, 6)`，三个变异分别打在"validator / 接口形状 / 配置默认值"三类断言上：
+
+| 变异 | 结果 | 说明 |
+|---|---|---|
+| 删掉 `LLMReply` 的 `reasoning_content` 校验 | `1 failed, 18 passed, 6 skipped` | 钉住"漏传会被拦住" |
+| `AnalysisAccepted` 多带一个 `retry_count` 字段 | `2 failed, 17 passed, 6 skipped` | 钉住"不泄漏内部字段" |
+| `charts_dir` 默认值改成 `"charts"` | `2 failed, 17 passed, 6 skipped` | 钉住配置默认值 |
+
+还原后复跑 = `(19, 0, 6)`，与基线逐字一致。**三个变异红数都 > 0，没有假绿。**
+
+**实测的工具事实（不是转述文档）**：
+
+- `LLMReply.message` 的 `reasoning_content` 校验会拦下"拿到了却没写进 message"，错误信息里含 `reasoning_content` 字样。
+- `Settings` 字段数实测 **15**（`list(Settings.model_fields)`）。
+- 顶层定义数实测：`schemas.py` 4 / `schemas_dataset.py` 7 / `schemas_tool.py` 4 / `schemas_workflow.py` **16** / `schemas_llm.py` **2**。
+- 全量测试 **371 passed, 6 skipped**（原 352 passed + 19 新增通过 + 6 棘轮跳过）。
+
+**关于 DeepSeek API 的两条运行时事实（Lead 用 `httpx.MockTransport` 截获真实请求体实测，不是读文档得出的）**：
+
+1. openai SDK 2.41.0 下，`message.reasoning_content` **可读**（落在 `model_extra` 里，`model_dump()` 也含它）。
+2. `messages.append(sdk_message)` 与手工拼 dict **两条路径实际都把 `reasoning_content` 发出去了**。
+
+**尽管如此，契约仍规定手工拼 dict**：能 work 是因为 SDK 把未知字段塞进 `model_extra` 并原样序列化 —— 这是**版本相关行为，不是 API 契约**，换版本可能静默丢掉，而丢掉的后果是线上 400。手工拼是显式的、不依赖 SDK 内部机制。
+
+**本轮明确没动的部分**：`app/llm/`（整包）、`app/agents/orchestrator.py`、`app/core/background.py`、`app/api/routes_analysis.py`、`app/agents/{charts,validation}.py`、`app/api/routes_workflows.py`、`app/web/`、以及 `tests/` 里那 5 个 D4–D6 计划项 —— 契约已定，但实现尚未落地。`app/agents/planner.py` 只加 `plan()` 的**签名契约**，函数本身也还没写。
 
 ---
 

@@ -279,6 +279,43 @@ class QuestionRequest(BaseModel):
     )
 
 
+class AnalysisAccepted(BaseModel):
+    """`POST /api/analysis` 的返回体（HTTP 202）。
+
+    为什么需要一个单独的模型，而不是直接回 `WorkflowStatusData` 或 `WorkflowState`：
+        - 接口 5 的语义是"**已受理**"，此刻后台线程可能还没启动。回一个完整状态会
+          让前端以为"已经开始跑了"，而实际 `step` 可能还停在初始值；
+        - 它只要 4 个字段，前端拿到 `workflow_id` 就去轮询接口 6 了，其余都是白传。
+
+    为什么带 `status`：受理时的状态**恒为 `PENDING`**。写进返回体是为了让前端不必
+    假设这件事（将来若真的加了任务队列，这里会变成 `QUEUED`，前端代码不用改）。
+
+    架构文档 §8.2 的示例代码一直在用 `ApiResponse[AnalysisAccepted]`，但直到 D4
+    冻结契约时这个模型才落地 —— "引用先于定义出现"正是 §14.5 第 4 条记下的教训。
+    """
+
+    workflow_id: str = Field(pattern=r"^[0-9a-f]{32}$", description="uuid4().hex，轮询接口的键")
+    dataset_id: str = Field(min_length=1, description="原样回显，便于前端核对没串数据集")
+    status: WorkflowStatus = Field(
+        default=WorkflowStatus.PENDING, description="受理时的状态，恒为 PENDING"
+    )
+    created_at: datetime = Field(description="受理时间；前端拿它和轮询到的 finished_at 算总耗时")
+
+    @classmethod
+    def from_state(cls, state: WorkflowState) -> "AnalysisAccepted":
+        """从刚登记的状态里抽出受理回执。
+
+        和 `WorkflowStatusData.from_state()` 同一个理由：接口只抄它需要的字段，
+        将来给 `WorkflowState` 加内部字段时，不会莫名其妙出现在响应体里。
+        """
+        return cls(
+            workflow_id=state.workflow_id,
+            dataset_id=state.dataset_id,
+            status=state.status,
+            created_at=state.created_at,
+        )
+
+
 class WorkflowStatusData(BaseModel):
     """GET /api/workflows/{id} 的返回体：**故意不含 report / results**。
 

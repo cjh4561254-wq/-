@@ -668,3 +668,91 @@ QA 实测：正序跑完 `registry.count()=0`、**反序跑完 =1**，两次都�
 **状态**：已落地。全量 352 passed；反序跑完残留 0。
 
 ---
+
+## D-17 冻结"还没写的函数签名"用**棘轮**，不要直接 fail
+
+**背景**：D4 是三方并行开工的一天（AI 写 `llm/` + `planner.plan()` + `orchestrator.py`，
+BE 写 `core/background.py` + `routes_analysis.py`，QA 写两个测试文件）。并行开工的前提是
+**接口先定死**，否则三个人各自理解一套，错只能在集成时才暴露。
+
+于是要在开工前把五个函数的签名写进契约测试。但这五个函数**此刻还不存在**。
+
+**两条都试过，只有一条能用**：
+
+| 写法 | 后果 |
+|---|---|
+| 直接 `from app.llm.client import chat` | 收集期 `ImportError` → **整个测试文件报错**，契约测试自己成了红点，且分不清"契约错了"还是"还没写" |
+| 全部 `skip` 直到函数出现 | D4 结束时无法区分"五个都写对了"和"五个都还没写" |
+| **棘轮（采用）**：不存在 → `skip`；存在但签名不符 → `fail` | 契约测试**现在就是绿的**（不制造假红），而"跳过条数"是一个可数的进度指标 |
+
+**决定**
+
+1. 冻结未实现的签名时，用 `try: import / except ImportError: return None`，
+   `None` → `pytest.skip(f"... 还没写（D4 施工中）")`。
+2. **钉参数名，不只钉个数**。调用方是**按关键字**调用的
+   （`plan(question=..., profile=...)`），名字变了就是破坏契约，哪怕位置和个数都一样。
+   所以断言写成 `[(p.name, p.default) for p in signature(func).parameters.values()] == 契约列表`。
+3. **"跳过条数归零"要写成明文验收判据**（本次：D4 结束时 6 skipped → 0）。
+   否则"契约有没有被遵守"只能靠感觉，而感觉读不出来。
+4. 每个棘轮项都要有一条**现在就能跑**的姊妹断言，否则这个文件在 D4 期间等于没测东西。
+   本次是三个变异测试（validator / 接口形状 / 配置默认值），基线 `(19, 0, 6)`，
+   三个变异的红数分别是 1 / 2 / 2 —— **都 > 0，无假绿**。
+
+**为什么不直接等函数写完再写测试**：D4 的价值就在于三方并行。等写完再对齐，
+就等于放弃并行、把集成风险全部推迟到最后 —— 那正是第 12.2 节把 D4 列为"最大风险点"的原因。
+
+**影响到**：`tests/test_contracts_d4.py`（25 项 = 19 passed + 6 skipped）、
+将来 D5/D6 冻结 `render_chart` / `validate` / `build_report` 时照此办理。
+
+**状态**：已落地（提交见 §14.7）。D4 施工中，跳过条数应为 6；D4 完成后应为 0。
+
+---
+
+## D-18 会引发 400 的字段，不依赖 SDK 的"版本相关行为"来传递
+
+**背景**：DeepSeek 思考模式的官方文档写死了一条硬约束：
+
+> 携带了 `tools` 参数的请求，在后续所有请求中，必须完整回传 `reasoning_content`
+> 给 API —— 即使该轮模型未实际进行工具调用。若您的代码中未正确回传
+> `reasoning_content`，API 会返回 400 报错。
+
+**注意后果是 400，不是降级。**
+
+官方 Tool Calls 示例里的写法是 `messages.append(response.choices[0].message)` ——
+直接把 SDK 返回的 message 对象追加进历史。这个写法**能 work**，但原因值得警惕。
+
+**Lead 用 `httpx.MockTransport` 截获真实请求体实测（openai 2.41.0）**：
+
+| 路径 | 第 2 轮请求体里是否含 `reasoning_content` |
+|---|---|
+| `messages.append(sdk_message)` | **True** |
+| 手工拼 dict | **True** |
+
+两条都对。**但契约仍规定必须手工拼 dict**，理由：
+
+`message.reasoning_content` 之所以能被 SDK 序列化出去，是因为 openai SDK 把不认识的字段
+塞进了 `message.model_extra` 并**原样回传**。这是 **SDK 的版本相关行为，不是 API 契约** ——
+SDK 某次升级如果收紧了 `model_extra` 的处理，这个字段就会**静默消失**，
+而消失的后果是**线上 400**（不是"少了个字段但还能跑"）。
+
+**决定**
+
+1. `client.chat()` **手工拼** `message` dict（`role` / `content` / `tool_calls` /
+   `reasoning_content`），**不把 SDK 对象透传给上层**。
+2. 把"必须带上它"做成**构造期约束**：`LLMReply` 上的 `@model_validator(mode="after")`
+   检查"拿到了 `reasoning_content` 就必须出现在 `message` 里"。放模型里而不是写进
+   client 的注释 —— 注释拦不住改动，而这个校验在**任何**构造 `LLMReply` 的地方都会跑。
+3. 判据用**实际发出的 JSON**，不用"SDK 对象上有没有这个属性"。
+   这次两个判据恰好同向，但它们是两回事：前者是契约，后者是实现细节。
+
+**一般化**：凡是"字段丢了会直接报错（而不是降级）"的地方，都要把它变成
+**代码里拦得住的约束**，而不是一条写在文档或注释里的约定。降级类字段可以从宽，
+报错类字段必须从紧。
+
+**影响到**：`app/schemas_llm.py`（`LLMReply` 的 validator）、
+`app/llm/client.py`（D4 实现时的落点）、`tests/test_contracts_d4.py`
+（`TestLLMReplyCarriesReasoningContent` 的 5 条，含 3 条反例）。
+
+**状态**：契约已落地并配变异测试（删掉校验 → `1 failed`）。`client.py` 本身 D4 施工中。
+
+---
