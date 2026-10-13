@@ -8,8 +8,9 @@
 后来用户要求**把第 2 天补完**，于是本阶段追加了「可复现的示例数据集」。
 **仍然不含**任何分析工具、**不含**大模型接入 —— 那些属于第三、四天。
 
-**验收基线**：提交 `c15aa92`（示例数据集）之后的收尾提交，工作区干净。
-**验收结果**：`149 passed`（仓库根与 `tests/` 子目录两个入口都是 149）。
+**验收基线**：提交 `c9b676b`（第二阶段门禁收尾），工作区干净。
+**验收结果**：`149 passed`（仓库根与 `tests/` 子目录两个入口都是 149），
+并且**在干净检出里也是 149 passed**（见第八节 —— 这一条比"我这儿绿了"重要）。
 
 ---
 
@@ -25,7 +26,8 @@
 | 画像计算（**零大模型参与**） | `app/data/profiler.py` | `34dd3a9` |
 | 启动时把临时目录钉进项目内 `.tmp/` | `app/runtime.py` + `app/main.py` lifespan | `24aeac1` |
 | **可复现的示例数据集**（2168 行 × 9 列，含缺失值 / 重复行 / 异常值） | `data/samples/sales.csv` + `scripts/make_sample_data.py` | `c15aa92` |
-| 示例数据的行尾策略（保证干净克隆后字节一致） | `.gitattributes` | 本次收尾提交 |
+| 示例数据的行尾策略（保证干净克隆后字节一致） | `.gitattributes` | `eb276df` |
+| 架构文档与真实仓库的对齐（清单式文档的双向比对） | `docs/ARCHITECTURE.md` §14.4 | `2c2d2c1` + `c9b676b` |
 
 配套：`app/schemas_dataset.py`（数据契约）、`docs/ARCHITECTURE.md`（设计）、
 `docs/DECISIONS.md`（15 条决策，每条都写了"为什么"）。
@@ -153,7 +155,75 @@ warnings 只有"检测到 8 行完全重复的记录，去重后还剩 2160 行"
 
 ---
 
-## 七、怎么自己复现这一份验收
+## 七、门禁收尾（Lead 亲自跑，2026-10-13）
+
+第二阶段门禁（task-5）的第 2、3、4、5 项由 Lead 用自建脚本真实执行，原始结论如下。
+
+### 7.1 真实 HTTP 19 项（`.tmp/stage2_gate.py`，真实 uvicorn + 真实文件）
+
+起真实服务（`127.0.0.1:8015`），用 `data/samples/sales.csv`（141028 字节）走完整流程，
+再逐个打攻击用例。**合计 19 项：PASS 19，FAIL 0，WARN 0。**
+
+| 用例 | 结果 |
+|---|---|
+| 上传 sales.csv | 200，2168 行 × 9 列，预览 5 行，列名与 dtypes 全对 |
+| 落盘名与原始文件名无关 | `stored_filename` = 32 位 hex + `.csv`，`sales.csv` 未参与 |
+| 磁盘上确实只有这一个文件 | `data/uploads` = `['.gitkeep', '<id>.csv']` |
+| GET 详情 / GET 画像 | 200；重复行 8；`semantic_type` = datetime×1 / categorical×3 / numeric×5 |
+| 画像告警 | 只有"检测到 8 行完全重复的记录，去重后还剩 2160 行" |
+| 五数概括（可手算） | null=18 min=5247.0 q1=16758.0 median=22267.0 q3=29667.5 max=14999850.0 mean=36155.757… |
+| 超大文件 11 MB | 413 `FILE_TOO_LARGE`，detail 写明"读到第 11534336 字节时超过上限，没有写入磁盘"，**目录增量 = 0** |
+| 伪装扩展名（.csv 实为二进制） | 400 `BAD_REQUEST`，"无法识别这个 CSV 的编码（已依次尝试 utf-8-sig / utf-8 / gbk / gb18030）" |
+| 路径穿越文件名 `../../etc/passwd.csv` | 200，落盘名仍是 32 位 hex + `.csv`，**越界文件不存在** |
+| 空文件 | 400 `BAD_REQUEST` |
+| 全空列 | 200，pandas 整列删掉后只剩 `['日期','销售额']` |
+| 重复列名 | 200，自动去重成 `['销售额','销售额_2','地区']` |
+| 超宽表 201 列 | 400，"文件有 201 列，超过了上限 200 列" |
+| 超长表 200001 行 | 400，"文件有 200001 行，超过了上限 200000 行" |
+| 未登记的 dataset_id | 404 `NOT_FOUND` |
+| dataset_id 里塞穿越串 | 404 `NOT_FOUND`（不是 500，也不是 200） |
+| 不支持扩展名 `.txt` | 415 `UNSUPPORTED_FILE` |
+| 旧版 `.xls` | 415，detail = "暂不支持旧版 .xls 格式，请在 Excel 里另存为 .xlsx 后再上传" |
+
+### 7.2 密钥扫描（第 4 项）
+
+`git log --all` 的**每一个提交**逐个 `git grep` 匹配 `sk-[A-Za-z0-9]{16,}` → **0 命中**。
+工作区与暂存区：`git status --porcelain` 为空、`git diff --cached --stat` 为空。
+`.env.example` 的 `LLM_API_KEY` 为空值；`repr(settings)` 实测不含密钥。
+
+### 7.3 干净检出验收（`.tmp/stage2_gate_clean.py`）
+
+用 `git worktree add --detach` 造一个**干净检出**（不用 `git clone`：从 Python 子进程
+调 clone 会炸 msys），在检出里重跑全套：
+
+```
+HEAD = c9b676b88cd3bcdb7d8daf6812345f00e80a2b1c
+1. 示例数据   md5=910d67236708a573f85398bbd2e82018  CRLF=0  字节=141028   一致=True
+2. git status = clean
+3. 全量测试   ============================= 149 passed in 4.08s =============================
+4. 检出根临时残留 = 无
+5. 重跑生成脚本后 md5 不变、git status 仍 clean
+PASS: 提交态在干净检出里全绿，示例数据字节稳定，可复现
+```
+
+**为什么必须有这一步**：本机 `core.autocrlf=true`，工作区的行尾和仓库里的 blob 不一定
+一致 —— `eb276df` 之前的 `.gitattributes` 缺失就是这么被发现的（干净检出 143197 字节 /
+`6d4f6dad…`，三条逐字节断言红）。第 7 天的验收标准恰恰是"别人 clone 下来能跑绿"，
+所以"我这儿绿了"不算数。
+
+### 7.4 与架构文档的对齐（第 5 项）
+
+脚本做**双向**集合比对（文档有代码无 / 代码有文档无），查出 9 条偏差，逐条已修并记进
+`docs/ARCHITECTURE.md` §14.4。其中唯一一条会影响行为的认知偏差是 §4.0.1 配置总表漏了
+`temp_dir`（代码 12 个字段 vs 表里 11 个）—— 这张表的用途正是"写配置代码前先查一下，
+别自己造一个名字相近的字段"，少一行就会让人以为 `TEMP_DIR` 可以随手改名。
+
+**核对方式为什么必须是脚本**：这类偏差的特征就是"看不出来"，且**不会让任何测试变红**。
+只比一个方向（文档→代码）会漏掉一半（漏文件那一类就是反方向才查出来的）。
+
+---
+
+## 八、怎么自己复现这一份验收
 
 ```powershell
 # 0. 进项目、激活解释器（见 README 的"安装"）
@@ -173,6 +243,17 @@ Get-FileHash data\samples\sales.csv -Algorithm MD5   # 必须与上面相同
 & ".\.venv\Scripts\python.exe" -m uvicorn app.main:app --port 8000
 
 # 3. 另开一个窗口，走一遍上传 → 详情 → 画像（见 README「手动跑一遍」）
+```
+
+**7.3 那一步（干净检出）自己怎么复现**：本机没有 `git worktree` 也能做，但**不要用
+Python 子进程调 `git clone`**（本机实测会炸 msys：`NtCreateDirectoryObject ...
+0xC0000022`）。在 PowerShell 里直接：
+
+```powershell
+git clone --quiet . .tmp\clean_check
+cd .tmp\clean_check
+& "D:\个人项目01\ai-data-analyst-agent\.venv\Scripts\python.exe" -m pytest -q
+Get-FileHash data\samples\sales.csv -Algorithm MD5   # 必须是 910D6723…，CRLF 必须是 0
 ```
 
 对照本文件第二节的表逐条打勾；任何一条对不上，就说明这份验收说明过期了 ——
