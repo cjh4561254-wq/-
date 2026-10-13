@@ -25,6 +25,9 @@
 而不是硬塞一个 `地区` 进去让执行阶段去报 `COLUMN_NOT_FOUND`。
 """
 
+import json
+import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -33,6 +36,8 @@ from uuid import uuid4
 from app import config
 from app.schemas_dataset import DatasetProfile
 from app.schemas_workflow import AnalysisTask, TaskPlan
+
+logger = logging.getLogger(__name__)
 
 # TaskPlan.tasks 的硬上限（契约里是 min_length=1 / max_length=8）。
 # `max_steps` 是请求侧的旋钮，但绝不能让它把计划顶破契约：传 0 会得到空计划、
@@ -138,6 +143,297 @@ def llm_is_configured() -> bool:
     （本项目真踩过这个坑，见 `docs/DECISIONS.md`）。`lru_cache` 保证它依然是廉价的。
     """
     return bool(config.get_settings().llm_configured)
+
+
+# ---------------------------------------------------------------------------
+# 模型规划（D4）：`plan()` —— 恒不抛异常，永远返回一个可执行的计划
+# ---------------------------------------------------------------------------
+
+# 工具名 → `AnalysisTask.kind`。`kind` 是给前端分类显示用的，必须是契约里那 6 个字面量。
+# 写成 dict 而不是 if/elif：新增工具时只多一行，不会漏改某个分支。
+_KIND_BY_TOOL: dict[str, str] = {
+    "describe_dataset": "describe",
+    "group_aggregate": "aggregate",
+    "top_n": "aggregate",
+    "missing_values": "missing",
+    "correlation": "correlation",
+    "compare_groups": "compare",
+    "time_series_summary": "trend",
+}
+
+# 模型给的参数不是合法 JSON 时，最多再试几次（§5.3 的表：重试 2 次）。
+# 第一次重试会把原文附回 Prompt —— 只说"你写错了"，模型无从知道错在哪。
+_MAX_JSON_RETRIES = 2
+
+# 模型没有给 `description` 时，按工具名生成的中文说明模板。
+# 为什么不用模型自己写的描述：它可能写出"分析销售额"这种没有信息量的句子，
+# 而报告的小标题直接用它（§5.4）。工具名 + 参数是确定的，生成出来的描述不会跑偏。
+_DESCRIPTION_BY_TOOL: dict[str, str] = {
+    "describe_dataset": "对数值列做描述性统计",
+    "group_aggregate": "按{group_by}分组汇总{metric}",
+    "top_n": "按{by}从大到小取前 {n} 行",
+    "missing_values": "检查每一列的缺失值与重复行",
+    "correlation": "计算数值列两两之间的相关系数",
+    "compare_groups": "按{group_by}分组比较{metric}",
+    "time_series_summary": "按月汇总{metric}的走势",
+}
+
+
+def plan(question: str, profile: DatasetProfile, max_steps: int = 6) -> TaskPlan:
+    """制定分析计划：**优先让模型规划，失败就退回规则兜底**。恒不抛异常。
+
+    为什么"恒不抛异常"是函数签名级别的保证，而不是"尽量别抛"
+    ------------------------------------------------------
+    架构文档 §13 风险 1 第 ⑤ 条把它定成验收项：**模型彻底失败时系统仍然可用**。
+    所以兜底不能是"我们记得在每个分支里 catch 一下"，那迟早会漏一个分支
+    （新增一种失败方式 → 忘了加 except → 整条工作流 FAILED）。
+    这里用最外层一个 `try/except Exception` 兜住**所有**路径，
+    包括"我们没预料到的"那类 —— 这才是"签名保证"。
+
+    返回值：
+        永远是一个 `TaskPlan`，`tasks` 至少 1 个。
+        走模型路径时 `source="llm"`；任何一步失败时 `source="rule_fallback"`
+        （规则兜底那条路的返回值原样来自 `plan_with_rules`，不做二次加工）。
+    """
+    limit = max(_MIN_TASKS, min(int(max_steps), _MAX_TASKS))
+
+    try:
+        if not llm_is_configured():
+            # 没配模型是**常态**（第 4 天演示时密钥可能还没配好），不是错误，
+            # 所以这里连 warning 都不打 —— 每次提问都刷一条日志会把真正的告警淹掉。
+            return plan_with_rules(question, profile, max_steps)
+
+        reply = _ask_model(question, profile)
+        if reply is None:
+            return plan_with_rules(question, profile, max_steps)
+
+        tasks = _tasks_from_reply(reply, profile, limit)
+        if not tasks:
+            # 模型调了工具，但**没有一个任务能用**：工具名不在白名单、参数缺列、
+            # 或者 JSON 一直不合法。丢弃它们是对的（§6.2 第 2 条：不猜一个相似的名字），
+            # 但空计划会让 `TaskPlan` 直接抛 ValidationError，所以必须退回规则兜底。
+            logger.warning(
+                "模型返回的 %s 个工具调用全部不可用，改用规则兜底计划", len(reply.tool_calls)
+            )
+            return plan_with_rules(question, profile, max_steps)
+
+        return TaskPlan(
+            plan_id=uuid4().hex[:8],
+            question=question,
+            dataset_id=profile.dataset_id,
+            tasks=tasks,
+            reasoning=f"由大模型规划：{len(tasks)} 个任务（模型 {reply.model or '未知'}）",
+            source="llm",
+            created_at=datetime.now(timezone.utc),
+        )
+
+    except Exception:
+        # 兜住一切：未配置、超时、网络错、密钥错、JSON 坏、我们自己的 bug……
+        # 打完整堆栈（排查需要），然后交给规则兜底 —— 用户拿到的仍然是一份能跑的计划。
+        logger.exception("模型规划失败，改用规则兜底计划")
+        return plan_with_rules(question, profile, max_steps)
+
+
+def _ask_model(question: str, profile: DatasetProfile):
+    """问模型要工具调用，JSON 不合法时最多重试 `_MAX_JSON_RETRIES` 次。
+
+    返回 `LLMReply`；`None` 表示"一直没拿到合法 JSON"。
+
+    为什么 import 写在函数里（本文件唯一一处）
+    ----------------------------------------
+    `app.llm.client` 会 import openai。放在模块顶层的话，**openai 装不上或版本不对
+    会让整个 planner 模块 import 失败** —— 连完全不碰模型的规则兜底一起挂掉，
+    而那正是"模型不可用时系统仍然可用"要避免的情况。
+    """
+    from app.llm import client
+    from app.llm.prompts import build_planner_messages, build_retry_note
+    from app.tools import registry
+
+    messages = build_planner_messages(question, profile)
+    # 只把白名单里的 7 个工具给模型看：它在物理上就看不见别的东西（§6.2 第 1 条）。
+    tools = registry.to_openai_tools()
+
+    for attempt in range(_MAX_JSON_RETRIES + 1):
+        reply = client.chat(messages, tools=tools)
+
+        broken = _first_unparsable_arguments(reply)
+        if broken is None:
+            return reply
+
+        if attempt >= _MAX_JSON_RETRIES:
+            logger.warning("模型连续 %s 次给出无法解析的参数，放弃模型规划", attempt + 1)
+            return reply
+
+        logger.warning("模型给的参数不是合法 JSON，第 %s 次重试", attempt + 1)
+        # 把**模型自己的那条 message 原样 append 回去**（含 reasoning_content，
+        # 这是思考模式的硬要求，见 D-18），再追加一条指出错在哪的 user 消息。
+        # 只改原文不 append 的话，模型看到的历史是"我问了什么"，它会重新规划一遍。
+        messages = [
+            *messages,
+            reply.message,
+            {"role": "user", "content": build_retry_note(broken)},
+        ]
+
+    return None
+
+
+def _first_unparsable_arguments(reply) -> str | None:
+    """找出第一个参数解析不了的工具调用，返回它的**原始字符串**；全都能解析则返回 None。"""
+    for call in reply.tool_calls:
+        if _parse_arguments(call.arguments) is None:
+            return call.arguments
+    return None
+
+
+def _parse_arguments(raw: str) -> dict[str, Any] | None:
+    """把模型给的 `arguments` 字符串解析成 dict；解析不了返回 `None`。
+
+    三层容错（§4.14.3）：
+        ① `json.loads` 直接解析；
+        ② 失败时用正则抽出**第一个 `{...}`** —— 模型很爱在 JSON 前后加一句
+           "好的，我来调用工具"或者包一层 ```json 代码块，抠出来就能用；
+        ③ 还不行返回 `None`，由调用方决定是重试还是丢弃。
+
+    `re.S` 让 `.` 也能匹配换行：模型给的 JSON 常常是格式化的多行。
+    `.*` 是**贪婪**的，所以它匹配到的是最后一个 `}` —— 这正好是我们要的：
+    前后各包一层时，"从第一个 `{` 到最后一个 `}`"才是完整的 JSON。
+    """
+    text = (raw or "").strip()
+    if not text:
+        # 模型调了一个不需要参数的工具（如 `missing_values`），有些服务会回空串。
+        # 空参数等同于 `{}`，不是错误。
+        return {}
+
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError):
+        value = None
+
+    if not isinstance(value, dict):
+        match = re.search(r"\{.*\}", text, re.S)
+        if match:
+            try:
+                value = json.loads(match.group(0))
+            except (ValueError, TypeError):
+                value = None
+
+    return value if isinstance(value, dict) else None
+
+
+def _tasks_from_reply(reply, profile: DatasetProfile, limit: int) -> list[AnalysisTask]:
+    """把模型的工具调用逐个变成 `AnalysisTask`，**不可用的直接丢弃**。
+
+    三层检查，任何一层不过就丢这个任务（§6.2 第 2 条：不猜一个相似的工具名去凑）：
+        ① 工具名必须 `registry.get(name) is not None`；
+        ② `arguments` 必须是合法 JSON 对象；
+        ③ 参数必须过得了"画像层面"的检查（必填项齐、不认识的参数、列名真实存在）。
+
+    第 ③ 层为什么只查画像、不调 `validate_call`
+    ------------------------------------------
+    `validate_call` 需要 DataFrame（它要判断"这一列是不是数值列"），而这个函数
+    的入参只有 `profile` —— 计划阶段根本不该去碰数据。所以这里只做"看画像就能判断"
+    的那部分：**列名是否真实存在**。剩下的类型/范围/枚举由执行阶段的
+    `validate_call` 兜住（那才是它的职责），两边合起来才是完整的 5 类校验。
+    """
+    from app.tools import registry
+
+    tasks: list[AnalysisTask] = []
+
+    for call in reply.tool_calls:
+        if len(tasks) >= limit:
+            break
+
+        params = _parse_arguments(call.arguments)
+        if params is None:
+            logger.warning("丢弃任务：工具 %s 的参数不是合法 JSON", call.name)
+            continue
+
+        spec = registry.get(call.name)
+        if spec is None:
+            logger.warning("丢弃任务：工具 %s 不在白名单里", call.name)
+            continue
+
+        reason = _check_params_against_profile(spec, params, profile)
+        if reason is not None:
+            logger.warning("丢弃任务：工具 %s 的参数不可用（%s）", call.name, reason)
+            continue
+
+        tasks.append(
+            AnalysisTask(
+                task_id=f"T{len(tasks) + 1}",
+                order=len(tasks) + 1,
+                kind=_KIND_BY_TOOL.get(call.name, "describe"),
+                tool_name=call.name,
+                params=params,
+                description=_describe(call.name, params),
+            )
+        )
+
+    return tasks
+
+
+def _check_params_against_profile(spec, params: dict[str, Any], profile: DatasetProfile) -> str | None:
+    """按 `params_schema` 检查参数；返回 `None` 表示可用，否则返回中文原因。"""
+    schema = spec.params_schema
+    properties = schema.get("properties", {})
+
+    for name in schema.get("required", []):
+        if name not in params:
+            return f"缺少必填参数 {name}"
+
+    known_columns = {column.name for column in profile.columns}
+
+    for name, value in params.items():
+        rule = properties.get(name)
+        if rule is None:
+            # 不认识的参数直接丢：执行阶段的 `validate_call` 也会拒它，
+            # 但在计划阶段丢掉更好 —— 用户看到的会是"少了一个任务"，
+            # 而不是"这个任务失败了"。
+            return f"不认识的参数 {name}"
+        if rule.get("column"):
+            for column in _as_column_values(rule, value):
+                if column not in known_columns:
+                    # 这一条就是"不许编造列名"在模型路径上的落点。
+                    return f"列 {column} 不在数据画像里"
+
+    return None
+
+
+def _as_column_values(rule: dict[str, Any], value: Any) -> list[Any]:
+    """取出参数里"代表列名"的那些值：`list[str]` 参数展开，其余当成单值。"""
+    if rule.get("type") == "list[str]":
+        return list(value) if isinstance(value, list) else [value]
+    return [value]
+
+
+def _describe(tool_name: str, params: dict[str, Any]) -> str:
+    """给任务生成一句中文说明（报告的小标题直接用它）。
+
+    为什么不用模型写的描述：模型可能写出"分析数据"这种没有信息量的句子，
+    也可能写出与实际参数不符的描述（参数是 `销量`、描述里写 `销售额`）。
+    工具名 + 参数是**确定的**，由它生成的描述不会跑偏。
+    模板里缺的占位符用 `.get(...)` 拿，拿不到就留空 —— 宁可少几个字，也不编。
+    """
+    template = _DESCRIPTION_BY_TOOL.get(tool_name, f"执行 {tool_name}")
+
+    # 分组列在工具里是 `list[str]`（最多 3 列），描述里用"、"连起来更像中文
+    group_by = params.get("group_by")
+    if isinstance(group_by, list):
+        group_by = "、".join(str(name) for name in group_by)
+
+    try:
+        return template.format(
+            group_by=group_by or "",
+            metric=params.get("metric") or "",
+            by=params.get("by") or "",
+            n=params.get("n", ""),
+        ).strip()
+    except (KeyError, IndexError):
+        # 模板里的占位符拼错了（开发期 bug）。不能因此丢任务 ——
+        # 退回一个朴素但正确的描述，并留一条日志。
+        logger.warning("工具 %s 的描述模板有误，已退回通用描述", tool_name)
+        return f"执行 {tool_name}"
+
 
 
 # ---------------------------------------------------------------------------
