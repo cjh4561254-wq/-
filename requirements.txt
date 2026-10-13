@@ -1,0 +1,32 @@
+# ============================================================
+# AI Data Analyst Agent —— 项目依赖清单
+#
+# 安装：
+#   python -m venv .venv --system-site-packages
+#   .\.venv\Scripts\Activate.ps1
+#   python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 说明：这里写的是"下界"（>=），不锁死精确版本，
+#       方便你在 Python 3.10 / 3.11 / 3.12 上都能装上。
+#       如果要做可复现部署，用 `pip freeze > requirements.lock.txt`。
+# ============================================================
+
+# ---- 基础 Web 层（第一阶段）----
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3          # 把 .env 读成有类型的配置对象
+python-multipart>=0.0.9         # FastAPI 解析上传文件（multipart/form-data）必需
+
+# ---- 数据处理与图表（第二阶段起）----
+pandas>=2.2
+numpy>=1.26
+matplotlib>=3.8                 # 服务端出图，必须用非交互后端 Agg
+openpyxl>=3.1                   # 读写 .xlsx
+
+# ---- 大模型调用（第四阶段起）----
+openai>=1.40                    # 兼容 OpenAI 协议的服务都能用
+
+# ---- 测试（贯穿始终）----
+pytest>=8.0
+httpx>=0.27                     # FastAPI TestClient 依赖它

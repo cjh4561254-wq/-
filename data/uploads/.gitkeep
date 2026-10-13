@@ -1,0 +1,2 @@
+# 这个文件只为让 git 保留 data/uploads 空目录。
+# 实际上传的文件不会进仓库（见 .gitignore）。
