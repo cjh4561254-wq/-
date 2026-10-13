@@ -21,6 +21,7 @@ from app.api.routes_datasets import router as datasets_router
 from app.api.routes_health import router as health_router
 from app.errors import AppError, sanitize_detail
 from app.schemas import ApiError, ApiResponse, ErrorCode
+from app.runtime import runtime_environment
 
 
 @asynccontextmanager
@@ -31,11 +32,14 @@ async def lifespan(app: FastAPI):
     目录建不出来属于"环境问题"，应该在启动日志里就喊出来，
     而不是等用户点了上传才报错。
     """
-    upload_dir = config.get_settings().upload_path
+    settings = config.get_settings()
+    upload_dir = settings.upload_path
     upload_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[startup] 上传目录就绪: {upload_dir}")
-    yield
-    # yield 之后是关闭逻辑，目前没有需要清理的资源
+    with runtime_environment(settings) as temp_dir:
+        print(f"[startup] 上传目录就绪: {upload_dir}")
+        print(f"[startup] 临时目录就绪: {temp_dir}")
+        yield
+    # 退出上下文管理器，恢复进程原有的环境变量与 tempfile 缓存。
 
 
 app = FastAPI(

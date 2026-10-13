@@ -4,9 +4,10 @@
 由主控智能体调度专业子智能体，用真实的 Python 工具完成统计计算与图表生成，
 并校验报告中的关键数字。
 
-> **项目状态：第 1 天 / 共 7 天 —— 骨架已跑通并通过独立 QA 复验，业务功能尚未实现。**
-> 已完成：应用骨架、配置层、健康检查接口、统一错误格式、16 项自动化测试。
-> 上传、分析、智能体调度等在第 2 天起逐步加入。
+> **项目状态：第 2 天 / 共 7 天 —— 上传与数据理解已完成并通过独立 QA 复验。**
+> 已完成：应用骨架、配置层、健康检查、统一错误格式、**文件上传（CSV / xlsx）**、
+> **数据预览与详情**、**数据画像（缺失值 / 重复行 / 类型识别 / 五数概括）**、136 项自动化测试。
+> 分析工具、多智能体调度、大模型接入在第 3 天起逐步加入。
 > README 只写实际跑通的东西，不会提前写"已完成"。
 
 ---
@@ -101,7 +102,7 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**36 passed**（35 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**136 passed**（135 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
@@ -112,6 +113,9 @@ python -m pytest
 > 收集阶段会 import 整个 `app` 包，所以以后往 `app` 里加模块时，
 > **不要在模块顶层做有副作用的事**（建目录、读 .env、发网络请求）——
 > 那会在"收集测试"时就发生。
+> 目前唯一的例外是 `app/config.py` 里设置 `MPLCONFIGDIR`：matplotlib 在 import
+> 时就决定配置目录，等不到服务启动，所以它必须留在那里（临时目录**不**在那里设置，
+> 改由启动时显式设置，原因见 `docs/DECISIONS.md` D-07）。
 
 测试特意做到"三种环境下都通过"，因为第 4 天你填上真实密钥后测试不该变红：
 
@@ -129,17 +133,23 @@ ai-data-analyst-agent/
 │  ├─ __init__.py
 │  ├─ main.py                  # FastAPI 实例、CORS、启动钩子、统一错误处理
 │  ├─ config.py                # Settings：把 .env 读成有类型的配置对象
+│  ├─ runtime.py               # 进程状态 + 启动时的运行环境（临时目录）
+│  ├─ errors.py                # AppError、错误码到 HTTP 状态码的映射、路径脱敏
 │  ├─ schemas.py               # ApiResponse 统一响应外壳、ApiError、错误码
-│  ├─ runtime.py               # 进程级运行时状态（启动时刻 / uptime）
-│  └─ api/
-│     ├─ __init__.py
-│     └─ routes_health.py      # GET /api/health
-├─ tests/
-│  ├─ test_health.py           # 接口、配置、密钥安全
-│  ├─ test_error_format.py     # 404/405/422 统一格式、CORS
-│  └─ __init__.py
+│  ├─ schemas_dataset.py       # Dataset / DatasetProfile 等数据契约
+│  ├─ api/
+│  │  ├─ routes_health.py      # GET /api/health
+│  │  └─ routes_datasets.py    # 上传 / 详情 / 画像
+│  └─ data/
+│     ├─ loader.py             # 读 CSV / xlsx：编码、分隔符、最小清洗、上限
+│     ├─ store.py              # 进程内数据集仓库（不写盘）
+│     └─ profiler.py           # 数据画像：缺失值、重复行、语义类型、五数概括
+├─ tests/                      # 136 项，覆盖 loader / store / profiler / 接口 / 安全
 ├─ data/
 │  └─ uploads/                 # 上传文件落地目录（内容不进 git）
+├─ docs/
+│  ├─ ARCHITECTURE.md          # 架构设计（含目录树、接口、校验、安全清单）
+│  └─ DECISIONS.md             # 决策记录：每条都写了"为什么"
 ├─ .env.example                # 配置模板（只有占位符，无真实密钥）
 ├─ .gitignore
 ├─ pytest.ini
@@ -169,7 +179,8 @@ ai-data-analyst-agent/
 而那正是最需要把错误提示给用户的时刻。所以 `app/main.py` 里注册了异常处理器，
 把框架自己抛的 404 / 405 / 参数校验错误也翻译成上面的格式。
 
-错误码取值：`BAD_REQUEST`、`NOT_FOUND`、`UNSUPPORTED_FILE`、`FILE_TOO_LARGE`、`INTERNAL_ERROR`。
+错误码取值：`BAD_REQUEST`、`NOT_FOUND`、`METHOD_NOT_ALLOWED`、`UNSUPPORTED_FILE`、
+`FILE_TOO_LARGE`、`SERVICE_UNAVAILABLE`、`WORKFLOW_TIMEOUT`、`INTERNAL_ERROR`。
 
 ### 已实现
 
@@ -177,7 +188,56 @@ ai-data-analyst-agent/
 |---|---|---|
 | GET | `/` | 入口提示 |
 | GET | `/api/health` | 服务状态与配置自检 |
+| POST | `/api/datasets/upload` | 上传 CSV / xlsx，落盘 + 解析 + 登记 |
+| GET | `/api/datasets/{dataset_id}` | 数据集详情（含前 5 行预览） |
+| GET | `/api/datasets/{dataset_id}/profile` | 数据画像（首次调用时计算，之后走缓存） |
 | GET | `/docs` | Swagger 接口文档（FastAPI 自动生成） |
+
+上传的完整流程（顺序不能换，每一步都对应一个具体的失败场景）：
+
+```
+校验扩展名 → 生成 dataset_id → 分块读并累计大小（超限立刻 413，不落盘）
+→ 算 sha256 → 落盘为 {dataset_id}.{ext} → 解析（失败就删掉刚写的文件）→ 登记
+```
+
+| 情况 | HTTP | error.code |
+|---|---|---|
+| 上传成功 | 200 | — |
+| 不是 csv / xlsx（含旧版 .xls） | 415 | `UNSUPPORTED_FILE` |
+| 超过 `MAX_UPLOAD_MB` | 413 | `FILE_TOO_LARGE` |
+| 空文件 / 只有表头 / 解析失败 / 超行列上限 | 400 | `BAD_REQUEST` |
+| dataset_id 不存在 | 404 | `NOT_FOUND` |
+
+### 手动跑一遍（不用写代码）
+
+先起服务（见上面的"启动"），另开一个 PowerShell 窗口：
+
+```powershell
+# 1. 造一个带中文的小 CSV
+@'
+日期,地区,销售额
+2024-01-05,华东,1200
+2024-01-06,华北,3400
+2024-01-07,华东,5600
+'@ | Set-Content -Path "$env:TEMP\sales.csv" -Encoding UTF8
+
+# 2. 上传（PowerShell 5.1 的 Invoke-WebRequest 不支持 -Form，用 curl.exe）
+curl.exe -s -F "file=@$env:TEMP\sales.csv" http://127.0.0.1:8000/api/datasets/upload
+```
+
+响应里的 `data.dataset_id` 复制出来，接着：
+
+```powershell
+# 3. 看详情（含前 5 行预览）
+curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>
+
+# 4. 看数据画像（缺失值、重复行、语义类型、五数概括）
+curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>/profile
+```
+
+画像里的数字全部由 pandas 真实算出。以示例数据为例，`销售额` 的
+`mean_value` 是 3400、`std_value` 是 2200（样本标准差，`ddof=1`），可以自己用
+计算器对一遍。**数据换了，数字就跟着变** —— 没有任何写死的结果。
 
 `/api/health` 返回示例：
 
@@ -203,16 +263,22 @@ ai-data-analyst-agent/
 
 - API Key 只从环境变量 / `.env` 读取，仓库内不存任何真实密钥。
 - `Settings.llm_api_key` 设置了 `repr=False`，打印配置不会带出密钥原文。
-- `.gitignore` 排除 `.env`、`.venv`、`data/uploads/*`、matplotlib 缓存。
+- `.gitignore` 排除 `.env`、`.venv`、`data/uploads/*`、`.tmp/`、matplotlib 缓存。
 - CORS 只允许本机来源，不使用通配符 `*`。
-- 上传文件的格式与大小校验在第 2 天实现。
+- 上传只按**扩展名白名单 + 真的能解析成功**两道关判断，不信客户端报的 `Content-Type`。
+- 落盘名固定是 `{dataset_id}.{ext}`（32 位十六进制 id），用户原始文件名一个字符都不参与路径；
+  写盘前用 `Path.resolve()` 复核目标目录就是上传目录。
+- 大小检查是"边读边累计、超限立刻中止"，不是"整个读进内存再判断"。
+- 拒绝旧版 `.xls` 时给的是能照着做的话（"请在 Excel 里另存为 .xlsx 后再上传"），不是一句"不支持"。
+- 错误响应里的 `detail` 会清洗掉本机绝对路径与用户名（`app/errors.py` 的 `sanitize_detail`）。
+- 全项目不使用 `eval` / `exec` / `compile` / `__import__`，不执行任何模型生成的代码。
 
 ## 七天计划与当前进度
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 第 1 天 | 项目骨架、配置、健康检查、统一错误格式、测试 | ✅ 完成（16 项测试通过，经独立 QA 复验） |
-| 第 2 天 | 文件上传与数据预览、示例数据集 | 未开始 |
+| 第 1 天 | 项目骨架、配置、健康检查、统一错误格式、测试 | ✅ 完成（经独立 QA 复验） |
+| 第 2 天 | 文件上传与数据预览、数据画像、示例数据集 | 🟡 上传/预览/画像已完成并复验；示例数据集脚本待做 |
 | 第 3 天 | 工作流数据结构、主控智能体、数据理解智能体 | 未开始 |
 | 第 4 天 | 接入大模型 API、Tool Calling、数据分析智能体 | 未开始 |
 | 第 5 天 | 可视化智能体、结果校验、报告生成、串通完整流程 | 未开始 |

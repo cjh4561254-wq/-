@@ -151,6 +151,62 @@ def test_datetime_column_with_unparseable_values_warns_about_them():
     assert any("有 1 个值无法解析为日期" in warning for warning in profile.warnings)
 
 
+def test_native_datetime_column_with_blanks_is_not_called_unparseable():
+    """原生 datetime64 列里的空单元格是**缺失值**，不是"解析失败"。
+
+    这是 QA 在真实 .xlsx 上端到端复现出来的假话：Excel 日期列 5 格其中 2 格空白，
+    列本来就是 `datetime64[us]`、2 个 NaT、0 个解析失败，画像却输出
+    "有 2 个值无法解析为日期"。根因是 `_classify` 把**带 NaT 的原始列**当成
+    "我们解析出来的日期列"传下去，于是 `parsed_dates.isna().sum()` 数出来的
+    其实是缺失值个数。
+
+    为什么这条必须钉住：画像里出现一个假数字（或一句假话）就是阻塞 —— 用户会
+    以为那两个格子里填了看不懂的东西，跑去检查源文件，而实际上只是空着。
+    """
+    df = pd.DataFrame(
+        {
+            "日期": pd.to_datetime(["2024-01-05", "2024-02-01", None, None, "2024-03-01"]),
+            "销售额": [100, 200, 300, 400, 500],
+        }
+    )
+
+    profile = build_profile(df, "d1")
+    column = _columns(profile)["日期"]
+
+    assert column.semantic_type == "datetime"
+    assert column.null_count == 2
+    # 缺失值该说的还是要说
+    assert any("缺失 40.00%" in warning for warning in profile.warnings)
+    # 但不能说成"无法解析"
+    assert not any("无法解析为日期" in warning for warning in profile.warnings)
+    # 最早的日期仍要正确（走的是 non_null 那条分支）
+    assert column.min_value == "2024-01-05T00:00:00"
+    assert column.max_value == "2024-03-01T00:00:00"
+
+
+def test_csv_date_column_with_blanks_is_not_called_unparseable_either():
+    """字符串日期列里的空值同理：那是缺失值，不是解析失败。
+
+    对照 `test_datetime_column_with_unparseable_values_warns_about_them`：
+    那条测的是**真的填了看不懂的值**（"缺"），这条测的是**格子空着**。
+    两条一起才说明"空值"与"坏值"没有被混为一谈。
+
+    这里用 `None` 而不是 `""` 表示空格，是**刻意的**：CSV 里的空字段经 pandas
+    读进来就是 NaN（实测 `null_count=2`），loader 交给 profiler 的就是这个形态。
+    直接塞 `""` 会得到一个装着两个空字符串的**字符串列**（5 个值里 3 个能解析，
+    60% < 80% 阈值 → 被判成 categorical），那是另一个场景，不是本条要钉的东西。
+    """
+    df = pd.DataFrame({"日期": ["2024-01-05", "2024-02-01", None, None, "2024-03-01"]})
+
+    profile = build_profile(df, "d1")
+    column = _columns(profile)["日期"]
+
+    assert column.semantic_type == "datetime"
+    assert column.null_count == 2
+    assert any("缺失 40.00%" in warning for warning in profile.warnings)
+    assert not any("无法解析为日期" in warning for warning in profile.warnings)
+
+
 def test_digit_only_text_is_not_mistaken_for_dates():
     # 纯数字列走 pd.to_datetime 会被当成 1970 年起的纳秒偏移（编号 1 会变成
     # 1970-01-01 00:00:00.000000001）。这是实测过的坑，所以必须有"数字样"守卫。

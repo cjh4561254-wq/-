@@ -203,7 +203,12 @@ def _classify(column: pd.Series) -> tuple[str, pd.Series | None]:
     if pd.api.types.is_bool_dtype(column):
         return "boolean", None
     if pd.api.types.is_datetime64_any_dtype(column):
-        return "datetime", column
+        # 第二个返回值是"我们替用户解析出来的日期列"，**只给字符串列用**。
+        # 原生 datetime64 列（Excel 日期列最常见）本来就是日期，没有什么可解析的，
+        # 所以这里返回 None 而不是 column：否则 `_collect_warnings` 会把列里的
+        # NaT（空单元格）当成"解析失败"，报出"有 2 个值无法解析为日期"这种假话 ——
+        # 同一件事在原生的缺失值提示里已经报过一次了。
+        return "datetime", None
     if pd.api.types.is_numeric_dtype(column):
         return "numeric", None
 
@@ -342,6 +347,11 @@ def _collect_warnings(
 
     写人话的标准：用户看完知道**该做什么**（去重、清洗、删除），
     而不只是知道"有个数字超标了"。
+
+    `parsed_dates` 的语义要认准：它是**我们替用户解析出来的**日期列，只有
+    "原本是字符串、被 `_try_parse_dates` 解析成 datetime"这条路才会有值。
+    如果是 None，说明这列本来就是 datetime64（没有解析这回事），那列里的空值
+    属于缺失值，不是"解析失败" —— 缺失值由上面的 null_ratio 提示负责。
     """
     if null_ratio >= 1.0:
         warnings.append(f"列 {name} 全部为空，建议删除")

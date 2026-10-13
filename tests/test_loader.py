@@ -236,12 +236,21 @@ def test_every_allowed_extension_is_actually_loadable(tmp_path, ext):
     df, encoding = load_dataframe(path, ext)
 
     assert df.shape == (1, 1)
-    # 不用 `assert A if cond else B` 这种写法来省两行：那样无论
-    # encoding 是什么，总有一半的分支是真的，等于什么都没验。
+    # 不用 `assert A if cond else B` 这种写法来省两行：分支写在一起时，
+    # "这个文件必须命中哪种编码"这层意思会被埋掉，改动时容易连错的东西一起改掉。
     if ext == "xlsx":
         assert encoding is None  # 二进制格式没有编码这回事
     else:
-        assert encoding in CSV_ENCODINGS  # 必须是我们真试过的那些编码之一
+        # ⚠️ 这里**不能**写 `assert encoding in CSV_ENCODINGS`。那是我第一版写错的：
+        # `CSV_ENCODINGS` 正是 `_read_csv` 自己挑编码用的那张表，拿它校验自己的
+        # 输出属于**循环自证** —— 一个 UTF-8 文件被错误地报成 `gbk` 时，断言照样绿。
+        # 实测（把 loader 的返回值强制改成 gbk）：写 `in CSV_ENCODINGS` 绿，
+        # 写下面这行红。文件内容是 UTF-8 写的，所以真正该断言的是"命中了 UTF-8 家族"。
+        #
+        # 用切片而不是手抄一份 ("utf-8","utf-8-sig")：这张表的**语义**是
+        # "UTF-8 家族排在最前，后面的 gbk / gb18030 是兜底"。顺序本身就是要保的性质
+        # —— UTF-8 文件绝不该落到兜底编码上去。手抄清单则会漂移。
+        assert encoding in CSV_ENCODINGS[:2], "UTF-8 写出来的文件必须命中 UTF-8 家族"
 
 
 # --------------------------------------------------------------------------

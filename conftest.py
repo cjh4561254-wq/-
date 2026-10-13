@@ -47,21 +47,30 @@
 
 pytest 保证 rootdir 下的 `conftest.py` 在任何测试模块被导入之前加载，
 所以放在这里，`tests/` 里所有 `tmp_path` 以及被测代码里的 `tempfile` 调用
-都会走 `.tmp/`。放在 `app/config.py` 里则太早（`pytest` 自己收集阶段的
-`tmp_path` 还没用到）也太隐晦（那是业务配置，不该管测试产物）。
+都会走 `.tmp/`。
 
+"覆盖不了别的入口"这个洞**已经补上了**（2026-10-13，但换了一种机制）：
+临时目录现在由 `app/runtime.py` 的 `runtime_environment()` 在**服务启动时**设置
+（`app/main.py` 的 lifespan 包住 `yield`），不再靠"import 时改环境变量"。
 
-已知边界：这里只覆盖 pytest，覆盖不了别的入口
---------------------------------------------
+分工要说清楚，否则很容易看成"同一件事写了两遍"：
 
-`python -m uvicorn app.main:app` 或手工脚本在项目根启动时，`gettempdir()`
-仍然会指向项目根 —— 因为改环境变量的是本文件，而它们不加载本文件。
+- `app/runtime.py`（生产路径）：服务启动时把 `TEMP`/`TMP`/`TMPDIR` 指到
+  `settings.temp_path`（默认项目内 `.tmp/`，可用 `TEMP_DIR` 覆盖），退出时恢复现场。
+  `python -m uvicorn app.main:app` 起来的服务走的是这条。
+- `conftest.py`（本文件，测试路径）：在**收集测试之前**就把三个变量设好。
+  必须这么早，因为 pytest 自己的 `basetemp` 默认值就来自
+  `tempfile.gettempdir()`，而它比任何 lifespan 都早。
+- `app/config.py` **不再**设置临时目录，只保留 `MPLCONFIGDIR` ——
+  因为 matplotlib 在 import 时就决定配置目录，来不及等到启动。
 
-目前这不构成实际风险：全仓库只有本文件直接调用 `tempfile`；matplotlib 的
-缓存由 `app/config.py` 里的 `MPLCONFIGDIR` 单独兜住。但这个"同源问题的
-另一半没被覆盖"是知道的，已记录在 `docs/DECISIONS.md`（D-07）。
-真要修，得把改环境变量挪到 `app/__init__.py`，代价是"import 库就改全局
-环境"这种副作用更脏 —— 不值得，所以选择记录而不是修。
+为什么早期版本"import 时设置"被推翻（两条，第二条才是关键）：
+1. import 一个包就改进程全局环境，副作用太脏，而且"谁先 import 了谁"决定行为；
+2. 它**猜错过**：看到 `TEMP` 已设就尊重它，而这台机器上 `TEMP` 指向的目录
+   存在却写不进去，于是临时文件照旧掉回仓库根，全程没有任何报错。
+现在改成"应用明确指定自己的临时目录"，不继承、不猜测系统配置。
+
+上面那段"已知边界"的原话保留在 `docs/DECISIONS.md`（D-07）作为当时的判断记录。
 """
 
 from __future__ import annotations

@@ -209,9 +209,44 @@ tempfile.mkdtemp()                    -> 'D:\个人项目01\ai-data-analyst-agen
 3. `.tmp/` 建不出来时**降级为 warning + 继续跑**，不抛异常。曾经的后果：有人把 `.tmp` 建成同名文件 → `FileExistsError` 停在 conftest → `ImportError while loading conftest`，**整个会话起不来**，看起来像"测试全坏了"。取舍很明确：**脏目录可接受，起不来测试不可接受**。
 4. 测试里**只用 pytest 的 `tmp_path` / `tmp_path_factory`，不许用 `tempfile.mkdtemp()`**。
 
-**已知边界（选择记录而不是修）**：以上只覆盖 pytest。`python -m uvicorn app.main:app` 或手工脚本在项目根启动时，`gettempdir()` 仍是项目根——因为改环境变量的是 conftest，它们不加载它。
+**已知边界（2026-10-13 已修，机制见下）**：以上只覆盖 pytest。`python -m uvicorn app.main:app`
+或手工脚本在项目根启动时，`gettempdir()` 曾是项目根 —— 因为改环境变量的是 conftest，它们不加载它。
 
-不修的理由：全仓库只有 `conftest.py` 直接调用 `tempfile`（`app/`、`tests/` 都没有），matplotlib 的缓存由 `app/config.py` 的 `MPLCONFIGDIR` 单独兜住，所以**当前不产生任何实际产物**。真要修，得把"import 就改全局环境变量"挪进 `app/__init__.py`——那比问题本身更脏（任何 `import app` 的进程环境都被改）。所以选择**留下痕迹**：下一个接手的人应当知道这个边界是知道的，而不是漏的。
+**修订（2026-10-13）：生产入口也覆盖了，但换成了"启动时显式设置"**
+
+早期修法是"在 `app/config.py` 顶部 `os.environ.setdefault`"（因为它是任何入口最早
+import 的模块）。**这个做法已被推翻**，原因两条，第二条是关键：
+
+1. import 一个包就改进程全局环境，副作用太脏，而且"谁先 import 了谁"决定行为；
+2. 它**猜错过**。当时写的规则是"`TEMP` 已设就尊重调用方"，而这台机器的
+   `TEMP=C:\Users\jun\AppData\Local\Temp` **存在但 Python 写不进去** ——
+   尊重它的结果是临时文件照旧退回仓库根，全程没有任何报错。
+   实测：只设环境变量、不清 `tempfile.tempdir` 缓存时，`gettempdir()` 依然返回仓库根。
+
+现在的机制：
+
+- `app/runtime.py` 的 `runtime_environment(settings)`：建目录 → 真写一个文件确认可写
+  （写不进去就让启动失败，保留原始异常）→ 设 `TEMP`/`TMP`/`TMPDIR` → 清
+  `tempfile.tempdir` 缓存 → yield → 退出时恢复现场（环境变量与缓存都还原）。
+- `app/main.py` 的 lifespan 用它包住 `yield`，所以 `uvicorn app.main:app` 起来的
+  服务在处理任何请求之前就已经设好。
+- 目录来自 `settings.temp_path`（`TEMP_DIR`，默认项目内 `.tmp/`）——**应用明确指定，
+  不继承、不猜测系统 `TEMP`**。换台机器行为一致。
+- `app/config.py` 只保留 `MPLCONFIGDIR`：matplotlib 在 import 时就决定配置目录，
+  来不及等到 lifespan。两处机制不同是**约束不同**，不是疏忽。
+
+**真实证据（不是推理）**：起真实 uvicorn，慢速上传 3 MB 文件（触发 Starlette 1 MB
+的 spool 阈值），请求处理**期间**每 0.15 秒采样两个目录：
+
+```
+采样 41 次：仓库根出现 tmp* = 0 次  ← 必须为 0
+           .tmp/  出现 tmp* = 24 次
+上传后：仓库根 tmp* = []，.tmp/ tmp* = []
+```
+
+只数"事后 cwd 里有没有垃圾"是不够的：spool 文件会被 `close()` 清掉，事后看永远
+干净，两种实现都能通过。所以判据必须是"处理**期间**"。
+
 
 **还没被覆盖的另一半**：把仓库解压到 `%TEMP%` 下时**连 pytest 都起不来**（`FileNotFoundError: No usable temporary directory found in [...]`，四个历史提交都如此）。即本方案的前提是"项目根可写"。项目本身若落在 Python 写不了的位置，仍然救不了。
 
