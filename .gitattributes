@@ -1,0 +1,40 @@
+# Git 行尾策略
+#
+# == 这个文件为什么存在（不是"最佳实践"，是一个实测出来的 bug）==
+#
+# 本机 `core.autocrlf=true`，而仓库原先没有 .gitattributes。后果：
+#   · 提交时 git 把 CRLF 归一化成 LF → 仓库里的 blob 是 LF ✓
+#   · 但**检出**时 git 把 LF 换回 CRLF ✗
+# 于是"干净检出"出来的 data/samples/sales.csv 变成 143197 字节 / 2169 个 CR /
+# md5 6d4f6dad…，而生成脚本写出来的是 141028 字节 / 纯 LF / md5 910d6723…。
+# tests/test_sample_data.py 有三条**逐字节**断言（UTF-8+BOM+LF、重新生成与仓库那份
+# 完全一致），在干净检出上必红 —— 实测：克隆里跑是 146 passed, 3 failed。
+#
+# 这条不是"测试太严"，而是这个示例数据集**唯一的可复现性承诺**就是
+# "任何人 clone 下来拿到的都是同一个文件"。第 7 天的验收也正是
+# "全新克隆 → 按 README 跑 → pytest 全绿"。所以修的是行尾策略，不是放宽断言。
+#
+# == 为什么是 `text eol=lf` 而不是 `-text`（实测对比，两种都能让测试变绿）==
+#
+#   data/samples/sales.csv -text          → 检出 LF ✓，测试 12 passed ✓
+#       但 git 对这个文件**不做任何转换**：谁把 CRLF 提交进去，CRLF 就原样
+#       存进仓库（实测：提交 CRLF 后 blob 的 CRLF 数 = 2169），下次检出带 CRLF，
+#       测试再红一次 —— 它只是把问题挡住，不会自愈。
+#
+#   data/samples/*.csv text eol=lf        → 检出 LF ✓，测试 12 passed ✓
+#       提交时归一化回 LF（实测：提交 CRLF 后 blob 的 CRLF 数 = 0）——
+#       即使有人用编辑器把文件存成 CRLF，仓库也会自己愈合。
+#       这一条是**严格更强**的，所以选它。
+#
+# == 为什么用 `*.csv` 通配而不是只钉死 sales.csv ==
+#
+# 第 6 天有富余会再加第二份示例数据。用 `*.csv` 让新加的 CSV 自动获得同样的
+# 保证，不用记得回来改这个文件。
+#
+# 而**刻意不写** `data/samples/**` 或全仓 `* text=auto eol=lf`：
+#   · `data/samples/**` 会连未来的 .xlsx 一起当成文本做行尾转换 ——
+#     那会把二进制文件改坏（xlsx 是 zip，里面字节含 0x0D 0x0A 序列）。
+#   · 全仓 `* text=auto eol=lf` 会一次性改变所有文件在 Windows 上的检出行为，
+#     而本项目里只有示例数据需要"逐字节稳定"；源码是 CRLF 还是 LF 不影响任何
+#     测试。收尾期不做这种范围外的大改动。
+data/samples/*.csv text eol=lf

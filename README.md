@@ -4,9 +4,10 @@
 由主控智能体调度专业子智能体，用真实的 Python 工具完成统计计算与图表生成，
 并校验报告中的关键数字。
 
-> **项目状态：第 2 天 / 共 7 天 —— 上传与数据理解已完成并通过独立 QA 复验。**
+> **项目状态：第 2 天 / 共 7 天 —— 上传、数据理解与示例数据集已完成并通过独立 QA 复验。**
 > 已完成：应用骨架、配置层、健康检查、统一错误格式、**文件上传（CSV / xlsx）**、
-> **数据预览与详情**、**数据画像（缺失值 / 重复行 / 类型识别 / 五数概括）**、137 项自动化测试。
+> **数据预览与详情**、**数据画像（缺失值 / 重复行 / 类型识别 / 五数概括）**、
+> **可复现的示例数据集**（`data/samples/sales.csv` + 生成脚本）、149 项自动化测试。
 > 分析工具、多智能体调度、大模型接入在第 3 天起逐步加入。
 > README 只写实际跑通的东西，不会提前写"已完成"。
 
@@ -102,7 +103,7 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**137 passed**（136 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**149 passed**（148 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
@@ -144,13 +145,19 @@ ai-data-analyst-agent/
 │     ├─ loader.py             # 读 CSV / xlsx：编码、分隔符、最小清洗、上限
 │     ├─ store.py              # 进程内数据集仓库（不写盘）
 │     └─ profiler.py           # 数据画像：缺失值、重复行、语义类型、五数概括
-├─ tests/                      # 137 项，覆盖 loader / store / profiler / 接口 / 安全
+├─ scripts/
+│  └─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
+├─ tests/                      # 149 项，覆盖 loader / store / profiler / 接口 / 安全 / 示例数据
 ├─ data/
-│  └─ uploads/                 # 上传文件落地目录（内容不进 git）
+│  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
+│  └─ samples/
+│     └─ sales.csv             # 示例销售数据：2168 行 × 9 列，故意含缺失值 / 重复行 / 异常值
 ├─ docs/
 │  ├─ ARCHITECTURE.md          # 架构设计（含目录树、接口、校验、安全清单）
+│  ├─ STAGE2_ACCEPTANCE.md     # 第二阶段的验收说明（交付物、怎么自己跑一遍）
 │  └─ DECISIONS.md             # 决策记录：每条都写了"为什么"
 ├─ .env.example                # 配置模板（只有占位符，无真实密钥）
+├─ .gitattributes              # 行尾策略：示例 CSV 钉成 LF，保证克隆后字节一致
 ├─ .gitignore
 ├─ pytest.ini
 └─ requirements.txt
@@ -235,9 +242,25 @@ curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>
 curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>/profile
 ```
 
-画像里的数字全部由 pandas 真实算出。以示例数据为例，`销售额` 的
-`mean_value` 是 3400、`std_value` 是 2200（样本标准差，`ddof=1`），可以自己用
-计算器对一遍。**数据换了，数字就跟着变** —— 没有任何写死的结果。
+画像里的数字全部由 pandas 真实算出。上面这个 3 行的小数据是为了**能手算核对**：
+`销售额` 是 1200 / 3400 / 5600，所以 `mean_value` 是 3400、`std_value` 是 2200
+（样本标准差，`ddof=1`），可以自己用计算器对一遍。**数据换了，数字就跟着变** ——
+没有任何写死的结果。
+
+想看"真实规模的数据长什么样"，直接传仓库里那份示例数据（2168 行 × 9 列）：
+
+```powershell
+curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets/upload
+```
+
+这份数据是 `scripts/make_sample_data.py` 用固定随机种子生成的，**故意**含有缺失值、
+完全重复行和异常值，所以它的画像会真的报出问题来 —— 这正是"数据质量检查"要演示的东西。
+它同时保证 `销售额 = 销量 × 单价` 精确成立，方便用 Excel 或计算器核对分析工具的返回值。
+
+> 示例数据是靠 [.gitattributes](.gitattributes) 把行尾钉成 LF 的。原因是本机
+> `core.autocrlf=true`，不加这一行的话**干净克隆**出来的 `sales.csv` 会被换成 CRLF，
+> 字节数从 141028 变成 143197，那三条"逐字节一致"的测试就会在别人的机器上红。
+> 细节和五种写法的对比见 [docs/DECISIONS.md](docs/DECISIONS.md) D-15。
 
 `/api/health` 返回示例：
 
@@ -278,7 +301,7 @@ curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>/profile
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 第 1 天 | 项目骨架、配置、健康检查、统一错误格式、测试 | ✅ 完成（经独立 QA 复验） |
-| 第 2 天 | 文件上传与数据预览、数据画像、示例数据集 | 🟡 上传/预览/画像已完成并复验（见 [docs/STAGE2_ACCEPTANCE.md](docs/STAGE2_ACCEPTANCE.md)）；示例数据集脚本待做 |
+| 第 2 天 | 文件上传与数据预览、数据画像、示例数据集 | ✅ 完成（见 [docs/STAGE2_ACCEPTANCE.md](docs/STAGE2_ACCEPTANCE.md)），经独立 QA 复验 |
 | 第 3 天 | 工作流数据结构、主控智能体、数据理解智能体 | 未开始 |
 | 第 4 天 | 接入大模型 API、Tool Calling、数据分析智能体 | 未开始 |
 | 第 5 天 | 可视化智能体、结果校验、报告生成、串通完整流程 | 未开始 |

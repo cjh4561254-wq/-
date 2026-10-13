@@ -517,3 +517,101 @@ Python 找不到这个编码会抛 `LookupError`，用户会看到 500 而不是
 **状态**：已定，无需改动代码。
 
 ---
+
+## D-14 白名单式的忽略规则要**推导**，不要凭印象列；探针假红比假绿更危险
+
+**背景**：项目根出现三个空目录 `pip-build-tracker-2z2fh4kg`、`pip-ephem-wheel-cache-9yohrahm`、`pip-install-c0exc6do`（同一秒创建，`2026-10-13 11:26:04`），而 `.gitignore` 当时只挡了 `pip-unpack-*/`，所以它们露在 `git status` 里。
+
+**根因与 D-07 完全相同**：pip 内部用 `tempfile.mkdtemp()`，本机 Python 子进程写不进系统临时目录 → `tempfile` 退回 cwd（项目根）。不是 pip 的毛病，也不是新问题，只是**同一根因的另一个受害者**。
+
+**决定：前缀名单必须从生成点推导，不能凭印象列。** pip 生成临时目录只有一条路径：
+
+```
+pip/_internal/utils/temp_dir.py:174
+    path = os.path.realpath(tempfile.mkdtemp(prefix=f"pip-{kind}-"))
+```
+
+所以前缀恒等于 `pip-{kind}-`，把 kind 的取值列全就穷尽了。kind 的权威来源 = 源码里 `kind="..."` 的字面量 + `temp_dir.py:26-30` 的 `tempdir_kinds` 枚举，逐处核对（本机 pip 26.2.1）：
+
+```
+build-env-install  build_env.py:296      build-tracker  build_tracker.py:47
+download           download.py:105       install        install.py:440 / lock.py:118
+metadata           _dists.py:128         modern-metadata metadata.py:23
+target             install.py:423        uninstall      req_uninstall.py:214/238
+unpack             prepare.py:110/467    wheel          wheel.py:109
+build-env / ephem-wheel-cache / req-build   ← tempdir_kinds 枚举
+```
+
+`pip-build-env-install-` 不用单列 —— `pip-build-env-*/` 的 `*` 能吃到后面的 `install-xxx`（**实测过**，不是想当然）。
+
+**这个推导过程真的抓到了漏网的**：第一版凭印象只写了 8 条，探针跑出 4 条漏网（`pip-download-*`、`pip-metadata-*`、`pip-target-*`、`pip-uninstall-*`），补齐后 14 条正样本 + 9 条反样本全对。
+
+**探针假红比假绿更危险**：第一版探针直接 `git check-ignore -q --no-index pip-unpack-abcd1234`，6 条"应被忽略"的样本全报不忽略，**看起来像 `.gitignore` 写错了**。真实原因是判据无效 —— 规则是 `pip-unpack-*/`（**带尾斜杠 = 只匹配目录**），而 git 对一个**不存在**的路径无从判断"是不是目录"，于是带尾斜杠的规则一律不生效。第一版唯一通过的 3 条，恰好是磁盘上**真实存在**的那 3 个目录 —— 这不是巧合，是判据在按"文件存不存在"给答案。决定性对照：
+
+```
+git check-ignore -q --no-index pip-unpack-abcd1234    → exit=1（不忽略）
+git check-ignore -q --no-index pip-unpack-abcd1234/   → exit=0（忽略）
+New-Item -ItemType Directory pip-unpack-probe99; 再问 → exit=0（忽略）
+```
+
+同一个名字，加不加尾斜杠、存不存在，答案完全不同。**所以目录类正样本必须先真的建出来再问。**（这条在 D-07 的"验证坑"第 2 条里记过一次，这次是同一个坑的复发 —— 说明写进文档还不够，得在探针里写成注释。）
+
+**为什么假红更危险**：假绿会让你以为做完了，假红会**让你去"修"一段本来正确的代码**。这次差点就把好好的 `pip-unpack-*/` 改成不带尾斜杠，那会让 `pip-unpack-*` 这类**文件**也被忽略 —— 修出一个真 bug。
+
+**影响到**：`.gitignore`（新增 12 条 `pip-*-*/`）、`.tmp/check_pip_gitignore.py`（探针，已把两个坑写成文件头注释）。
+
+**状态**：已落地。`git check-ignore` 实测 14 条正样本全忽略、9 条反样本零误伤；探针跑完不留残留（第一版漏了收中间目录 `nested/`，已修）。
+
+---
+
+## D-15 示例数据的行尾用 `.gitattributes` 钉住（`text eol=lf`），不放宽测试
+
+**背景**：`data/samples/sales.csv` 提交后，在**干净检出**里字节会变。
+
+本机 `core.autocrlf=true` 且仓库原先没有 `.gitattributes`，于是：
+
+- 提交时 git 把 CRLF 归一化成 LF → 仓库里的 blob 是 LF（141028 字节，md5 `910d6723…`）
+- **检出**时 git 把 LF 换回 CRLF → 干净克隆出来是 143197 字节、2169 个 CR、md5 `6d4f6dad…`
+
+后果：`tests/test_sample_data.py` 的三条**逐字节**断言在克隆里必红。实测（`git clone` 副本，HEAD `c15aa92`）：
+
+```
+146 passed, 3 failed
+FAILED tests/test_sample_data.py::test_file_is_utf8_with_bom_and_lf_only
+FAILED tests/test_sample_data.py::test_regenerating_in_process_reproduces_the_committed_file
+FAILED tests/test_sample_data.py::test_running_the_script_reproduces_the_committed_file
+```
+
+**为什么不改测试**：那三条断言钉的是这个示例数据集**唯一的可复现性承诺** —— "任何人 clone 下来拿到的都是同一个文件"。放宽成"先统一换行再比较"，承诺就从测试里消失，降级成提交信息里的一句口头保证。而且第 7 天的验收正是"全新克隆 → 按 README 跑 → pytest 全绿"。**该修的是行尾策略，不是断言。**
+
+**五种写法的 A/B（全部真实跑过，每种都造一个独立提交 + worktree 检出）**：
+
+| 写法 | 检出 md5 一致 | 检出 CRLF | 把 CRLF 提交进去后仓库 blob 的 CRLF | 测试 |
+|---|---|---|---|---|
+| 不加 `.gitattributes`（基线） | ✗ | 2169 | 0（归一化） | 3 failed, 9 passed |
+| `data/samples/sales.csv -text` | ✓ | 0 | **2169（CRLF 原样进仓库）** | 12 passed |
+| **`data/samples/*.csv text eol=lf`** | **✓** | **0** | **0（自愈）** | **12 passed** |
+| `data/samples/** -text` | ✓ | 0 | 2169 | 12 passed |
+| `* text=auto eol=lf` | ✓ | 0 | 0 | 12 passed |
+
+**决定：`data/samples/*.csv text eol=lf`。** 理由是它**严格强于** `-text`：
+
+- `-text` 让 git 对该文件**不做任何转换** —— 谁把 CRLF 提交进去，CRLF 就原样存进仓库（实测 blob 的 CRLF 数 = 2169），下次检出又带 CRLF，测试再红一次。**它只是把问题挡住，不会自愈。**
+- `text eol=lf` 在提交时归一化回 LF（实测 blob 的 CRLF 数 = 0）—— 即使有人用编辑器把文件存成 CRLF，仓库也会自己愈合。
+
+**用 `*.csv` 通配而不是钉死单个文件**：第 6 天有富余会再加第二份示例数据，通配让新 CSV 自动获得同样保证，不用记得回来改。
+
+**刻意不用**另外两种：
+
+- `data/samples/**` 会把未来的 `.xlsx` 也当文本做行尾转换 —— **那会改坏二进制文件**（xlsx 是 zip，内容里就含 `0D 0A` 字节序列）。
+- 全仓 `* text=auto eol=lf` 会一次性改变所有文件在 Windows 上的检出行为，而本项目只有示例数据需要逐字节稳定；源码是 CRLF 还是 LF 不影响任何测试。收尾期不做范围外的大改动。
+
+**作用域已实测**（`git check-attr`）：只有 `data/samples/` 下的 csv 得到 `text: set` / `eol: lf`；`app/`、`tests/`、`docs/`、`requirements.txt` 全部仍是 `unspecified`。工作区里本来就有 6 个带 CRLF 的源文件（`app/data/loader.py`、`app/errors.py`、`docs/DECISIONS.md`、`tests/test_errors.py`、`tests/test_loader.py`、`tests/test_upload.py`），**本决定不碰它们**。
+
+**验证方法（探针怎么在"不污染主工作区"的前提下造干净检出）**：`.tmp/probe_gitattributes.py`。踩到的坑：从 Python 子进程调 `git clone` 在本机会炸在 msys 层（`sh.exe: *** fatal error - NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022` / `fatal: Could not read from remote repository`），而同一个命令在 PowerShell 里能跑。改用 **plumbing 造提交（`read-tree` + `hash-object -w` + `update-index` + `write-tree` + `commit-tree`）+ `git worktree add --detach`** 检出，等价于干净检出，且完全不碰主仓库的工作区与分支（只留可回收的悬挂对象）。
+
+**影响到**：`.gitattributes`（新增，含逐条理由的注释）、`data/samples/*.csv`、第 7 天的"全新克隆验收"。
+
+**状态**：已落地。主工作区全量 149 passed；干净检出里 `tests/test_sample_data.py` 12 passed、md5 `910d6723…`。
+
+---

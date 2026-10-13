@@ -23,7 +23,40 @@ data/db/*.db
 *.log
 
 # ---- 安装过程的临时残留 ----
+# 这一组是 pip 自己的临时目录。它们和下面的 pytest-of-*/tmp* 是**同一个根因**：
+# pip 内部用 tempfile.mkdtemp()，而本机 Python 子进程写不进系统临时目录，
+# tempfile 就退回 cwd（项目根），于是每次装包都在根目录留下几个空目录。
+# 实测（2026-10-13 11:26:04 那次安装）：pip-build-tracker-2z2fh4kg、
+# pip-ephem-wheel-cache-9yohrahm、pip-install-c0exc6do 三个空目录，
+# 而当时 .gitignore 只挡了 pip-unpack-*/，所以它们露在 git status 里。
+# 下面是 pip 源码里会出现的全部前缀。**这不是我猜的**，是从 pip 的生成点推出来的：
+#   pip/_internal/utils/temp_dir.py:174
+#       path = os.path.realpath(tempfile.mkdtemp(prefix=f"pip-{kind}-"))
+# 前缀恒等于 `pip-{kind}-`，所以只要把 kind 的取值列全就穷尽了。
+# kind 的权威来源 = 源码里 `kind="..."` 的字面量 + temp_dir.py:26-30 的
+# tempdir_kinds 枚举，逐处核对过（本机 pip 26.2.1）：
+#   build-env-install  build_env.py:296      build-tracker  build_tracker.py:47
+#   download           download.py:105       install        install.py:440 / lock.py:118
+#   metadata           _dists.py:128         modern-metadata metadata.py:23
+#   target             install.py:423        uninstall      req_uninstall.py:214/238
+#   unpack             prepare.py:110/467    wheel          wheel.py:109
+#   build-env / ephem-wheel-cache / req-build   ← tempdir_kinds 枚举
+# 注意 `pip-build-env-install-` 已被 `pip-build-env-*/` 覆盖（glob 的 * 能吃到
+# 后面的 install-xxx），所以不用单列 —— 这是**实测过的**，不是想当然。
+# 这里**不加**开头的 "/"：这些前缀是 pip 专属的，不像 tmp???????? 那样可能
+# 撞上真实工程目录，所以任意层级生效更安全（与上面的 pip-unpack-*/ 风格一致）。
+pip-build-env-*/
+pip-build-tracker-*/
+pip-download-*/
+pip-ephem-wheel-cache-*/
+pip-install-*/
+pip-metadata-*/
+pip-modern-metadata-*/
+pip-req-build-*/
+pip-target-*/
+pip-uninstall-*/
 pip-unpack-*/
+pip-wheel-*/
 matplotlib-*/
 .mplcache/
 
