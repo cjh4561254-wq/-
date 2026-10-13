@@ -154,9 +154,9 @@ ai-data-analyst-agent/
 │  ├─ config.py                       (已存在) Settings 共 12 个字段（见 §4.0.1，字段表为准，别信本文行号）；含 temp_dir/temp_path；D3 追加 max_workflow_seconds、charts_dir
 │  ├─ runtime.py                      (已存在) STARTED_AT + uptime_seconds() + runtime_environment()（lifespan 里设临时目录，见 D-07）
 │  ├─ schemas.py                      (已存在) ApiError / ApiResponse[T] / ErrorCode（8 个码，见 §7.0）
-│  ├─ schemas_dataset.py              (已存在, 44566c6) Dataset / DatasetSummary / DatasetProfile / ColumnProfile（见 4.1、4.2）
-│  ├─ schemas_tool.py                 [D3][BE] ToolResult / ChartResult / ToolSpec（见 4.7、4.8）
-│  ├─ schemas_workflow.py             [D3–D5][BE] **全部工作流相关 Pydantic 模型**（见 B-1 修订，4.3–4.6、4.9–4.11）
+│  ├─ schemas_dataset.py              (已存在, 44566c6) FileExt / ALLOWED_EXTENSIONS / SemanticType 三个模块级别名常量 + Dataset / DatasetSummary / DatasetProfile / ColumnProfile（见 4.1、4.2）
+│  ├─ schemas_tool.py                 (已存在, de86db2) ToolErrorCode / ChartType / ToolResult / ChartResult（见 4.7、4.8；**ToolSpec 不在这个文件**，它按 §6.1 定义在 `tools/registry.py`）
+│  ├─ schemas_workflow.py             (已存在, de86db2) **全部工作流相关 Pydantic 模型**（见 B-1 修订，4.3–4.6、4.9–4.12）
 │  ├─ errors.py                       (已存在, fe155af) AppError 异常 + ERROR_STATUS 映射 + sanitize_detail()（去绝对路径/用户名）；**不写 HTTP handler**（handler 在 main.py，共 4 个）
 │  ├─ api/
 │  │  ├─ __init__.py                  (已存在)
@@ -170,25 +170,28 @@ ai-data-analyst-agent/
 │  │  ├─ profiler.py                  (已存在, 34dd3a9) build_profile(df, dataset_id) → DatasetProfile（纯 pandas 计算，**零 LLM 参与**；实际就在 D2 做，见 14.3）
 │  │  └─ store.py                     (已存在, 34dd3a9) DatasetStore：进程内 dict，存 DataFrame 与 DatasetSummary；**不写盘**（落盘在路由层）
 │  ├─ core/
-│  │  ├─ __init__.py                  [D3][BE]
-│  │  ├─ registry.py                  [D3][BE] WorkflowRegistry：只存（dict + Lock + create/get/touch），**一行模型定义都没有**（模型全在 schemas_workflow.py）
+│  │  ├─ __init__.py                  (已存在, c41afc0)
+│  │  ├─ registry.py                  (已存在, c41afc0) WorkflowRegistry：只存（dict + Lock + create/get/touch），**一行模型定义都没有**（模型全在 schemas_workflow.py）
 │  │  └─ background.py                [D4][BE] submit_workflow(state) → 用 BackgroundTasks 跑线程
 │  ├─ tools/
-│  │  ├─ __init__.py                  [D3][BE]
-│  │  ├─ registry.py                  [D3][BE] ToolSpec 定义 + register/get/list_specs/to_openai_tools
-│  │  ├─ describe.py                  [D3][BE] describe_dataset、missing_values
-│  │  ├─ aggregate.py                 [D3][BE] group_aggregate、top_n
-│  │  ├─ compare.py                   [D3][BE] compare_groups、correlation
-│  │  └─ timeseries.py                [D3][BE] time_series_summary（pandas 3.0 写法，见 13.3）
+│  │  ├─ __init__.py                  (已存在, 15edd69)
+│  │  ├─ registry.py                  (已存在, 15edd69) ToolSpec 定义 + register/get/list_specs/to_openai_tools；**7 个工具函数**在这里登记（见 §6）
+│  │  ├─ jsonable.py                  (已存在, 15edd69) to_jsonable / ensure_jsonable：把工具返回值清洗成可 JSON 化的纯 Python 类型（**校验 5** 的落点，见 §6.3）
+│  │  ├─ validate.py                  (已存在, 15edd69) validate_call(tool_name, params, df) + ToolValidationError：校验 1–4，**顺序前置短路**（工具名 → 参数 → 列存在 → 操作合法）
+│  │  ├─ describe.py                  (已存在, 15edd69) describe_dataset、missing_values
+│  │  ├─ aggregate.py                 (已存在, 15edd69) group_aggregate、top_n
+│  │  ├─ compare.py                   (已存在, 15edd69) compare_groups、correlation
+│  │  └─ timeseries.py                (已存在, 15edd69) time_series_summary（pandas 3.0 写法，见 13.3）
+│  │                                  ↑ 本目录磁盘上共 **8 个 .py**，工具函数是 **7 个**——两个数字含义不同，别混（见 §14.6）
 │  ├─ llm/
 │  │  ├─ __init__.py                  [D4][AI]
 │  │  ├─ client.py                    [D4][AI] chat(messages, tools=None) → LLMReply；超时/重试/错误封装
 │  │  └─ prompts.py                   [D4][AI] 规划 Prompt、解释 Prompt（含"不许造数"硬约束）
 │  ├─ agents/
-│  │  ├─ __init__.py                  [D4][BE]
+│  │  ├─ __init__.py                  (已存在, c41afc0)
 │  │  ├─ orchestrator.py              [D4][BE] run_workflow(state)：状态机唯一所有者（自身不调模型，只调 planner）
-│  │  ├─ planner.py                   [D4][AI] plan(state, profile) → TaskPlan（**调 LLM**，附规则式兜底）
-│  │  ├─ analysis.py                  [D4][BE] run_task(task, df) → ToolResult；需要时调图表工具
+│  │  ├─ planner.py                   (已存在, c41afc0) plan(state, profile) → TaskPlan（**调 LLM**，附规则式兜底；今天只有规则路径，LLM 路径 D4 加，所以仍标 [AI]）
+│  │  ├─ analysis.py                  (已存在, c41afc0) run_task(task, df) → ToolResult；需要时调图表工具
 │  │  ├─ charts.py                    [D5][BE] render_chart(ToolResult, chart_type, ...) → ChartResult
 │  │  └─ validation.py                [D5][AI] validate(state) → ValidationResult（纯代码校验，无模型）；build_report(...) → FinalReport（**调 LLM**，所以本模块算 [AI]）
 │  └─ web/
@@ -207,7 +210,12 @@ ai-data-analyst-agent/
 │  ├─ test_upload.py                  (已存在, 9441429) 上传成功、超限、非法扩展名、路径穿越文件名、惰性画像缓存（**注意文件名是 test_upload.py，不是 test_upload_api.py**）
 │  ├─ test_temp_dir.py                (已存在, 24aeac1) 启动前不 import 副作用 / 启动中 gettempdir 在项目内 / 退出后还原
 │  ├─ test_sample_data.py             (已存在, c15aa92) 示例数据的字节可复现、脏数据数量、销售额=销量×单价
-│  ├─ test_tools.py                   [D3][QA] 7 个工具的正确性 + 5 类校验的拒绝路径
+│  ├─ test_tool_registry.py           (已存在, 15edd69) 注册表：ToolSpec 定义 / register / get / list_specs / to_openai_tools（209 行）
+│  ├─ test_tools.py                   (已存在, 15edd69) 7 个工具的正确性 + 5 类校验的拒绝路径（653 行）
+│  ├─ test_workflow_registry.py       (已存在, c41afc0) WorkflowRegistry 的 create/get/touch 与线程安全（151 行）
+│  ├─ test_analysis_agent.py          (已存在, c41afc0) 执行层：run_task 串工具、工具失败不炸整个任务（312 行）
+│  ├─ test_planner_rules.py           (已存在, c41afc0) 规则兜底计划器：关键词 → 工具/参数、越界问题不硬编（372 行）
+│  ├─ test_contracts_d3.py            (已存在, 555cb80) Lead 钉 D3 契约：model_dump(mode="json") + json.dumps(allow_nan=False) 必须过、ChartResult 的 filename/url/chart_id 三者一致、WorkflowState 派生字段与限额（544 行 / 24 个 test 函数 / pytest 收集 **32 项**）
 │  ├─ test_workflow_state.py          [D4][QA] 状态迁移、重试上限、超时收尾
 │  ├─ test_analysis_api.py            [D4][QA] 未配 LLM 时降级返回、workflow 生命周期
 │  ├─ test_validation.py              [D5][QA] 报告里塞入假数字必须被校验拦下
@@ -340,7 +348,7 @@ errors.py  →  schemas.py（只为了用 ErrorCode）
 约定：`必填` 列里「是」= 无默认值，必须显式给出；「否」= 有默认值。
 类型写法沿用 Python 3.12：`str | None`、`list[str]`、`dict[str, Any]`。
 
-**模型的文件归属（B-1 修订，已定死）**：`schemas_dataset.py`（数据集） / `schemas_tool.py`（工具） / `schemas_workflow.py`（工作流）三个文件，**全部只放 Pydantic 模型与枚举，零业务逻辑**。判断标准一句话：**"数据长什么样"进 `schemas_*.py`，"数据放在哪、怎么同步"进 `core/`**。所以 `WorkflowState` 虽然跟运行状态有关，它**仍然定义在 `app/schemas_workflow.py`**，`app/core/registry.py` 里一行模型定义都没有 —— 读者搜 `class WorkflowState` 一定搜得到，这对正在学 FastAPI 的读者很重要。
+**模型的文件归属（B-1 修订，已定死）**：`schemas_dataset.py`（数据集） / `schemas_tool.py`（工具） / `schemas_workflow.py`（工作流）三个文件，**全部只放 Pydantic 模型与枚举，零业务逻辑**。判断标准一句话：**"数据长什么样"进 `schemas_*.py`，"数据放在哪、怎么同步"进 `core/`**。所以 `WorkflowState` 虽然跟运行状态有关，它**仍然定义在 `app/schemas_workflow.py`**，`app/core/registry.py` 里一行模型定义都没有 —— 读者搜 `class WorkflowState` 一定搜得到，这对正在学 FastAPI 的读者很重要。**唯一一个不在 `schemas_*.py` 里的"模型"是 `ToolSpec`**：它回答的是"工具怎么被调用"（带 `func` 可调用对象），属于工具层，定义在 `app/tools/registry.py`（见 §6.1）。逐文件的完整清单见 §4.13。
 
 ### 4.0 跨模块统一代码约定（460cf8c 之后强制遵守）
 
@@ -490,7 +498,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 | 字段 | 类型 | 必填 | 含义 |
 |---|---|---|---|
-| `task_id` | `str` | 是 | `"T1"`、`"T2"`……由 planner 编号，报告里引用它做溯源 |
+| `task_id` | `str` | 是 | `"T1"`、`"T2"`……由 planner 编号，报告里引用它做溯源；代码里带正则约束 `^T[0-9]{1,2}$`（最多两位数字） |
 | `order` | `int` | 是 | 执行顺序，从 1 开始，连续 |
 | `kind` | `Literal["describe","aggregate","compare","trend","missing","correlation"]` | 是 | 语义类别（给人看，也用于默认图表选择） |
 | `tool_name` | `str` | 是 | **必须在工具白名单里** |
@@ -499,7 +507,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `depends_on` | `list[str]` | 否 | 依赖的 `task_id`，默认 `[]`（第一版基本都是空） |
 | `chart` | `ChartRequest \| None` | 否 | 该任务要不要出图，默认 `None` |
 | `status` | `TaskStatus` | 否 | 默认 `TaskStatus.PENDING` |
-| `attempt` | `int` | 否 | 默认 `0`，重试次数 |
+| `attempt` | `int` | 否 | 默认 `0`，代码里约束范围 `ge=0, le=2`（走完 2 次重试仍失败就落 `FAILED`，见 §5.3） |
 | `error` | `str \| None` | 否 | 失败原因（中文） |
 
 `ChartRequest`：`chart_type: Literal["bar","line","pie","scatter"]`（必填）、`x_field: str`（必填）、`y_field: str`（必填）、`title: str`（必填，≤40 字）。
@@ -511,7 +519,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `plan_id` | `str` | 是 | `uuid4().hex[:8]` |
 | `question` | `str` | 是 | 用户原问题（原样保存，便于复盘） |
 | `dataset_id` | `str` | 是 | 针对哪个数据集 |
-| `tasks` | `list[AnalysisTask]` | 是 | 最少 1 个、最多 `max_steps`（默认 6）个 |
+| `tasks` | `list[AnalysisTask]` | 是 | 代码里是 `min_length=1, max_length=8`：**硬上限 8 个**。`max_steps`（默认 6）只是请求侧的旋钮，它让计划更短，但突破不了 8 |
 | `reasoning` | `str` | 否 | 模型给的一句话规划理由（只做展示，不参与判断） |
 | `source` | `Literal["llm","rule_fallback"]` | 是 | 计划来自模型还是规则兜底（**必须落库/落日志**，便于统计模型稳定性） |
 | `created_at` | `datetime` | 是 | |
@@ -524,7 +532,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `dataset_id` | `str` | 是 | 关联数据集 |
 | `question` | `str` | 是 | 用户问题，1–500 字 |
 | `status` | `WorkflowStatus` | 是 | 见 4.6；初始 `PENDING` |
-| `step` | `str` | 是 | 当前阶段名：`profiling`/`planning`/`execution`/`charting`/`reporting`/`validation`/`done` |
+| `step` | `WorkflowStep` = `Literal["profiling","planning","execution","charting","reporting","validation","done"]` | 否 | 默认 `"profiling"`。**不是裸 `str`**：写错一个值 Pydantic 当场报错，而不是让前端拿到一个查不到文案的字符串 |
 | `step_index` | `int` | 否 | 默认 `0`，已完成的阶段数（前端进度条用） |
 | `total_steps` | `int` | 否 | 默认 `6` |
 | `profile` | `DatasetProfile \| None` | 否 | 画像结果 |
@@ -547,7 +555,8 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 `PENDING` / `PROFILING` / `PLANNING` / `EXECUTING` / `CHARTING` / `REPORTING` / `VALIDATING` / `SUCCESS` / `SUCCESS_WITH_WARNINGS` / `FAILED`。
 
-- `step` 是"细粒度当前动作"，`status` 是"粗粒度对外状态"。前端只需要判断 `status` 是否落在终态集合 `{SUCCESS, SUCCESS_WITH_WARNINGS, FAILED}` 里，来决定是否停止轮询。
+- `step` 是"细粒度当前动作"（类型是 `WorkflowStep`，7 个取值见 4.5），`status` 是"粗粒度对外状态"。前端靠 `status` 是否落在**终态集合**里决定"还要不要继续轮询"：这个集合在代码里是**模块级常量** `TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset({WorkflowStatus.SUCCESS, WorkflowStatus.SUCCESS_WITH_WARNINGS, WorkflowStatus.FAILED})`（`app/schemas_workflow.py`，定义在枚举下面）。**接口、前端、测试三处要 import 同一个常量**，不要各自再写一遍 `in (...)` —— 写错一处就会多轮询几秒或永远转下去。
+- `TaskStatus`（单个任务，6 个值见 4.3）与 `WorkflowStatus`（整条工作流，10 个值）是**两个枚举**，值域不同，别互相赋值：`WorkflowStatusData.status` 用后者、`TaskBrief.status` 用前者。
 - `SUCCESS_WITH_WARNINGS` 用来表达"结果可用，但有数据质量问题或某些任务失败"，避免把"不完美"一律说成失败。
 
 ### 4.7 `ToolResult`（`app/schemas_tool.py`，D3）
@@ -561,7 +570,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `columns` | `list[str]` | 否 | 若 `data` 是表格形式（`{"rows":[...],"columns":[...]}`），冗余到这里方便前端 |
 | `row_count` | `int` | 否 | 返回的数据行数（0 行要记 warning） |
 | `elapsed_ms` | `int` | 是 | 工具函数实际耗时（毫秒） |
-| `error_code` | `str \| None` | 否 | 失败时的机器码：`TOOL_NOT_FOUND` / `BAD_PARAMS` / `COLUMN_NOT_FOUND` / `BAD_OPERATION` / `BAD_RESULT` |
+| `error_code` | `ToolErrorCode \| None` | 否 | 失败时的机器码 5 选 1：`TOOL_NOT_FOUND` / `BAD_PARAMS` / `COLUMN_NOT_FOUND` / `BAD_OPERATION` / `BAD_RESULT`。`ToolErrorCode` 是 `schemas_tool.py` 顶部的 `Literal` 别名（不是裸 `str`）；它与 `app/schemas.py` 的 `ErrorCode` 是**两套码**，别混用（见 §7.2 结尾） |
 | `error_message` | `str \| None` | 否 | 失败时的中文说明（直接给前端看） |
 | `created_at` | `datetime` | 是 | |
 
@@ -593,6 +602,8 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 > 3. **§9.1 E 区**（前端）只用 `ChartResult.url` 作为 `<img src>`，用 `ChartResult.title` 做图注，**不拼 URL、不猜文件名**。
 >
 > 换句话说：`url` 是"给前端用的地址"，`filename` 是"给后端用的钥匙"，两者都在同一个对象里，谁也不用推导谁。
+>
+> **这条约定已经是"会报错的代码"，不再只是文档里的提醒**（`de86db2` 起）：`ChartResult` 自带一个 `@model_validator(mode="after")`，**构造对象的那一刻**就检查 ① `filename == chart_id + ".png"`、② `url.endswith("/charts/" + filename)`，任一不满足直接抛 `ValueError`。为什么值得写进代码：这三者一旦对不上，前端拿到的 `<img src>` 就是 404，而**图片 404 不会让任何测试变红**（浏览器里只是一张破图），与其等演示时才发现，不如让它当场炸。
 
 ### 4.9 `ValidationResult`（`app/schemas_workflow.py`，D5）
 
@@ -629,14 +640,66 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `question` | `str` | 是 | 中文问题，校验 `min_length=2, max_length=500` |
 | `max_steps` | `int` | 否 | 默认 `6`，范围 `1..8`（给"我想换更复杂的计划"留一个旋钮，也防止模型无限加任务） |
 
-### 4.12 模型放在哪些文件里（避免一个文件膨胀成几百行）
+### 4.12 `WorkflowStatusData` / `TaskBrief`（接口 6 的返回体，`app/schemas_workflow.py`，D3）
+
+**为什么要单独定义一个模型，而不是直接返回 `WorkflowState`**——两个理由，第二个更长远：
+
+1. **体积**：状态接口 1 秒被调一次，必须保持小。用一份**合成**状态量过（6 个任务 / 6 个工具结果各 20 行 / 1 张图 / 3 段报告）：
+
+   | 序列化对象 | 字节数 | 按 1 秒轮询、一次分析按 60 秒算 |
+   |---|---|---|
+   | `WorkflowState.model_dump_json()` | 14 431 B（14.1 KB） | 多传约 0.8 MB |
+   | `WorkflowStatusData.from_state(state).model_dump_json()` | 1 318 B（1.3 KB） | 全程也就约 77 KB |
+
+   比值 ≈ **10.9 倍**。（这是合成数据、不是真实工作流跑出来的，量级参考即可；量法与数字见 §14.5。）
+
+2. **契约稳定**：若直接返回 `WorkflowState`，将来给 `state` 加一个**内部**字段（例如给重试逻辑加个计数器），它会**立刻出现在 API 响应里**——前端莫名多收到一个东西，而且没有任何测试会因此变红。`WorkflowStatusData` 是一张"显式清单"：想让它进状态接口，必须在这里加一行。
+
+字段（13 个）：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `workflow_id` | `str` | 主键 |
+| `dataset_id` | `str` | 关联的数据集 |
+| `question` | `str` | 用户原问题 |
+| `status` | `WorkflowStatus` | 粗粒度状态；前端靠 `TERMINAL_STATUSES` 判断是否停止轮询（见 4.6） |
+| `step` | `WorkflowStep` | 当前阶段名 |
+| `step_index` | `int` | 已完成的阶段数（进度条用） |
+| `total_steps` | `int` | 总阶段数 |
+| `tasks` | `list[TaskBrief]` | 任务精简列表，默认 `[]` |
+| `charts` | `list[ChartResult]` | 已生成的图（**完整 10 个字段**；接口 8 只认其中的 `filename`，见 4.8） |
+| `error` | `ApiError \| None` | 顶层失败原因 |
+| `created_at` | `datetime` | 创建时间 |
+| `finished_at` | `datetime \| None` | 结束时间 |
+| `has_report` | `bool` | 是否已有报告可取；**`from_state()` 里是现算的**，见下 |
+
+`TaskBrief`（4 个字段，只给前端要显示的东西）：`task_id` / `description` / `status`（`TaskStatus`）/ `error`。
+
+**`from_state()` 里唯一需要动脑的地方：`has_report` 是现算的**
+
+```python
+has_report=state.report is not None,      # 注意：不是抄 state.has_report
+```
+
+- `WorkflowState.has_report` 是 `report` 的**派生字段**；派生值天然带一个风险：**某个分支只设了 `report`、忘了同步 `has_report`**，于是前端一直不去取报告，而工作流看上去是成功的。
+- 在接口这一层**现算一次**（`state.report is not None`），接口的正确性就不再依赖"每个写 `report` 的地方都记得同步"这个约定。代价是每次多算一次 `is not None`，可以忽略。
+- **实测过它确实生效**：把 `state.report = None` 但故意不改 `state.has_report`（保留陈旧值 `True`），`from_state()` 返回的 `has_report` 是 `False`——接口信的是现算值，不是陈旧字段。
+- 由此定一条纪律：`state.has_report` 只作为**写入方的便利标记**；任何**读取方**（接口、校验、报告）都不要拿它做判断，一律用 `state.report is not None`。
+- 顺带：`tasks` 里**不含 `params`**——用户不需要看见工具参数（那是排查时才看的东西），所以 `TaskBrief.from_task()` 只抄 4 个字段。
+
+### 4.13 模型放在哪些文件里（避免一个文件膨胀成几百行）
 
 | 文件 | 包含的模型 | 负责日 |
 |---|---|---|
-| `app/schemas.py`（已存在） | `ErrorCode`、`ApiError`、`ApiResponse[T]` | D1 |
-| `app/schemas_dataset.py` | `Dataset`、`DatasetSummary`、`ColumnProfile`、`DatasetProfile` | D2 |
-| `app/schemas_tool.py` | `ToolResult`、`ChartResult`、`ToolSpec` | D3 |
-| `app/schemas_workflow.py` | `TaskStatus`、`WorkflowStatus`、`AnalysisTask`、`ChartRequest`、`TaskPlan`、`WorkflowState`、`ValidationIssue`、`ValidationResult`、`ReportSection`、`FinalReport`、`QuestionRequest` | D3–D5 |
+| `app/schemas.py`（已存在） | `ErrorCode`（8 个码）、`ApiError`、`ApiResponse[T]`、`T`（`TypeVar`） | D1 |
+| `app/schemas_dataset.py`（已存在, `44566c6`） | `FileExt`、`ALLOWED_EXTENSIONS`（模块级 `frozenset`）、`SemanticType`（`Literal` 别名，`ALLOWED_EXTENSIONS` 是它的取值集合）、`DatasetSummary`、`Dataset`、`ColumnProfile`、`DatasetProfile`——**共 7 个顶层定义** | D2 |
+| `app/schemas_tool.py`（已存在, `de86db2`） | `ToolErrorCode`、`ChartType`（两个 `Literal` 别名）、`ToolResult`、`ChartResult` | D3 |
+| `app/schemas_workflow.py`（已存在, `de86db2`） | `TaskStatus`、`WorkflowStatus`、`TERMINAL_STATUSES`（模块级 `frozenset`）、`WorkflowStep`（`Literal`）、`ChartRequest`、`AnalysisTask`、`TaskPlan`、`ValidationIssue`、`ValidationResult`、`ReportSection`、`FinalReport`、`WorkflowState`、`QuestionRequest`、`WorkflowStatusData`、`TaskBrief`——**共 15 个顶层定义** | D3–D5 |
+| `app/tools/registry.py` | `ToolSpec`（**只在这里定义**，见 §6.1）。`schemas_tool.py` 里**没有**它 | D3 |
+
+**`ToolSpec` 为什么不放 `schemas_tool.py`**：它的 `func` 字段是"怎么执行这个工具"，属于**工具层怎么被调用**，不属于"数据长什么样"；放进 `schemas_*.py` 还会让模型文件被迫依赖 pandas/`Callable` 的类型注解。文件归属的判据见 §4.0。
+
+**怎么自检这张表**（别靠眼睛——这类偏差的特征正是"看不出来"）：用 `ast.parse` 读两个模型文件，取顶层 `ClassDef`/`Assign`/`AnnAssign` 的名字集合，与上表做**双向**集合差（"代码有、表里没有"和"表里有、代码没有"都要打出来）。只比一个方向会漏掉一半。方法与当次输出见 §14.5。
 
 **不动 `app/schemas.py` 已有的三个模型**——因为它们被 `routes_health.py` 和 `tests/test_health.py` 依赖，改了会破坏第一天的验收。
 
@@ -1474,6 +1537,141 @@ Get-Content $f -Encoding UTF8 | ForEach-Object {
 **查证无误、不动的**：`HealthData` 含 `upload_dir_ready`；§7.3 的两个代码块与 `app/errors.py` 逐行一致（8 个码、顺序 400/404/405/413/415/503/200/500）；§6.4 的 7 个工具与 `TOOL_NAMES` 一致；"业务错误一律 HTTP 200"只出现在 §14.2 的变更记录里；`app/datasets.py` / `app/security/files.py` / `sales_sample.csv` 三个作废名字只在 §2.1 末尾与 §14.2 里。
 
 **留下的教训（与 §14.3 末尾那条同源）**：目录树和字段表这类"清单式文档"的腐烂方式是**加法腐烂**——代码只增不减，文档不加就悄悄落后；而它偏偏不会让任何测试变红。所以核对方式必须是脚本做集合比对，并且要**双向比**（文档有代码无 / 代码有文档无），只比一个方向会漏掉一半。
+
+### 14.5 第三天契约冻结（commit `de86db2`）后的文档同步记录
+
+基线：`de86db2`（父 `fcf9546`）—— D3 契约冻结，新增 `app/schemas_tool.py`（130 行）与 `app/schemas_workflow.py`（359 行）。本轮**只改 `docs/ARCHITECTURE.md`**，未触碰任何 `.py` / `tests/`。
+
+核对方法与 §14.4 同源：用 `ast.parse` 读两个模型文件，取**顶层** `ClassDef`（连同它的字段名）/ `Assign` / `AnnAssign`，与 §4 各节的表格做**双向集合差**。可复用骨架（脚本写在项目外的 `%TEMP%`，不进仓库）：
+
+```python
+import ast, io
+names = {}
+for path in (r"app\schemas_tool.py", r"app\schemas_workflow.py"):
+    tree = ast.parse(io.open(path, encoding="utf-8").read())
+    for node in tree.body:                                   # 只看顶层定义
+        if isinstance(node, ast.ClassDef):
+            names[node.name] = [s.target.id for s in node.body
+                                if isinstance(s, ast.AnnAssign)]      # ← 字段名
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):  # 类型别名 / 模块级常量
+            t = node.targets[0] if isinstance(node, ast.Assign) else node.target
+            names[getattr(t, "id", "?")] = []
+# 再与文档表格做双向差集：代码有表无 / 表有代码无，两个方向都要打印
+```
+
+**脚本判定的偏差（修前 → 修后）**：
+
+| # | 偏差（脚本判定，不是印象） | 处理 |
+|---|---|---|
+| 1 | 文件归属表（当时是 §4.12，本轮为给新小节腾位置顺延为 **§4.13**）把 `ToolSpec` 算进 `app/schemas_tool.py`，但该文件顶层只有 4 个定义：`ToolErrorCode`、`ChartType`、`ToolResult`、`ChartResult`；而 §6.1 早就写明 `ToolSpec` 在 `app/tools/registry.py` | 表里删 `ToolSpec`、补两个 `Literal` 别名；另起一行 `app/tools/registry.py` = `ToolSpec`；§2 目录树与 §4 开头的归属规则各加一句"ToolSpec **不在** `schemas_tool.py`"。**这样 §4 与 §6.1 不再互相矛盾** |
+| 2 | `app/schemas_workflow.py` 顶层 **15** 个定义，表里只写了 11 个（漏 `WorkflowStep`、`TERMINAL_STATUSES`、`WorkflowStatusData`、`TaskBrief`） | 表补齐，并写明"共 15 个顶层定义" |
+| 3 | `app/schemas_dataset.py` 的 `FileExt`、`SemanticType` 两个别名从未进过这张表 | 一并补上（同一张清单，漏一个下次还会漂） |
+| 4 | `WorkflowStatusData` / `TaskBrief` **全文没有定义**，但 §7.1 的代码示例早就在用 `WorkflowStatusData.from_state(state)` —— 文档引用了一个自己没定义的模型 | **新增 §4.12 整节**：为何不直接返回 `WorkflowState`（体积 + 契约稳定）、为何 `has_report` 现算、13 个字段表、`TaskBrief` 4 个字段 |
+| 5 | §4.4 写 `tasks` "最多 `max_steps`（默认 6）个"，代码是 `max_length=8` 的**硬上限** | 改成"硬上限 8；`max_steps` 只是请求侧旋钮，突破不了 8" |
+| 6 | §4.5 写 `step` 是 `str`、必填；代码是 `WorkflowStep`（`Literal`）且有默认值 `"profiling"` | 改成七个取值 + 默认值（"必填"列由「是」改「否」） |
+| 7 | §4.6 把终态集合只写在一句中文里；代码里它是模块级 `TERMINAL_STATUSES` | 写明常量名、类型 `frozenset[WorkflowStatus]`、以及"接口/前端/测试三处 import 同一个常量"；另加一句：`TaskStatus` 与 `WorkflowStatus` 是两个枚举，别互相赋值 |
+| 8 | §4.7 `error_code` 类型写成 `str \| None`；代码是 `ToolErrorCode \| None`（5 选 1 的 `Literal`） | 改类型，并点明它与 `app/schemas.py` 的 `ErrorCode` 是**两套码** |
+| 9 | §4.3 代码里的约束（`task_id` 正则 `^T[0-9]{1,2}$`、`attempt` 的 `le=2`）文档没写 | 补进字段表 |
+| 10 | `app/schemas_dataset.py` 的 `ALLOWED_EXTENSIONS`（模块级 `frozenset`，`FileExt` 的取值集合）也没进表。**这一条是脚本的盲区自己暴露出来的**：第一版脚本只判 `ast.Assign`，而它是**带注解的赋值**（`TERMINAL_STATUSES` 同理），补上 `ast.AnnAssign` 分支后才看见 | 补进 §4.13 表（并写明该文件"共 7 个顶层定义"），§2 目录树那一行同步改成"FileExt / ALLOWED_EXTENSIONS / SemanticType 三个模块级别名常量 + 4 个模型"。**教训：检查工具本身也会漏，第一版的"全部一致"是假绿** |
+
+**修后复核（同一次脚本重跑，双向差集）**：
+
+```text
+app/schemas_tool.py     : 文档 4  / 代码 4   → 无差异
+app/schemas_workflow.py : 文档 15 / 代码 15  → 无差异
+app/schemas_dataset.py  : 文档 7  / 代码 7   → 无差异
+app/schemas.py          : 文档 4  / 代码 4   → 无差异
+```
+
+**查证无误、不动的**（脚本输出"字段集合一致 ✓"）：§4.4 `TaskPlan`(7 字段)、§4.5 `WorkflowState`(22)、§4.7 `ToolResult`(10)、§4.8 `ChartResult`(10)、§4.9 `ValidationResult`(5)、§4.10 `FinalReport`(8)、§4.11 `QuestionRequest`(3)、§4.12 `WorkflowStatusData`(13，本轮新增的小节首次纳入比对) —— 字段名集合与代码**一个不多一个不少**。§4.3 `AnalysisTask`(11) 也一致（该小节有两张表：`TaskStatus` 6 个成员 + `AnalysisTask` 11 字段，按节聚合的脚本会把它们混在一起，所以这一节要按表分开看，这一项是本轮唯一需要人眼确认的）。`TaskBrief`(4) 在 §4.12 里是按行内列表写的、不是表格，所以不在脚本比对范围内，靠人核。
+
+**脚本里两条必须写对的细节**（否则"全部一致"是假的）：① 锚点要指向**文件归属表**所在的小节（本轮它从 §4.12 挪到 §4.13，脚本没跟着改的话会读到空表，输出"代码有、表里没有：全部"）；② 表格第二列里的中文括注（如"（两个 `Literal` 别名）"）要先剥掉再抽反引号词，否则 `ChartType`（两个 `Literal` 别名）会被当成一个名字，diff 里全是噪音。
+
+**`ChartResult` 的约定已经从"文档提醒"升级成"会报错的代码"**：`de86db2` 起带 `@model_validator(mode="after")`，构造时检查 `filename == chart_id + ".png"` 且 `url.endswith("/charts/" + filename)`。§4.8 结尾补了这一段——**文档里的提醒和构造时抛错的校验，强度差一个量级**。
+
+**量过的数字（合成状态，脚本 `d3_payload.py`）**：6 个任务 / 6 个工具结果（各 20 行）/ 1 张图 / 3 段报告 → `WorkflowState.model_dump_json()` = **14 431 B**，`WorkflowStatusData.from_state(state).model_dump_json()` = **1 318 B**（10.9 倍）。另把 `state.report` 置回 `None`、故意保留陈旧的 `state.has_report = True`，`from_state()` 返回 `has_report=False` —— 证明接口读的是现算值。**这是合成数据，不是真实工作流**；量法与原始输出只在本节可追溯，没写进 §4.12 的结论以外的地方。
+
+**本轮明确没动的两处（当时等 backend 的提交）**：§2 目录树里 `app/core/*` 与 `app/tools/*` 当时全是计划标注——那两个包在 `de86db2` 时**磁盘上还不存在**（`core/`、`tools/` 均未落地）。**已在 §14.6 补齐**（`15edd69` + `c41afc0` 之后按实际文件同步），本节这一句保留为历史记录。
+
+**这一轮最值得记住的一条**："文档引用了一个自己没定义的模型"（第 4 条）比字段写错更隐蔽：**引用会先于定义出现**（写接口契约时先想清楚返回体长什么样，模型却晚一步才落地）。若没人做集合比对，它会一直停在"读起来自洽"的状态——§7.1 的示例代码一直在用 `WorkflowStatusData.from_state(state)`，而 §4 里当时没有这个模型。
+
+### 14.6 工具层 / 执行层落地（`15edd69`、`c41afc0`）后的目录树同步
+
+基线：`c41afc0`（父 `15edd69` ← `de86db2`）。
+
+- `15edd69`「feat(tools): D3 工具层 7 个白名单工具 + 4 类校验 + 返回值清洗」：新增 `app/tools/` **8 个 .py**、`tests/test_tool_registry.py`（209 行）、`tests/test_tools.py`（653 行）。
+- `c41afc0`「feat(agents): D3 执行层」：新增 `app/agents/{__init__,analysis,planner}.py`、`app/core/{__init__,registry}.py`、`tests/{test_workflow_registry,test_analysis_agent,test_planner_rules}.py`。
+
+§14.5 末尾那句"等 backend 的提交"指的就是这两个包，**本轮已按实际磁盘同步**。
+
+**核对方法（这次不看字段，看文件）**：脚本读 §2 树里每个包的代码块（`app/core`、`app/tools`、`app/agents`、`tests`），用 `([A-Za-z_][A-Za-z0-9_]*\.py)` 抽出名字集合，与 `os.listdir` 做**双向**差集；再补一条全局检查"`app/` 下每个 .py 是否在树里出现过"。判据是这两个方向都为空（计划中的文件除外，它们本来就不该在磁盘上）。
+
+**脚本输出（修前，行号是修前快照）**：
+
+```text
+--- app/core (文档块 L172-175) ---
+  磁盘 2 个 / 文档 4 个
+  >> 磁盘有、文档没有: 无
+  >> 文档有、磁盘没有: background.py（D4 计划，保留）
+                        schemas_workflow.py ← 解析噪音，不是树条目（见下）
+--- app/tools (L176-182) ---
+  磁盘 8 个 / 文档 6 个
+  >> 磁盘有、文档没有: jsonable.py、validate.py
+--- app/agents (L187-193) ---
+  磁盘 3 个 / 文档 6 个
+  >> 磁盘有、文档没有: 无
+  >> 文档有、磁盘没有: orchestrator.py、charts.py、validation.py（D4/D5 计划，保留）
+--- tests (L198-215) ---
+  磁盘 17 个 / 文档 18 个
+  >> 磁盘有、文档没有: test_analysis_agent.py、test_contracts_d3.py、
+                       test_planner_rules.py、test_tool_registry.py、test_workflow_registry.py
+  >> 文档有、磁盘没有: test_analysis_api.py、test_charts.py、test_security.py、
+                       test_upload_api.py、test_validation.py、test_workflow_state.py
+B. app/ 下未出现在树里的 .py: app\tools\jsonable.py、app\tools\validate.py（修前）
+```
+
+**两个必须说明的解析噪音**（否则这份输出会被误读成"文档多写了两个文件"）：
+
+1. `schemas_workflow.py` 被算进了 `app/core` 块——它出现在 `registry.py` 那行的注释里（"模型全在 `schemas_workflow.py`"），**不是树里的文件条目**。教训：按块抽名字会把注释里的提及一起捞进来，判据要看"行首是不是真的树条目（`├─`/`└─`）"。
+2. `test_upload_api.py` 来自文档里那句刻意写的提醒"**注意文件名是 `test_upload.py`，不是 `test_upload_api.py`**"——它**不是**计划中的文件，是反例说明。这条提醒从 D1 就在，保留。
+
+**修后复核（同一次脚本重跑，改完 §2 之后）**：
+
+```text
+--- app/tools  --- 文档 8  / 磁盘 8   >> 磁盘有、文档没有: 无
+--- app/agents --- 文档 6  / 磁盘 3   >> 磁盘有、文档没有: 无
+                                      >> 文档有、磁盘没有: charts.py、orchestrator.py、validation.py（D4/D5 计划，预期）
+--- app/core   --- 文档 4  / 磁盘 2   >> 磁盘有、文档没有: 无
+                                      >> 文档有、磁盘没有: background.py（D4 计划）+ schemas_workflow.py（注释噪音）
+--- tests      --- 文档 23 / 磁盘 17  >> 磁盘有、文档没有: 无
+                                      >> 文档有、磁盘没有: test_analysis_api / test_charts / test_security /
+                                                          test_validation / test_workflow_state（D4–D6 计划）
+                                                          + test_upload_api.py（反例说明）
+B. app/ 下未出现在树里的 .py: 无
+```
+
+判据：**"磁盘有、文档没有" 四个包全部为 0**；反向"文档有、磁盘没有"只剩计划项与上面两个已解释的噪音。
+
+**改了哪些行**：
+
+| 位置 | 原来 | 现在（依据） |
+|---|---|---|
+| §2 `app/tools/` | 6 行、全是 `[D3][BE]` 计划标注 | 8 行、全是 `(已存在, 15edd69)`；新增 `jsonable.py`（`to_jsonable` / `ensure_jsonable`，**校验 5 的落点**）与 `validate.py`（`validate_call(tool_name, params, df)` + `ToolValidationError`，**校验 1–4 按顺序前置短路**）；下面补一行"本目录 8 个 .py ≠ 7 个工具函数" |
+| §2 `app/agents/` | `__init__` / `analysis` / `planner` 都写 `[D4]` | 三行改成 `(已存在, c41afc0)`（它们在 `c41afc0` 已落地）；`planner.py` 的 **`[AI]` 保留**——今天只有规则路径，而 `[AI]` 的判据是"有真实 LLM 调用点，哪怕只在兜底路径"；`orchestrator.py` / `charts.py` / `validation.py` 仍是计划标注 |
+| §2 `app/core/` | 两行 `[D3][BE]` | `(已存在, c41afc0)`；`background.py` 保留 `[D4][BE]` |
+| §2 `tests/` | `test_tools.py` 是 `[D3][QA]` 计划 | 改成 `(已存在, 15edd69)`；新增 5 行：`test_tool_registry.py`（`15edd69`，209 行）、`test_workflow_registry.py`（`c41afc0`，151 行）、`test_analysis_agent.py`（`c41afc0`，312 行）、`test_planner_rules.py`（`c41afc0`，372 行）、`test_contracts_d3.py`（**工作区新增、尚未提交**） |
+| §14.5 末尾 | "本轮明确没动的两处（等 backend 的提交）…此刻在磁盘上还不存在" | 改成"当时…**已在 §14.6 补齐**"，保留为历史记录 |
+
+**`test_contracts_d3.py` 的量过的数字**（我跑的，不是转述）：544 行、24 个 `def test_` 函数，`python -m pytest tests/test_contracts_d3.py --collect-only -q` 输出 **32 tests collected**（差额来自 `parametrize`）。它覆盖的是"契约能不能真的序列化出去"：`model_dump(mode="json")` + `json.dumps(allow_nan=False)` 必须通过、`ChartResult` 的 `filename`/`url`/`chart_id` 三者一致、`WorkflowState` 派生字段与各种限额。
+
+**两个会持续踩的数字**：
+
+- `app/tools/` 磁盘上 **8 个 .py** vs 白名单 **7 个工具函数**（`describe_dataset`、`missing_values`、`group_aggregate`、`top_n`、`compare_groups`、`correlation`、`time_series_summary`）——前者多出的 4 个是 `__init__.py` / `registry.py` / `jsonable.py` / `validate.py`，它们不是工具。
+- `tests/` 磁盘 **17 个 .py**，其中 **5 个还没写**（`test_workflow_state.py` / `test_analysis_api.py` 是 D4，`test_validation.py` / `test_charts.py` 是 D5，`test_security.py` 是 D6）。第 18 个"文档里有的" `test_upload_api.py` 是反例说明，不是计划项。
+
+**本轮明确没动的部分**：`app/llm/`、`app/agents/{orchestrator,charts,validation}.py`、`app/api/routes_analysis.py`、`app/core/background.py`、`app/web/`、以及 `tests/` 里那 5 个 D4–D6 计划项——它们尚未落地，保留计划标注。
+
+**§2 与 §14.6 里 `test_contracts_d3.py` 那一行已按 Lead 的提交 `555cb80` 更新**（原文写的是"工作区新增未提交"）。这条本身也是个教训：**文档里"尚未提交"这类状态词一定会过期**，而它不会让任何测试变红 —— 所以写文档时能写 hash 就写 hash，写不了 hash 就写"截至 <基线>"。
 
 ---
 
