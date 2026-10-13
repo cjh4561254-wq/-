@@ -68,7 +68,8 @@ def load_dataframe(path: Path, ext: str) -> tuple[pd.DataFrame, str | None]:
     抛错
     ----
     空文件 / 只有表头 / 没有列 / 解析失败 / 超过行列上限 → `AppError(BAD_REQUEST)`；
-    ext 不是 csv/xlsx → `AppError(UNSUPPORTED_FILE)`。
+    ext 不是 csv/xlsx → `AppError(UNSUPPORTED_FILE)`（旧版 `.xls` 会额外给一句
+    "请在 Excel 里另存为 .xlsx" 的提示，因为那是用户最容易踩的一个坑）。
     """
     settings = config.get_settings()  # 配置一律在函数里现取，见 docs/ARCHITECTURE.md §4.0
 
@@ -78,10 +79,20 @@ def load_dataframe(path: Path, ext: str) -> tuple[pd.DataFrame, str | None]:
         df = _read_excel(path)
         encoding = None
     else:
+        # 防御性分支：正常路径上路由层已经用扩展名白名单拒过一次了。
+        # 这里再拦一次，是为了让"调用方传错类型"变成一个明确的 415，
+        # 而不是走到后面在某个奇怪的地方炸掉。
+        # detail 特意为最常见的 .xls 给一句能照着做的话：只说"不支持 xls"，
+        # 用户不知道下一步该干什么。
+        detail = (
+            "暂不支持旧版 .xls 格式，请在 Excel 里另存为 .xlsx 后再上传"
+            if ext == "xls"
+            else f"只支持 csv / xlsx，收到 ext={ext!r}"
+        )
         raise AppError(
             ErrorCode.UNSUPPORTED_FILE,
             f"不支持的文件类型：{ext}",
-            detail=f"只支持 csv / xlsx，收到 ext={ext!r}",
+            detail=detail,
         )
 
     # 上限检查放在清洗**之前**，理由见 _check_limits 的注释。
@@ -313,6 +324,11 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     1. 列名再去一次空格（pandas 造列名时可能把空格留下来）；
     2. 删掉整行都为空的行、整列都为空的列；
     3. 抹平行号。
+
+    另外说明一个"看着像 bug、其实不是"的现象：**删全空行这件事发生在 pandas 推断 dtype 之后**。
+    CSV 末尾只要有一行全空，整数列就会被读成 float64（手工探针里 `订单号` 从 1001 变成 1001.0），
+    因为 pandas 在这一列看见了缺失值，而 int 类型存不下缺失值。这是它的推断规则，不是我们读错了；
+    要变回整数得先确认"这些值确实都是整数"，那属于用户决策的清洗步骤，这里不擅自转换。
 
     为什么不顺手把 `"1,200"` 变成 `1200`、把 `"－"` 当成 0？
     因为清洗越界的成本很高：用户看到的会变成另一份数据，而他不知道我们动过手。
