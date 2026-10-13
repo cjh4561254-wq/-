@@ -143,7 +143,26 @@ pytest 红"，无法判断到底修没修。**修复是真的，证据是假的*
 **影响到**：所有人的验收流程。提交信息里含中文或引号时，用 here-string
 写入临时文件再 `git commit -F`，不要写成内联字符串。
 
-**状态**：已落地。基线演进：`9d37bcb` → `460cf8c` → `fe155af` → `44566c6` → `ff5b5cd` → `87c3019` → `dde1115` → `9cf7f4c` → `0fb4a8b` → `8c9b02c` → `62abfa2`。
+**补充（2026-10-13，backend-engineer 实测发现）：「全绿」必须在提交态上测，工作区绿 ≠ 提交态绿。**
+
+具体案例：`62abfa2` 单独 checkout 出来跑是**红的** —— 它里面
+`tests/test_loader.py` 已经有一条硬断言 `assert "另存为 .xlsx" in excinfo.value.detail`，
+但同一个 commit 的 `app/data/loader.py` 里连「另存为」三个字都没有
+（那句提示当时还在 backend-engineer 的工作区、没入库）。而 Lead 报的 105 passed
+是**工作区口径**。Lead 复核为真：`git show 62abfa2:app/data/loader.py`
+匹配「另存为」= 0 处，`git show 62abfa2:tests/test_loader.py` = 1 处。
+
+成因是并发写作的典型交错：**测试先入库、被测代码还在别人手上**。
+不是谁的疏忽，但结论一样 —— 两个人各跑一次工作区都是绿的，仓库里那个点却是红的。
+所以验收动作固定为：`git stash -u`（或 `git archive` 到仓库外的副本）后跑全量，
+跑完再 `git stash pop`。
+
+**影响到**：任务描述里凡写「全量 pytest 绿」，都指提交态。
+
+**状态**：已落地。基线演进：`9d37bcb` → `460cf8c` → `fe155af` → `44566c6` →
+`ff5b5cd` → `87c3019` → `dde1115` → `9cf7f4c` → `0fb4a8b` → `8c9b02c` → `2024148`。
+（`62abfa2` 提交态是红的，见上面的补充，**不要拿它当基线**；`34dd3a9` 才是数据层的
+第一个提交态全绿点。）
 
 **注意**：这个列表会随着每次提交变长。它的用途是"出事时知道该回到哪一个点"，
 而不是"证明进度"。真要看当前基线直接 `git log --oneline -1`。
