@@ -383,7 +383,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 ### 4.0.1 配置项总表（`app/config.py`，**已有字段照抄，不要重命名**）
 
-为什么给一张表：`Settings` 里已经有 11 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
+为什么给一张表：`Settings` 里已经有 12 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
 
 | 字段 | 类型 / 约束 | 默认值 | 对应环境变量 | 用途 | 状态 |
 |---|---|---|---|---|---|
@@ -393,6 +393,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `max_upload_mb` | `int`，`gt=0, le=200` | `10` | `MAX_UPLOAD_MB` | 单文件**字节数**上限；代码里用 `settings.max_upload_bytes`（= `mb * 1024 * 1024`） | 已存在 |
 | `max_rows` | `int`，`gt=0, le=5_000_000` | `200_000` | `MAX_ROWS` | 解析后**行数**上限（第 10 节第 2b 条） | **v1.1 新增** |
 | `max_columns` | `int`，`gt=0, le=2_000` | `200` | `MAX_COLUMNS` | 解析后**列数**上限（同上） | **v1.1 新增** |
+| `temp_dir` | `str`，`min_length=1` | `".tmp"` | `TEMP_DIR` | 临时文件目录（相对项目根）；用 `settings.temp_path` 取 `Path`。**不是给业务代码读的**：`app/main.py` 的 lifespan 用 `app/runtime.py` 的 `runtime_environment()` 把 `TEMP`/`TMP`/`TMPDIR` 指到这里，Starlette 处理 >1 MB 上传时的 spool 文件就落在里面；目录不可写会让**服务启动失败**（而不是悄悄换个地方）。原因见 `docs/DECISIONS.md` D-07 | **v1.1 新增** |
 | `llm_base_url` | `str` | `""` | `LLM_BASE_URL` | 模型服务地址（DeepSeek 等 OpenAI 兼容端点） | 已存在 |
 | `llm_model` | `str` | `""` | `LLM_MODEL` | 模型名 | 已存在 |
 | `llm_api_key` | `str`，`repr=False` | `""` | `LLM_API_KEY` | 密钥；**任何日志/响应里都不许出现** | 已存在 |

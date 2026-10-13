@@ -61,7 +61,16 @@ class Settings(BaseSettings):
 
     @property
     def temp_path(self) -> Path:
-        """应用临时目录；不是上传文件的长期存储目录。"""
+        """应用临时目录的绝对路径。
+
+        注意区分：`temp_dir` 是**配置字符串**（可能写的是相对路径），
+        `temp_path` 才是可以直接 `mkdir` / 传给 `tempfile` 的绝对路径。
+        上传目录的 `upload_dir` / `upload_path` 是同一组关系。
+
+        这个目录不是"上传文件的长期存储目录"——上传的原始字节在
+        `settings.upload_path` 里，这里放的是**用完就删的中间文件**
+        （例如 Starlette 处理大上传时的 spool 文件）。原因见 D-07。
+        """
         p = Path(self.temp_dir)
         return p if p.is_absolute() else PROJECT_ROOT / p
 
