@@ -63,6 +63,7 @@ pytest 保证 rootdir 下的 `conftest.py` 在任何测试模块被导入之前�
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import warnings
 from pathlib import Path
@@ -71,6 +72,17 @@ import pytest
 
 # 项目根目录 = 本文件所在目录（tests/ 与 app/ 的同级）
 PROJECT_ROOT = Path(__file__).resolve().parent
+
+# 把项目根放进 sys.path，让 `import app` 与 `import tests` 与"从哪儿跑 pytest"无关。
+#
+# 为什么需要：pytest.ini 里的 `pythonpath = .` 是相对 rootdir 生效的，但实测
+# 从 `tests/` 子目录跑时 `app` 包**收不到**（`--collect-only` 里没有 `<Package app>`，
+# 那条 `app/errors.py` 的 doctest 直接消失：根目录 88 passed、子目录 87 passed）。
+# 也就是说那条 doctest 回归网此前只是**碰巧**在根目录能跑（rootdir 恰好被插进
+# sys.path），一旦有人在别的入口跑就静默少一条 —— 静默少一条比明着报错更危险。
+# 这里显式插一次，行为就与入口无关了。
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # 测试产物的统一落点。用点号开头：一眼能看出是"运行时生成、不属于源码"。
 # 必须在 .gitignore 里（已加），否则等于把垃圾从根目录挪到子目录而已。
@@ -113,8 +125,66 @@ def pytest_configure(config: pytest.Config) -> None:
     `basetemp` 决定，而 `basetemp` 的默认值是 `tempfile.gettempdir()/pytest-of-<user>`。
     只要那条链路上任何一环变了（有人在命令行传 --basetemp、tempfile 的缓存被
     别的插件改过、我们上面的 mkdir 失败降级了），产物就会跑回项目根目录。
-    显式指定相对路径 `.tmp/pytest` 后，pytest 会相对 rootdir 解析它并自己创建，
-    与上面成功与否都无关 —— 两道保险叠加，产物的落点是确定的。
+    显式指定后，产物的落点是确定的 —— 与上面成功与否都无关。
+
+    两条踩过的坑，都写在这里免得以后改回去：
+
+    1) **必须用绝对路径，不能写相对的 ".tmp/pytest"。** pytest 会把相对的
+       basetemp 按**当前工作目录**解析（不是 rootdir）：`cd tests` 再跑就变成
+       `<root>/tests/.tmp/pytest`，而 conftest 只建了 `<root>/.tmp`。
+    2) **`.tmp/` 必须已经存在。** pytest 用 `basetemp.mkdir(mode=0o700)` 创建它，
+       没有 `parents=True`、也没有 `exist_ok=True`（见 `_pytest/tmpdir.py`
+       的 `TempPathFactory.getbasetemp`），所以父目录不存在会抛
+       `FileNotFoundError: [WinError 3]`，`.tmp` 是个同名文件则抛
+       `NotADirectoryError`/`FileExistsError`。
+
+    这两条合起来曾经造成一个真实回归：这个"保险"把"从子目录跑能过"变成了
+    "从子目录跑必挂"，而且**唯一用 `tmp_path` 的那个测试在 setup 阶段就 ERROR**，
+    看起来跟被测代码毫无关系。所以下面用 conftest 自己的绝对路径（`TEMP_DIR`
+    由 `Path(__file__).resolve().parent` 推出，与 CWD 无关），并且**只在
+    `.tmp/` 确认可用时才钉** —— 钉一个建不出来的路径，等于亲手把会话搞挂。
+    `.tmp/` 不可用时（上面 try 里已经 warning 过）这里就不管了，让 pytest 走
+    默认逻辑：产物可能落到项目根，但至少测试能跑完，`.gitignore` 兜住不提交。
     """
-    if not config.option.basetemp:
-        config.option.basetemp = ".tmp/pytest"
+    if config.option.basetemp:
+        return  # 调用方用 --basetemp 显式指定了，尊重它
+    if not _TEMP_ENV_SETUP_OK:
+        return
+    config.option.basetemp = str(TEMP_DIR / "pytest")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """补一条：从子目录跑时，把 `app/` 也加回收集范围。
+
+    踩过的坑（QA 发现）：pytest 只在 **调用目录 == rootdir** 时才用 pytest.ini 的
+    `testpaths`：
+        # _pytest/config/__init__.py:1415  _decide_args()
+        if invocation_dir == rootpath:
+            ... result = testpaths ...
+        else:
+            result = []          # ← 退回"从当前目录递归"
+    所以 `cd tests; pytest` 时 `testpaths = tests app` 只生效了一半：`app/` 不收集。
+    后果是 `app/errors.py` 里那条 doctest **静默消失**（根目录 88 passed、子目录
+    87 passed）—— 而静默少一条回归测试比明着报错更危险，那正是我们开
+    `--doctest-modules` 要防的"注释谎报"。
+
+    这里在收集开始前把 `app` 目录补进 `config.args`；但**只在"调用方没给显式目标"
+    时补**（即 `file_or_dir` 为空、args 是 pytest 自己按 testpaths/当前目录推出来的）。
+    调用方一旦显式点名文件，就让"显式指定"说了算 —— 否则同一个
+    `pytest test_health.py` 在根目录 12 个、在 tests/ 里 13 个（多出来的正是 app 的
+    doctest），两个入口行为不一致比少跑一条更难查。
+    """
+    app_dir = PROJECT_ROOT / "app"
+    if not app_dir.is_dir():
+        return
+    if config.invocation_params.dir == PROJECT_ROOT:
+        return  # testpaths 已生效，args 里本来就含 app
+    if config.option.file_or_dir:
+        return  # 调用方显式点名了目标，尊重它，不偷偷加范围
+    for arg in config.args:
+        try:
+            if Path(str(arg)).resolve() == app_dir.resolve():
+                return  # 防御：真的已经在里面了就别重复收集
+        except OSError:  # pragma: no cover - 防御性
+            continue
+    config.args = [*config.args, str(app_dir)]
