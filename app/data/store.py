@@ -2,18 +2,30 @@
 
 这个模块负责什么
 ----------------
-1. 生成 `dataset_id`（`uuid4().hex`，32 位十六进制，不可猜）。
-2. 把**用户上传的原始字节**原样落盘到 `data/uploads/{dataset_id}.{ext}`。
-3. 记住这份数据的元信息（`Dataset`）和 DataFrame 本身，供后面的接口按 id 取用。
-4. 缓存画像（`DatasetProfile`），同时把 `Dataset.has_profile` 置成 True。
+1. 记住一份数据的元信息（`Dataset`）和 DataFrame 本身，供接口按 id 取用。
+2. 缓存画像（`DatasetProfile`），同时把 `Dataset.has_profile` 置成 True。
+3. 提供 `build_stored_filename()`，让"落盘文件名只由 dataset_id + 扩展名决定"
+   成为一条**有测试的代码**，而不是一句口头约定。
 
 这个模块不负责什么
-------------------
+-----------------
+- 不生成 `dataset_id` —— 由路由层生成（理由见下）。
+- **不写任何文件** —— 上传的原始字节由路由层落盘（理由见下）。
 - 不做任何统计计算 —— 画像在 `app/data/profiler.py`。
 - 不解析文件 —— 解析在 `app/data/loader.py`。
 - 不知道 HTTP 的存在：没有 request / response，也不知道状态码是从哪来的。
-- 不校验扩展名白名单：那是路由层的事（只有它手里有 `UploadFile`）。
-  这里只保证一件事：**写出去的文件名一定是安全的**。
+- 不校验扩展名白名单：那是路由层的事（只有它手里有 `UploadFile` 和文件字节）。
+
+为什么 id 由路由层生成、落盘也在路由层（而不是 `store.create()` 一把做完）
+----------------------------------------------------------------------------
+`build_profile(df, dataset_id)` 需要 id，`Dataset` 里也要有 id，而这两件事都发生在
+"文件已经写下去之后"。如果 id 由 store 在自己内部生成，路由层就得先拿到 `Dataset`
+才能拼出画像参数，顺序会变成"store 落盘 → 返回 dataset → 路由再读一遍文件"，
+多读一遍文件换不来任何好处。所以：**生成 id 是路由层的第一步，store 只拿它当键用。**
+
+代价是"磁盘文件名必须等于 `{dataset_id}.{ext}`"这条性质不能只靠 store 自己保证，
+于是把它抽成模块级函数 `build_stored_filename()`：路由层写盘前用它拼路径，
+`register()` 内部用同一个函数填 `Dataset.stored_filename`，两边天然一致。
 
 为什么数据放在进程内的字典里（而不是数据库 / Redis）
 ---------------------------------------------------
@@ -25,27 +37,77 @@
 ------------------------------------------------------
 它指的是**用户上传的那份原始字节**的 sha256，用来回答"这两个文件是不是同一份"。
 
-- 路由层调用时永远带上 `raw_bytes`，磁盘内容就是原始字节，两者严格一致；
-- 只有测试和手工调用会走 `raw_bytes=None`（拿 DataFrame 重新序列化），
-  那时磁盘副本与 `sha256` / `size_bytes` 对不上 —— 但字段本身的含义不变，
-  它描述的仍然是"原始上传内容"。
+路由层是"分块读进内存 → 对读到的字节算 sha256 → 再把同一串字节写盘"，
+所以磁盘内容与 `sha256` / `size_bytes` 严格一致：落盘的不是"另存一份 DataFrame"，
+中途也不做任何换行符 / 编码转换。
 """
 
 import math
+import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pandas as pd
 
-from app import config
 from app.errors import AppError
 from app.schemas import ErrorCode
-from app.schemas_dataset import Dataset, DatasetProfile
+from app.schemas_dataset import ALLOWED_EXTENSIONS, Dataset, DatasetProfile
 
 # 预览给前几行。前端表格只展示一小段，多了既占带宽又没人看。
 PREVIEW_ROWS = 5
+
+# dataset_id 的合法形态：uuid4().hex，32 位小写十六进制。
+_DATASET_ID_PATTERN = re.compile(r"\A[0-9a-f]{32}\Z")
+
+
+def build_stored_filename(dataset_id: str, file_ext: str) -> str:
+    """拼出落盘文件名：`{dataset_id}.{file_ext}`，并**真的检查**这两个输入。
+
+    路由层写盘和 `register()` 填 `Dataset.stored_filename` 都调这一个函数，
+    所以"磁盘上的文件名"和"元信息里记的文件名"不可能不一致。
+
+    这里为什么要做检查（QA 提过的一个很对的质疑）
+    --------------------------------------------
+    这个函数最初只写了一句 f-string，docstring 里用"dataset_id 是我们自己生成的
+    32 位十六进制，天然安全"来解释它为什么不用校验。那句话**描述的是调用方的
+    意图，不是这个函数的事实** —— 谁都可以传别的东西进来，而这里恰好是拼路径的
+    地方。实测过：
+
+        build_stored_filename('../../../evil', 'csv')        -> '../../../evil.csv'
+        build_stored_filename('..\\\\..\\\\evil', 'csv')         -> '..\\\\..\\\\evil.csv'
+        build_stored_filename('C:\\\\Windows\\\\Temp\\\\x', 'csv')   -> 'C:\\\\Windows\\\\Temp\\\\x.csv'
+        build_stored_filename('', 'csv')                     -> '.csv'
+
+    `original_filename` 不参与拼接是对的（它可能带 `../../`），但"只拼了 id"
+    不等于"拼出来的东西安全"。所以这里两道：
+
+    1. `dataset_id` 必须匹配 `\\A[0-9a-f]{32}\\Z`。路径分隔符、`..`、盘符、空串
+       全都进不来 —— 这是**格式**上的第一道闸。
+    2. `file_ext` 必须在 `ALLOWED_EXTENSIONS` 里。它也来自请求，同样不能默认它是干净的。
+
+    两道都抛 `INTERNAL_ERROR`（不是 BAD_REQUEST）：`dataset_id` 是服务端自己生成的，
+    走到这里还不合法说明是**我们的** bug，不是用户填错了什么。真正的边界防护不靠
+    这里 —— 路由层写完盘还会用 `resolve()` 复核父目录（见 §10 安全清单），
+    这一层是"让错误更早、更明确地炸"，不是唯一的防线。
+
+    面试常问："你这个地方为什么要校验一个自己生成的值？"
+        答：因为这是拼文件路径的地方。安全边界要放在**使用点**，不能放在
+        "调用方应该传对"这个假设上；假设不会在代码里留下痕迹，检查会。
+    """
+    if not _DATASET_ID_PATTERN.match(dataset_id):
+        # 注意 detail 里不能回显原始值：它可能很长，也可能带换行塞进日志。
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "数据集编号不合法",
+            detail="dataset_id 必须是 32 位小写十六进制",
+        )
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "扩展名不合法",
+            detail=f"file_ext 必须是 {' / '.join(ALLOWED_EXTENSIONS)} 之一",
+        )
+    return f"{dataset_id}.{file_ext}"
 
 
 class DatasetStore:
@@ -60,26 +122,25 @@ class DatasetStore:
         self._datasets: dict[str, Dataset] = {}
         self._profiles: dict[str, DatasetProfile] = {}
 
-    def create(
+    def register(
         self,
+        dataset_id: str,
         df: pd.DataFrame,
         original_filename: str,
-        ext: str,
+        file_ext: str,
         size_bytes: int,
         sha256: str,
-        raw_bytes: bytes | None = None,
     ) -> Dataset:
-        """登记一份新数据：落盘 + 记元信息 + 记住 DataFrame，返回 `Dataset`。
+        """登记一份新数据：记元信息 + 记住 DataFrame，返回 `Dataset`。
 
-        `raw_bytes` 有值（**路由层永远这样调**）
-            把用户上传的原始字节原样写到 `data/uploads/{dataset_id}.{ext}`。
-            此时磁盘上的文件与 `sha256` / `size_bytes` 严格一致。
+        调用顺序（路由层）：**先落盘、再 register**。文件写失败时异常在落盘那一步
+        就抛出去了，根本走不到这里，所以字典里不会留下一条"有元信息、却没有文件"
+        的假记录 —— 这是把落盘放在 store 外面之后顺带得到的好处。
 
-        `raw_bytes=None`（只有测试和手工调用会这样）
-            退化成拿 `df` 重新序列化落盘：csv 用 `utf-8-sig`，
-            xlsx 用 `df.to_excel(..., index=False)`。
-            **注意：这条路上磁盘里的副本和 `Dataset.sha256` / `size_bytes` 不再一致**，
-            因为那两个值描述的是"用户原始上传内容"。线上路径不会出现这种不一致。
+        `dataset_id` 由调用方生成，`file_ext` 必须是 csv / xlsx（`Dataset` 的字段类型
+        会校验，别的值在这里会变成 pydantic 的校验错误 —— 路由层在写盘之前就拒掉了）。
+        撞上已存在的 id 抛 500：正常路径永远撞不上（uuid4 有 2^122 种可能），
+        撞上就是调用方的 bug，不能悄悄覆盖掉别人的数据。
 
         `original_filename` 只作为**说明文字**存进元信息，绝不参与拼路径 ——
         用户上传的名字里可能有 `../../` 之类的东西。
@@ -87,14 +148,13 @@ class DatasetStore:
         返回的 `Dataset.has_profile` 一定是 False：画像要等 profiler 算完，
         再通过 `set_profile` 补上（这样前端能分辨"还没算"和"算完了是空的"）。
         """
-        dataset_id = uuid4().hex
-        stored_filename = f"{dataset_id}.{ext}"
-        target = self._resolve_target(stored_filename)
-
-        if raw_bytes is not None:
-            target.write_bytes(raw_bytes)
-        else:
-            _write_dataframe(df, target, ext)
+        # 先查重再登记：覆盖别人的数据是查不回来的事故，宁可当场报错。
+        if dataset_id in self._datasets:
+            raise AppError(
+                ErrorCode.INTERNAL_ERROR,
+                "数据集编号重复",
+                detail=f"dataset_id={dataset_id!r} 已经登记过，不会覆盖",
+            )
 
         dataset = Dataset(
             dataset_id=dataset_id,
@@ -103,8 +163,8 @@ class DatasetStore:
             column_count=int(df.shape[1]),
             created_at=datetime.now(timezone.utc),
             has_profile=False,
-            stored_filename=stored_filename,
-            file_ext=ext,
+            stored_filename=build_stored_filename(dataset_id, file_ext),
+            file_ext=file_ext,
             size_bytes=int(size_bytes),
             sha256=sha256,
             columns=[str(name) for name in df.columns],
@@ -112,9 +172,6 @@ class DatasetStore:
             preview_rows=_preview_rows(df),
         )
 
-        # 落盘成功之后才写字典。反过来写的话，磁盘满 / 没权限时
-        # 字典里会留下一条"有元信息、却没有文件"的假记录，
-        # 后面按 id 取数据时才发现文件不存在，很难查。
         self._frames[dataset_id] = df
         self._datasets[dataset_id] = dataset
         return dataset
@@ -155,49 +212,6 @@ class DatasetStore:
     def get_profile(self, dataset_id: str) -> DatasetProfile | None:
         """取画像；没算过就返回 None（路由层据此触发一次 profiler）。"""
         return self._profiles.get(dataset_id)
-
-    def _resolve_target(self, stored_filename: str) -> Path:
-        """拼出要写的绝对路径，并复核它确实落在 upload_path 里面。
-
-        `stored_filename` 里只有 uuid 和扩展名，本来就不可能穿越到别的目录；
-        但"本来就不可能"是靠人记住的，写成一条机器检查才能防止以后有人
-        顺手把用户文件名拼进来。`resolve()` 会把 `..` 和符号链接都解析掉，
-        所以这条判断看的是最终的真实位置。
-        """
-        upload_dir = config.get_settings().upload_path
-        upload_dir.mkdir(parents=True, exist_ok=True)
-
-        target = (upload_dir / stored_filename).resolve()
-        if target.parent != upload_dir.resolve():
-            raise AppError(
-                ErrorCode.BAD_REQUEST,
-                "文件名不合法",
-                detail=f"stored_filename={stored_filename!r} 不在上传目录内",
-            )
-        return target
-
-
-def _write_dataframe(df: pd.DataFrame, target: Path, ext: str) -> None:
-    """`raw_bytes` 没传时的兜底：把 DataFrame 重新序列化写盘。
-
-    只在测试和手工调用时会走到这里（**线上路由层永远传原始字节**）：
-    重新序列化既慢又吃内存，还会丢掉原始文件里的格式信息
-    （比如 Excel 的单元格格式、日期显示样式）。
-    这就是为什么它只能是兜底，不能是主路径。
-
-    csv 写 `utf-8-sig`：带 BOM 的 UTF-8 是 Excel 双击打开中文 CSV 不出乱码的写法，
-    符合"用户拿到文件还想用 Excel 看一眼"的直觉。
-    """
-    if ext == "csv":
-        df.to_csv(target, index=False, encoding="utf-8-sig")
-    elif ext == "xlsx":
-        df.to_excel(target, index=False, engine="openpyxl")
-    else:
-        raise AppError(
-            ErrorCode.UNSUPPORTED_FILE,
-            f"不支持的文件类型：{ext}",
-            detail=f"只支持 csv / xlsx，收到 ext={ext!r}",
-        )
 
 
 def _preview_rows(df: pd.DataFrame, limit: int = PREVIEW_ROWS) -> list[dict[str, str]]:

@@ -30,6 +30,17 @@ from pydantic import BaseModel, Field
 # 而且 .xls 文件里宏/公式的处理更容易出意外。直接在入口拒绝，比读到一半报错好。
 FileExt = Literal["csv", "xlsx"]
 
+# 同一个白名单的"运行时可枚举"版本（元组，顺序就是报错文案里的顺序）。
+#
+# 为什么两个都要：`FileExt` 给类型检查器和 Pydantic 用（写错字在开发时就被抓），
+# 但"这个扩展名合不合法"运行时还要再问一次，而 `Literal` 没法在运行时遍历。
+# 之前这个元组散在路由层、`Dataset.file_ext` 自己也有隐式的 Literal 约束，
+# 三份清单迟早会漂移（比如给 `FileExt` 加了 xls、白名单没加，就会出现
+# "校验通过、读的时候才报不支持"）。现在只有一份，下面那条测试盯着它们不许分家。
+ALLOWED_EXTENSIONS: tuple[str, ...] = tuple(
+    str(arg).lstrip('"\'') for arg in FileExt.__args__
+)
+
 # 我们对一列的"语义类型"判断结果（不是 pandas 的 dtype，而是业务视角）。
 # 两者都要保留：planner 与工具用 semantic_type 决定"这列能不能求和"，
 # 而 dtype 是排错时的原始依据。
