@@ -417,6 +417,32 @@ dtype、语义类型、缺失值数量与比例、唯一值数量、五数概括
 **状态**：已确认。三次真实失败分别发生在修复 `tests/test_loader.py` 假绿断言、
 补 D-06 文字、验证 `git show` 输出时。
 
+**补记（2026-10-13，写提交信息时又踩了一次同源的坑）**：D-11 说的是"Python 源码
+不要内联进命令"，但**提交信息**一直走 `Set-Content -Encoding UTF8` + `git commit -F`
+—— 而 PowerShell 5.1 的 `Set-Content -Encoding UTF8` **会写 BOM**。
+实测（`.tmp/bom_lab`，前 3 字节）：
+
+```
+a_setcontent.txt  EF BB BF  BOM=True    ← Set-Content -Encoding UTF8
+b_outfile.txt     EF BB BF  BOM=True    ← Out-File -Encoding UTF8
+c_dotnet.txt      E4 B8 AD  BOM=False   ← [System.IO.File]::WriteAllText + UTF8Encoding($false)
+```
+
+BOM 跟着 `git commit -F` 进了提交对象。用 `git cat-file commit <hash>` 看原始字节
+（**不能用 `git log --format=%s`** —— 那是 PowerShell 管道解码后的样子，正是 D-11
+说的那种"看起来像证据"的东西）：
+
+```
+e4ab7f3  BOM=False   ← 修好之后
+24aeac1  BOM=False
+9441429  BOM=False
+df63d12  BOM=True    ← 之前几个都带
+```
+
+修法：提交信息文件一律用 `.tmp/write_commit_msg.py`（Python 以 `encoding="utf-8"`
+写）而不是 `Set-Content`。**已经在提交里的 BOM 不回改** —— 那是重写历史，
+收益只有一个不可见字符，不值得。
+
 ---
 
 ## D-12 报给用户的编码，描述**文件实际的样子**，不描述"哪个解码器读成功了"
