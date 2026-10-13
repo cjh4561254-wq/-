@@ -1,6 +1,10 @@
 """pytest 的全局装配文件 —— 在**任何测试收集之前**执行。
 
-这个文件目前只做一件看起来很小、但很重要的事：**把临时目录从项目根目录挪走。**
+这个文件做两件事，都是"看起来很小、但很重要"：
+
+1. **把临时目录从项目根目录挪走**（第 1 道保险：环境变量）。
+2. **钉住 pytest 自己的 `basetemp`**，并从子目录跑时把 `app/` 补回收集范围
+   （`pytest_configure` 钩子）。
 
 
 为什么需要它（这是实测出来的真问题，不是预防性措施）
@@ -119,7 +123,20 @@ if _TEMP_ENV_SETUP_OK:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """第 2 道保险：直接钉住 pytest 自己的 basetemp。
+    """两个钩子动作合并在这里。**这里必须只有一个 `pytest_configure`。**
+
+    ⚠️ 合并原因（真实事故，别改回去）：这个函数原来被定义了两次 ——
+    "钉 basetemp" 与 "补收集 app/" 各一个。Python 里同名函数**后者覆盖前者**，
+    所以第一个**从来没有执行过**。它的危害不是功能坏了（basetemp 走默认值
+    `tempfile.gettempdir()/pytest-of-<user>`，而上一段已经把 `TEMP` 指到
+    `.tmp/`，所以恰好也落在 `.tmp/` 里，仓库根是干净的），
+    而是**注释谎报**：那一大段"两条踩过的坑"描述的是不会执行的代码。
+    同时 `--basetemp` 尊重逻辑、mkdir 降级逻辑**全都不生效**。
+    发现方式：backend-engineer 观察 `.tmp/pytest` 的 mtime 在跑测试前后没变，
+    而 `.tmp/pytest-of-jun` 每次都在变。
+
+    ---------------------------- 动作 1 ----------------------------
+    钉住 pytest 自己的 basetemp。
 
     为什么环境变量还不够：`tmp_path` / `tmp_path_factory` 的落点由 pytest 的
     `basetemp` 决定，而 `basetemp` 的默认值是 `tempfile.gettempdir()/pytest-of-<user>`。
@@ -138,23 +155,15 @@ def pytest_configure(config: pytest.Config) -> None:
        `FileNotFoundError: [WinError 3]`，`.tmp` 是个同名文件则抛
        `NotADirectoryError`/`FileExistsError`。
 
-    这两条合起来曾经造成一个真实回归：这个"保险"把"从子目录跑能过"变成了
-    "从子目录跑必挂"，而且**唯一用 `tmp_path` 的那个测试在 setup 阶段就 ERROR**，
-    看起来跟被测代码毫无关系。所以下面用 conftest 自己的绝对路径（`TEMP_DIR`
-    由 `Path(__file__).resolve().parent` 推出，与 CWD 无关），并且**只在
-    `.tmp/` 确认可用时才钉** —— 钉一个建不出来的路径，等于亲手把会话搞挂。
+    这两条合起来曾经造成一个真实回归：从子目录跑时**唯一用 `tmp_path` 的那个测试
+    在 setup 阶段就 ERROR**，看起来跟被测代码毫无关系。所以下面用 conftest 自己的
+    绝对路径（`TEMP_DIR` 由 `Path(__file__).resolve().parent` 推出，与 CWD 无关），
+    并且**只在 `.tmp/` 确认可用时才钉** —— 钉一个建不出来的路径，等于亲手把会话搞挂。
     `.tmp/` 不可用时（上面 try 里已经 warning 过）这里就不管了，让 pytest 走
     默认逻辑：产物可能落到项目根，但至少测试能跑完，`.gitignore` 兜住不提交。
-    """
-    if config.option.basetemp:
-        return  # 调用方用 --basetemp 显式指定了，尊重它
-    if not _TEMP_ENV_SETUP_OK:
-        return
-    config.option.basetemp = str(TEMP_DIR / "pytest")
 
-
-def pytest_configure(config: pytest.Config) -> None:
-    """补一条：从子目录跑时，把 `app/` 也加回收集范围。
+    ---------------------------- 动作 2 ----------------------------
+    从子目录跑时，把 `app/` 也加回收集范围。
 
     踩过的坑（QA 发现）：pytest 只在 **调用目录 == rootdir** 时才用 pytest.ini 的
     `testpaths`：
@@ -174,6 +183,12 @@ def pytest_configure(config: pytest.Config) -> None:
     `pytest test_health.py` 在根目录 12 个、在 tests/ 里 13 个（多出来的正是 app 的
     doctest），两个入口行为不一致比少跑一条更难查。
     """
+    # ---- 动作 1：钉 basetemp（对应上面"动作 1"的说明）----
+    if not config.option.basetemp:  # 调用方用 --basetemp 显式指定了就尊重它
+        if _TEMP_ENV_SETUP_OK:
+            config.option.basetemp = str(TEMP_DIR / "pytest")
+
+    # ---- 动作 2：从子目录跑时补收集 app/ ----
     app_dir = PROJECT_ROOT / "app"
     if not app_dir.is_dir():
         return
