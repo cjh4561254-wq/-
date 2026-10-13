@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from app import config
-from app.data.loader import load_dataframe
+from app.data.loader import CSV_ENCODINGS, load_dataframe
 from app.errors import AppError
 from app.schemas import ErrorCode
 from app.schemas_dataset import ALLOWED_EXTENSIONS
@@ -236,7 +236,12 @@ def test_every_allowed_extension_is_actually_loadable(tmp_path, ext):
     df, encoding = load_dataframe(path, ext)
 
     assert df.shape == (1, 1)
-    assert encoding is None if ext == "xlsx" else encoding in ("utf-8", "utf-8-sig")
+    # 不用 `assert A if cond else B` 这种写法来省两行：那样无论
+    # encoding 是什么，总有一半的分支是真的，等于什么都没验。
+    if ext == "xlsx":
+        assert encoding is None  # 二进制格式没有编码这回事
+    else:
+        assert encoding in CSV_ENCODINGS  # 必须是我们真试过的那些编码之一
 
 
 # --------------------------------------------------------------------------
