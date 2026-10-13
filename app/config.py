@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # ---- 上传 ----
     upload_dir: str = "data/uploads"
     max_upload_mb: int = Field(default=10, gt=0, le=200)
+    # 行数 / 列数上限：字节数限制挡不住"很小但很宽/很长"的文件。
+    # 例：200 列 × 20 万行的 CSV 可能只有 3 MB，却能把内存和 pandas 拖死。
+    # 上限值参考架构文档 §10 安全清单。
+    max_rows: int = Field(default=200_000, gt=0, le=5_000_000)
+    max_columns: int = Field(default=200, gt=0, le=2_000)
 
     # ---- 大模型（第四阶段才用到）----
     llm_base_url: str = ""

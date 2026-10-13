@@ -346,11 +346,12 @@ raise AppError(ErrorCode.NOT_FOUND, "没有这个数据集")            # → HT
 raise AppError(ErrorCode.UNSUPPORTED_FILE, "只支持 .csv / .xlsx")  # → HTTP 415
 raise AppError(ErrorCode.FILE_TOO_LARGE, "文件超过 10 MB 上限")    # → HTTP 413
 raise AppError(ErrorCode.BAD_REQUEST, "问题不能为空")             # → HTTP 400
+raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底")  # → HTTP 503
 
-# 状态码默认由 ERROR_STATUS[code] 查表得到（§7.3），**路由里不要手写状态码**；
-# status_code 只在极少数"同一个 code 要配不同状态码"时显式传入（第一版没有这种场景）。
-# 唯一例外：框架自己抛的 HTTPException / RequestValidationError，由 main.py
-# 的同两个 handler 兜住（404 / 405 / 422），业务代码不需要操心。
+# 状态码全部由 ERROR_STATUS[code] 查表得到（§7.3），**路由里不要手写状态码**；
+# status_code 参数只在极少数"同一个 code 要配不同状态码"时显式传入（v1.1 起已无调用点）。
+# 另一类来源是框架自己抛的 HTTPException / RequestValidationError，由 main.py
+# 的四个 handler 兜住（404 / 405 / 422 / 500），业务代码不需要操心。
 ```
 
 ```python
@@ -376,24 +377,23 @@ raise AppError(ErrorCode.BAD_REQUEST, "问题不能为空")             # → HT
 
 | 类名 | 字段 | 类型 | 必填 | 含义 |
 |---|---|---|---|---|
-| `Dataset` | `dataset_id` | `str` | 是 | `uuid4().hex`，全局唯一 |
+| `DatasetSummary`<br>（上传接口的返回体） | `dataset_id` | `str` | 是 | `uuid4().hex`，全局唯一（32 位小写十六进制） |
 | | `original_filename` | `str` | 是 | 用户上传时的原始文件名（**只存不用于拼路径**） |
+| | `row_count` | `int` | 是 | 行数（不含表头），`ge=0` |
+| | `column_count` | `int` | 是 | 列数，`ge=0` |
+| | `created_at` | `datetime` | 是 | 上传时间（UTC） |
+| | `has_profile` | `bool` | 否 | 是否已生成画像（默认 `False`） |
+| `Dataset(DatasetSummary)`<br>（详情接口的返回体） | *（继承上面 6 个字段）* | — | — | **实现时用继承，不要重抄一遍字段**：`class Dataset(DatasetSummary)` —— `Dataset` 就是"摘要 + 文件与预览信息"。以后给 `DatasetSummary` 加字段，`Dataset` 自动拿到，不会漏 |
 | | `stored_filename` | `str` | 是 | 落盘名：`{dataset_id}.{csv\|xlsx}`，与用户输入完全无关 |
 | | `file_ext` | `Literal["csv","xlsx"]` | 是 | 白名单扩展名（`.xls` 一律拒绝，避免老格式坑） |
-| | `size_bytes` | `int` | 是 | 文件字节数 |
+| | `size_bytes` | `int` | 是 | 文件字节数，`ge=0` |
 | | `sha256` | `str` | 是 | 内容哈希，用于"同一个文件重复上传"判断 |
-| | `row_count` | `int` | 是 | 行数（不含表头） |
-| | `column_count` | `int` | 是 | 列数（含未参与分析的列） |
-| | `columns` | `list[str]` | 是 | 列名原样列表（保持顺序） |
-| | `dtypes` | `dict[str,str]` | 是 | `{列名: 原始 dtype 字符串}`，例 `{"销售额":"float64"}` |
-| | `created_at` | `datetime` | 是 | 上传时间（UTC） |
-| | `preview_rows` | `list[dict[str,str]]` | 否 | 前 5 行、值统一转 `str`（避免 `NaN` 不能序列化） |
-| `DatasetSummary` | `dataset_id` | `str` | 是 | 给前端列表用的精简版 |
-| | `original_filename` | `str` | 是 | |
-| | `row_count` | `int` | 是 | |
-| | `column_count` | `int` | 是 | |
-| | `created_at` | `datetime` | 是 | |
-| | `has_profile` | `bool` | 否 | 是否已生成画像（默认 `False`） |
+| | `columns` | `list[str]` | 否 | 列名原样列表（保持顺序），默认 `[]` |
+| | `dtypes` | `dict[str,str]` | 否 | `{列名: 原始 dtype 字符串}`，例 `{"销售额":"float64"}`，默认 `{}` |
+| | `preview_rows` | `list[dict[str,str]]` | 否 | 前 5 行、值统一转 `str`（避免 `NaN` / `Timestamp` 不能序列化），默认 `[]` |
+
+> **上传接口为什么只返回 `DatasetSummary` 而不返回 `Dataset`**：预览 + 列名 + dtype 加起来可能几 KB，上传响应应该尽快返回；完整信息走 `GET /api/datasets/{id}`（§7 接口 3）。这也是"两个模型都保留"的理由，不是为了对称好看。
+> **实现已落地**（`app/schemas_dataset.py`，123 行，D2 交付），字段与本表逐个对应，照抄本表不会冲突。
 
 ### 4.2 `DatasetProfile`（`app/schemas_dataset.py`，D3）
 
@@ -766,7 +766,9 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
   const body = await resp.json();               // 4xx/5xx 也能正常解析
   if (!resp.ok || !body.ok) { showError(body.error); return; }   // 只有这一套
   ```
-- **框架抛的异常也已经统一成同一个外壳**（`app/main.py` 的两个 exception handler，`tests/test_error_format.py` 守护）——这条是 460cf8c 落实的，本节所有接口都建立在它之上。
+- **框架抛的异常也已经统一成同一个外壳**（`app/main.py` 的四个 exception handler：`AppError` / `StarletteHTTPException`（含 404、405）/ `RequestValidationError`（422）/ 兜底 `Exception`（500），`tests/test_error_format.py` 守护）——这条是 460cf8c 落实的，本节所有接口都建立在它之上。
+  - 框架异常的 `error.code` 由 `app/main.py` 的 `_FRAMEWORK_STATUS_CODES` 表决定：`404 → NOT_FOUND`、`405 → METHOD_NOT_ALLOWED`、其余 → `BAD_REQUEST`（422 走这条）。**405 不归 `BAD_REQUEST`**：前端按 `code` 选文案，把"方法不对"说成"参数写错"会把排查方向带偏。
+  - 405 响应**必须转发 `Allow` 头**（RFC 7231 §6.5.5 要求），所以 handler 里是 `JSONResponse(status_code=exc.status_code, headers=exc.headers, ...)`——手写 `return JSONResponse(...)` 很容易把 `headers` 丢掉，这也是"禁止绕过统一外壳"的原因之一。
 
 #### 7.0 HTTP 状态码 → 错误码映射表（**逐行照此实现，不许自创**）
 
@@ -777,18 +779,18 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 | 参数格式/类型不对（`RequestValidationError`） | 422 | `BAD_REQUEST` |
 | 业务参数非法（问题为空、问题过长） | 400 | `BAD_REQUEST` |
 | 资源不存在（路径、`dataset_id`、`workflow_id`） | 404 | `NOT_FOUND` |
-| 方法不对 | 405 | `BAD_REQUEST` |
+| 方法不对 | 405 | `METHOD_NOT_ALLOWED` |
 | 扩展名不在白名单 / 文件伪装 | 415 | `UNSUPPORTED_FILE` |
 | 文件超过 `max_upload_bytes` | 413 | `FILE_TOO_LARGE` |
 | 文件内容解析失败（坏编码、空文件、只有表头、超宽） | 400 | `BAD_REQUEST` |
-| 外部依赖不可用（模型未配置且无法兜底） | 503 | `BAD_REQUEST` |
+| 外部依赖不可用（模型未配置且无法兜底） | 503 | `SERVICE_UNAVAILABLE` |
 | 工作流超时 | **200** | `WORKFLOW_TIMEOUT` |
 | 服务器内部未预期错误 | 500 | `INTERNAL_ERROR` |
 
 **这张表里有三行需要解释**：
 - **413 / 415 是 HTTP 本来就有的语义**：413 Payload Too Large、415 Unsupported Media Type。"用户传了一个 70 MB 的文件被拒绝"用 200 回答等于向 HTTP 层撒谎 —— 打开 F12 看到一片 200，排查时必须点开每个响应体才知道发生了什么；413 一眼就知道。
 - **`WORKFLOW_TIMEOUT` 走 200**：请求本身完全成功（202 已受理、轮询到了终态），"超时"是**这次分析的结果**，不是请求失败；它属于业务语义，所以放 `error.code`。
-- **503 的含义是"服务现在做不了、以后可能行"**。第一版只有一处：模型未配置、连规则兜底也用不了，所以 `POST /api/analysis` 无法受理。实现方式是 `raise AppError(ErrorCode.BAD_REQUEST, "...", status_code=503)`（`status_code` 参数的唯一用途，见 §7.3）。前端此时只需显示 `message` + "重试"按钮，不要提示"请检查你的输入"；**不要按 `code` 猜提示语，按 HTTP 状态码分支**（503 → 稍后重试，400 → 检查输入）。
+- **503 的含义是"服务现在做不了、以后可能行"**。第一版只有一处：模型未配置、连规则兜底也用不了，所以 `POST /api/analysis` 无法受理。**v1.1 更新：这里改用专用错误码 `SERVICE_UNAVAILABLE`**（`raise AppError(ErrorCode.SERVICE_UNAVAILABLE, ...)`，状态码由 `ERROR_STATUS` 查表得到 503），不再借用 `BAD_REQUEST` —— 借用的后果是前端按 `code` 分流时会提示"请检查你的输入"，把"我们的依赖挂了"说成"你的请求写错了"。前端此时显示 `message`（"服务暂时不可用，请稍后重试"）+ "重试"按钮即可。
 
 **落到代码的约束（禁止绕过统一外壳）**：
 1. 所有错误响应体形状**永远**是 `{"ok":false,"data":null,"error":{"code","message","detail"}}`，只有 HTTP 状态码不同。
@@ -802,12 +804,12 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 | 2 | 上传数据集 | `POST /api/datasets/upload` | `multipart/form-data`，字段名 `file` | **200** + `DatasetSummary{dataset_id,original_filename,row_count,column_count,created_at,has_profile}` | **415** `UNSUPPORTED_FILE`（扩展名不在白名单/文件伪装）、**413** `FILE_TOO_LARGE`（> `max_upload_bytes`）、**400** `BAD_REQUEST`（空文件/坏编码/只有表头/超过行数列数上限） |
 | 3 | 查询数据集 | `GET /api/datasets/{dataset_id}` | 无 | **200** + `Dataset`（含 `columns`、`dtypes`、`preview_rows`） | **404** `NOT_FOUND` |
 | 4 | 生成/读取画像 | `GET /api/datasets/{dataset_id}/profile` | 无 | **200** + `DatasetProfile`；首次调用时**同步**生成（≤2 秒）并缓存进 `DatasetSummary.has_profile` | **404** `NOT_FOUND`、**500** `INTERNAL_ERROR` |
-| 5 | 提交分析 | `POST /api/analysis` | `QuestionRequest{dataset_id,question,max_steps?}` | **202** + `{workflow_id,status:"PENDING",dataset_id,created_at}`，**立即返回，不等分析** | **404** `NOT_FOUND`（数据集不存在）、**400** `BAD_REQUEST`（问题为空/过长）、**503** `BAD_REQUEST`（模型未配置且无法兜底，`detail` 写"请在 .env 配置 LLM_*"） |
+| 5 | 提交分析 | `POST /api/analysis` | `QuestionRequest{dataset_id,question,max_steps?}` | **202** + `{workflow_id,status:"PENDING",dataset_id,created_at}`，**立即返回，不等分析** | **404** `NOT_FOUND`（数据集不存在）、**400** `BAD_REQUEST`（问题为空/过长）、**503** `SERVICE_UNAVAILABLE`（模型未配置且无法兜底，`detail` 写"请在 .env 配置 LLM_*"） |
 | 6 | 查询工作流状态 | `GET /api/workflows/{workflow_id}` | 无 | **200** + `{workflow_id,status,step,step_index,total_steps,question,dataset_id,tasks:[{task_id,description,status,error}],charts:[ChartResult],error,created_at,finished_at,has_report}` —— **不含 `report`**（报告可能很大，单独接口取） | **404** `NOT_FOUND`、**200** `WORKFLOW_TIMEOUT`（轮询时判定超时并落 `FAILED`，此时 `error.code=WORKFLOW_TIMEOUT`）、**500** `INTERNAL_ERROR`。注意：**工作流自身 `FAILED`（含超时）仍然是 HTTP 200** —— 查询请求成功了，失败的是被查询的工作流 |
 | 7 | 获取报告 | `GET /api/workflows/{workflow_id}/report` | 无 | **200** + `{report:FinalReport, validation:ValidationResult, results:[ToolResult], llm_used:bool}` | **404** `NOT_FOUND`（没有这个工作流）；报告还没生成 → **400** `BAD_REQUEST`（`message="报告尚未生成"`，`detail` 带当前 `status`） |
 | 8 | 获取图表 | `GET /api/workflows/{workflow_id}/charts/{filename}` | 无 | **200** + PNG 二进制（`Content-Type: image/png`） | **404** `NOT_FOUND`（文件不存在）、**400** `BAD_REQUEST`（文件名含 `/`、`\`、`..` 或不是 12 位 hex + `.png` —— 这是"非法输入"，不是"资源不存在"，所以是 400 不是 404） |
 
-> **读表提醒**：`NOT_FOUND` 在接口 3/5/6/7 都是 **404**，`UNSUPPORTED_FILE` 是 **415**，`FILE_TOO_LARGE` 是 **413** —— 同一个错误码在不同接口里的状态码是**一致的**，因为它由 `app/errors.py` 的 `ERROR_STATUS` 映射表统一决定，不在路由里逐处指定。这就是 A-1 要解决的"同一个 NOT_FOUND 有时 404 有时 200"的根源。
+> **读表提醒（v1.1）**：`NOT_FOUND` 在接口 3/5/6/7 都是 **404**，`UNSUPPORTED_FILE` 是 **415**，`FILE_TOO_LARGE` 是 **413**，`SERVICE_UNAVAILABLE` 是 **503**，`METHOD_NOT_ALLOWED` 是 **405** —— 同一个错误码在不同接口里的状态码是**一致的**，因为它由 `app/errors.py` 的 `ERROR_STATUS` 映射表（§7.3）统一决定，不在路由里逐处指定。这就是 A-1 要解决的"同一个 NOT_FOUND 有时 404 有时 200"的根源。**框架抛的 405 也走同一个 `code`**（`app/main.py` 的 handler 里 `METHOD_NOT_ALLOWED`），所以前端看到 405 时 `body.error.code` 是 `"METHOD_NOT_ALLOWED"`，不是 `"BAD_REQUEST"`。
 
 ### 7.1 我在你给的 8 个接口之外做的两处调整（已于第 14 节拍板通过）
 
@@ -843,7 +845,25 @@ for (const c of state.charts) {
 
 ### 7.2 错误码补充（写在 `app/schemas.py` 的 `ErrorCode` 里，D2）
 
-现在是 5 个：`BAD_REQUEST / NOT_FOUND / UNSUPPORTED_FILE / FILE_TOO_LARGE / INTERNAL_ERROR`。建议**只加 1 个**：`WORKFLOW_TIMEOUT`（工作流超时专用，前端可以提示"数据太大或模型太慢，请缩小问题范围"）。其余（工具类错误）留在 `ToolResult.error_code` 这一层，不上升到 HTTP 错误码——因为它们不是"请求失败"，而是"任务失败"，工作流仍然能返回 `SUCCESS_WITH_WARNINGS`。
+现在（v1.1）是 **8 个，已全部落地**（`app/schemas.py` 的 `ErrorCode`，顺序与仓库一致）：
+
+```
+BAD_REQUEST / NOT_FOUND / METHOD_NOT_ALLOWED / UNSUPPORTED_FILE
+FILE_TOO_LARGE / SERVICE_UNAVAILABLE / WORKFLOW_TIMEOUT / INTERNAL_ERROR
+```
+
+| 错误码 | HTTP | 什么时候用 |
+|---|---|---|
+| `BAD_REQUEST` | 400（框架校验另见 422） | 业务参数非法（问题为空/过长）、文件解析失败 |
+| `NOT_FOUND` | 404 | 数据集 / 工作流 / 图表不存在 |
+| `METHOD_NOT_ALLOWED` | 405 | HTTP 方法不对（`app/main.py` 把框架的 405 翻译过来）。**v1.1 新增**：原先归 `BAD_REQUEST`，同样会把"你请求的方式错了"说成"你的参数写错了" |
+| `UNSUPPORTED_FILE` | 415 | 扩展名不在白名单 / 文件伪装 |
+| `FILE_TOO_LARGE` | 413 | 超过 `max_upload_bytes` |
+| `SERVICE_UNAVAILABLE` | 503 | 依赖不可用（模型未配置且无法兜底）。**v1.1 新增**，理由见 §7.0 的 503 说明 |
+| `WORKFLOW_TIMEOUT` | **200** | 工作流超时（这**是**结果，不是请求失败） |
+| `INTERNAL_ERROR` | 500 | 服务器内部未预期错误，只由兜底 handler 产生 |
+
+其余（工具类错误 `TOOL_NOT_FOUND` / `BAD_PARAMS` / `COLUMN_NOT_FOUND` / `BAD_OPERATION` / `BAD_RESULT`）留在 `ToolResult.error_code` 这一层，**不上升到 HTTP 错误码**——因为它们不是"请求失败"，而是"任务失败"，工作流仍然能返回 `SUCCESS_WITH_WARNINGS`。**两组码不要混用**：`ErrorCode` 是枚举、约束 HTTP 状态码；`error_code` 是字符串、只在工具结果里出现。
 
 ### 7.3 `ERROR_STATUS` 映射表（`app/errors.py`，D2 —— A-1 的落地点）
 
@@ -852,8 +872,10 @@ for (const c of state.charts) {
 DEFAULT_MESSAGE: dict[ErrorCode, str] = {          # message 兜底，避免出现空 message
     ErrorCode.BAD_REQUEST: "请求不合法",
     ErrorCode.NOT_FOUND: "资源不存在",
+    ErrorCode.METHOD_NOT_ALLOWED: "请求方法不支持",
     ErrorCode.FILE_TOO_LARGE: "文件太大",
     ErrorCode.UNSUPPORTED_FILE: "文件类型不支持",
+    ErrorCode.SERVICE_UNAVAILABLE: "服务暂时不可用，请稍后重试",
     ErrorCode.WORKFLOW_TIMEOUT: "分析超时",
     ErrorCode.INTERNAL_ERROR: "服务器内部错误",
 }
@@ -870,19 +892,21 @@ class AppError(Exception):
 
 # 唯一事实来源：错误码 → HTTP 状态。见 §7.0 的表，逐行对应。
 ERROR_STATUS: dict[ErrorCode, int] = {
-    ErrorCode.BAD_REQUEST:      400,
-    ErrorCode.NOT_FOUND:        404,
-    ErrorCode.UNSUPPORTED_FILE: 415,
-    ErrorCode.FILE_TOO_LARGE:   413,
-    ErrorCode.INTERNAL_ERROR:   500,
-    ErrorCode.WORKFLOW_TIMEOUT: 200,   # 请求成功、业务结果超时（§7.0 最后三行的例外）
+    ErrorCode.BAD_REQUEST:          400,
+    ErrorCode.NOT_FOUND:            404,
+    ErrorCode.METHOD_NOT_ALLOWED:   405,
+    ErrorCode.FILE_TOO_LARGE:       413,
+    ErrorCode.UNSUPPORTED_FILE:     415,
+    ErrorCode.SERVICE_UNAVAILABLE:  503,
+    ErrorCode.WORKFLOW_TIMEOUT:     200,   # 请求成功、业务结果超时（§7.0 最后几行的例外）
+    ErrorCode.INTERNAL_ERROR:       500,
 }
 ```
 
 **三条实现细节（照抄代码时会用到）**：
 1. **清洗发生在 handler，不在 `AppError.__init__` 里**：`app/main.py` 的 `app_error_handler` 写的是 `detail=sanitize_detail(exc.detail) if exc.detail else request.url.path`。好处是"清洗"只有一道关口，4 个 handler（`AppError` / `HTTPException` / `RequestValidationError` / 兜底 `Exception`）用的是同一个函数，不会出现"某个路径忘了洗"。
 2. **不要手写 422 的映射**：`ERROR_STATUS` 里 `BAD_REQUEST → 400`，而框架的 `RequestValidationError` 由 `app/main.py` 显式返回 **422**（与 §7.0 表一致）。这就是"同一个 `error.code=BAD_REQUEST` 可以配两个状态码"的现象，属于 A-1 拍板的刻意设计，不是 bug。
-3. **503 用 `status_code` 显式覆盖**（唯一需要它的地方）：模型未配置且无法兜底时 `raise AppError(ErrorCode.BAD_REQUEST, "...", status_code=503)` —— 这正是第 4 个参数存在的理由，语义可再优化的意见记在 §14.2 末尾。
+3. **`status_code` 参数现在没有调用点了（这是好事，别删）**：v1.0 时 503 需要 `raise AppError(ErrorCode.BAD_REQUEST, "...", status_code=503)` 来借状态码；v1.1 加了 `SERVICE_UNAVAILABLE → 503` 之后，**每个错误码都能查表得到正确的状态码**，第 4 个参数就空了出来。保留它的理由：将来真出现"同一个 `code` 要配两个状态码"的场景（例：上传接口的坏编码想给 415 而不是 400），不必再改构造函数签名、不必再改调用方。**默认不传，传之前先想清楚为什么不给它一个专用 `code`。**
 
 **为什么把映射表放在 `errors.py` 而不是每个路由里**：状态码一旦分散，就会重现 A-1 那个问题——同一个 `NOT_FOUND` 在一个接口是 404、在另一个接口因为"顺手返回了 ApiResponse"变成 200。集中一张表之后，`tests/test_error_format.py` 只要多测几条就能锁住全部接口的一致性。
 
@@ -1050,12 +1074,26 @@ async function pollWorkflow(workflowId) {
     if (TERMINAL.includes(resp.data.status)) {
       clearInterval(timer);
       renderCharts(resp.data.charts);             // 更新 E 区
+      if (!resp.data.has_report) return;           // 没有报告就别发这次请求（§7.1 第 3 条）
       const rep = await fetch(`/api/workflows/${workflowId}/report`).then(r => r.json());
       if (rep.ok) renderReport(rep.data); else showError(rep.error.message);
     }
   }, 1000);
 }
 ```
+
+### 9.2.1 前端错误提示怎么写（v1.1，配合 §7.0 的状态码表）
+
+**默认一行就够**：`showError(body.error)` 把 `error.message` 显示成红色文字——后端每个错误码都有中文兜底文案（§7.3 的 `DEFAULT_MESSAGE`），所以前端**不需要**维护一张"错误码 → 中文"的对照表（那会变成第二份事实来源，后端改了文案前端不知道）。
+
+只在**需要区别对待**时才看 `error.code`，第一版只有两处：
+
+| `error.code` | 前端行为 | 为什么不能一视同仁 |
+|---|---|---|
+| `SERVICE_UNAVAILABLE` | 文案下方多给一个"重试"按钮 | 这是"等一下再来"，不是用户能改的问题 |
+| `FILE_TOO_LARGE` / `UNSUPPORTED_FILE` | 在上传区就地提示"换个文件"，不要弹全局错误 | 用户下一步动作就是重新选文件，把提示放在选择控件旁边最省事 |
+
+其余一律显示 `message` 即可。**不要按 HTTP 状态码分支**（503 与 500 对用户没区别，对排查也没区别）——按 `code` 分支，因为 `code` 是后端明确承诺的业务语义。
 
 规则：**只轮询状态接口**（小），**不轮询报告接口**（大）；进入终态立刻 `clearInterval`，避免关掉页面后还在打请求（可以再加 `visibilitychange` 事件，隐藏标签页时暂停轮询，属于优化项）。
 
@@ -1259,7 +1297,7 @@ D1 骨架 ──▶ D2 数据层/上传 ──▶ D3 工具层 ──▶ D4 LLM+
 | 核对项 | 结论 |
 |---|---|
 | `app/config.py` 删除模块级 `settings` 对象 | **文档已同步**：第 4.0 节写成强制约定（`from app import config` + 函数内 `config.get_settings()`、测试用 `config.reset_settings_cache()`），并列出两种禁止写法。附录 B 里"`app/config.py` 不改已有字段、D2 只追加"的描述仍然成立——删除模块级对象是行为变化，不是字段变化 |
-| `app/main.py` 统一错误处理器 | **文档已同步**：第 7 节开头新增"框架异常 → 同一外壳"映射表（404/405 → `NOT_FOUND`/`BAD_REQUEST`，422 → `BAD_REQUEST`，`detail` 内容），并明确"HTTP 状态码表达 HTTP 语义、`error.code` 表达业务语义"。**v1.1 更新**：原先"业务错误一律 200"的绝对表述已**整段删除**，改为 §7.0 的完整状态码映射表（含 202/413/415/503）+ `app/errors.py` 的 `ERROR_STATUS` 集中映射，理由与代价见 **§14.2 第 1 条** |
+| `app/main.py` 统一错误处理器 | **文档已同步**：第 7 节开头新增"框架异常 → 同一外壳"映射表（404 → `NOT_FOUND`、422 → `BAD_REQUEST`，`detail` 内容），并明确"HTTP 状态码表达 HTTP 语义、`error.code` 表达业务语义"。**v1.1 更新**：原先"业务错误一律 200"的绝对表述已**整段删除**，改为 §7.0 的完整状态码映射表（含 202/413/415/503）+ `app/errors.py` 的 `ERROR_STATUS` 集中映射，理由与代价见 **§14.2 第 1 条**；405 后来也从 `BAD_REQUEST` 拆成专用的 `METHOD_NOT_ALLOWED`（见 §14.2 第 11 条） |
 | lifespan 创建上传目录 / `/api/health` 新增 `upload_dir_ready` | **文档已同步**：接口 1 的成功响应字段列表已含 `upload_dir_ready`，并注明"`false` 不算错误，属于能跑但要提示的状态"。**建议**：第 9 节页面把"服务状态"小徽章做成 `llm_configured` + `upload_dir_ready` 两个点，避免上传目录不可写时前端只显示"在线" |
 | `tests/test_error_format.py` 已存在（守护上述外壳 + CORS） | **文档已同步**：目录树里标注为"(已存在, 460cf8c) … **不要动**"，避免后续把它的期望改成旧格式 |
 | matplotlib 缓存目录坑（WinError 5） | **文档已同步**：`config.py` 顶部已 `os.environ.setdefault("MPLCONFIGDIR", <项目根>/.mplcache)`，所以第 13 节风险 8 的 matplotlib 部分只需保证"中文字体 rcParams"，**不需要**再处理缓存目录；第 4.0 节已写死"`agents/charts.py` 不许改 `MPLCONFIGDIR`、不许设非 Agg 后端" |
@@ -1273,7 +1311,7 @@ D1 骨架 ──▶ D2 数据层/上传 ──▶ D3 工具层 ──▶ D4 LLM+
 |---|---|---|---|---|
 | 1 | **[阻塞] A-1** HTTP 状态码自相矛盾 | ✅ 已改 | §7 开头统一约定、**新增 §7.0 状态码映射表**、§7 接口表错误码列、**新增 §7.3 `ERROR_STATUS`**、§4.0 代码约定、§14.1 | 删除"业务错误一律 HTTP 200"整句；照抄 A-1 表 12 行（200/202/400/404/405/413/415/422/500/503 + `WORKFLOW_TIMEOUT`→200）；接口表每格写成 `**415** UNSUPPORTED_FILE` 形式；`POST /api/analysis` 改 **202**；补 4 条"禁止绕过统一外壳"约束 |
 | 2 | **[阻塞] A-2** `charts` 三处不一致 | ✅ 已改 | §4.8、§7 接口 6 / 接口 8、**新增 §7.1.1**、§9.1 E 区 | 写死 `ChartResult` 字段与 `url` **由后端拼好** `/api/workflows/{workflow_id}/charts/{filename}`；§7.1.1 给出前端唯一正确写法 `img.src = c.url`（不拼字符串），并说明"前端拼接会让 404 的图片链接无法被 pytest 覆盖" |
-| 3 | **[阻塞] A-3** 目录设计冲突 | ✅ 已改 | §2 目录树、§2.1、§3 | 收口为 `app/data/{loader,store,profiler}.py` + `app/errors.py` + `app/api/routes_datasets.py` 一份清单；同一处标注"`app/datasets.py` 与 `app/security/files.py` 这两个提法已作废"（保留此说明是为了让后来者知道它们**不是**被漏掉） |
+| 3 | **[阻塞] A-3** 目录设计冲突 | ✅ 已改 | §2 目录树、**§2.1**、§3 | 收口为 `app/data/{loader,store,profiler}.py` + `app/errors.py` + `app/api/routes_datasets.py` 一份清单；同一处（**§2.1 末尾**，不是 §2.2）标注"`app/datasets.py` 与 `app/security/files.py` 这两个提法已作废"（保留此说明是为了让后来者知道它们**不是**被漏掉） |
 | 4 | B-1 `WorkflowState` 定义位置分裂 | ✅ 已改 | §4.0 判据、§4.5 | 全部模型定义在 `app/schemas_workflow.py`；`app/core/registry.py` **一行模型定义都没有**；判据一句话："数据长什么样"进 `schemas_*.py`，"数据放在哪、怎么同步"进 `core/` |
 | 5 | B-2 锁说明矛盾 + 漏"登记图表" | ✅ 已改 | **新增 §8.2.1 / §8.2.2 / §8.2.3** | ① `_lock` 只保护 registry 的 dict，`state` 内部字段**不需要**加锁（附"禁止到处加锁 / 禁止返回 deepcopy"两条禁令）；② `charts.py` 不许改 `state`，由 `analysis.py` 在**同一函数体内连续两行**写文件 + `state.charts.append(chart)`，并说明"写"与"登记"分离会产生孤儿 PNG + 接口 404；③ `DatasetStore` 同属进程内，单进程限制同样适用，要一起写进 README |
 | 6 | B-3 源码扫描测试做法 | ✅ 已改 | §10 第 7 条 | 改为 `ast.parse` + `ast.walk` 判断 `ast.Call` 的 `eval/exec/compile/__import__`（附约 25 行测试代码）；写明"注释与 docstring 天然不在语法树里"；并诚实标注 AST 检查**防不住** `getattr(obj, name)()` 这类间接调用，真正的边界是工具白名单注册表 |
@@ -1282,10 +1320,36 @@ D1 骨架 ──▶ D2 数据层/上传 ──▶ D3 工具层 ──▶ D4 LLM+
 | 9 | D-9 追加本轮修订记录 | ✅ 已改 | **本节 §14.2** + 文档头部 | 文档标题与版本行改为 **v1.1（2026-10-13 修订）**，并指向本节 |
 
 **顺带做掉的两处一致性修正（不在 9 条里，但同源）**：
-1. **`AppError` 签名统一为 4 参数** `AppError(code, message, detail=None, status_code=None)`：审核意见写的 `status_code=...` 三参数与我 §7.3 的两参数查表写法不一致，照哪边写都会让 backend-engineer 卡一下。现在两者并存——**默认查表**（保住"状态码集中在一处"这个 A-1 的核心收益），`status_code` 只作为极少数场景的显式覆盖。
+1. **`AppError` 签名统一为 4 参数** `AppError(code, message, detail=None, status_code=None)`：审核意见写的 `status_code=...` 三参数与我 §7.3 的两参数查表写法不一致，照哪边写都会让 backend-engineer 卡一下。现在两者并存——**默认查表**（保住"状态码集中在一处"这个 A-1 的核心收益），`status_code` 只作为极少数场景的显式覆盖（v1.1 收尾后已无调用点，见下条）。
 2. **§14.1 里"原先'业务错误一律 200'已改为……"的描述**已更新为"整段删除 + 指向 §7.0"，避免这一节自己留下旧说法。
 
-**唯一想请 Lead 再拍一次的一处（不影响 9 条验收，也不阻塞 backend 开工）**：A-1 表里"外部依赖不可用（模型未配置且无法兜底）"配的是 **503 + `BAD_REQUEST`**。HTTP 状态码 503 是对的，但 `error.code=BAD_REQUEST` 会让排查的人以为是自己请求写错了（`BAD_REQUEST` 的语义是"你的请求有问题"）。**核查后发现 backend 已经用 §7.3 的 `status_code` 参数把这个坑绕过去了**（`raise AppError(ErrorCode.BAD_REQUEST, "...", status_code=503)`，见 `app/errors.py` 的 `__init__` docstring 与已落地的 `ERROR_STATUS`），所以不改也能跑、且状态码正确。若 Lead 愿意，建议在 `ErrorCode` 里补一个 `SERVICE_UNAVAILABLE`（`ERROR_STATUS` 加 1 行 → 503），这样前端就可以按 `code` 而不是按 HTTP 状态码分流。**代价约 2 行代码**（枚举 1 个值 + 映射表 1 行）；若认为"少一个错误码更简单"，本条按原样保留，不影响任何验收。
+**v1.1 收尾追加（不在 9 条里，Lead 拍板后由 Lead 改代码、我同步文档）**：
+
+| # | 追加项 | 谁做的 | 文档同步位置 |
+|---|---|---|---|
+| 10 | `ErrorCode.SERVICE_UNAVAILABLE`（→503），不再借用 `BAD_REQUEST` | Lead 改 `app/schemas.py` + `app/errors.py` | §7.0 表、§7.0 的 503 段、§7.1 接口 5、§7.2 对照表、§7.3 两个代码块、本节末段 |
+| 11 | `ErrorCode.METHOD_NOT_ALLOWED`（→405），原来归 `BAD_REQUEST` | 同上 | 同上（§7.0 表 405 行、§7.2 对照表、§7.3 两个代码块） |
+| 12 | `AppError.status_code` 参数从此没有调用点（保留不删） | 我（结论） | §7.3 第 3 条 |
+| 13 | 非清零验收口径正式化（正文 vs 作废说明/变更记录） | 我提议、Lead 采纳 | 本节末段 |
+
+同步后自证：§7.3 的两个代码块与 `app/errors.py`（217 行）**逐行一致**（8 个错误码、8 条 `DEFAULT_MESSAGE`）；§7.2 的 8 个错误码顺序与 `app/schemas.py:29-36` 一致。
+
+**本轮唯一一处"提出来但没自己改"的地方，已由 Lead 拍板并落地（v1.1 收尾同步）**：
+
+A-1 表里"外部依赖不可用（模型未配置且无法兜底）"原本配的是 **503 + `BAD_REQUEST`**。状态码 503 是对的，但 `error.code=BAD_REQUEST` 会让前端按 `code` 分流时提示"请检查你的输入"，把"我们的依赖挂了"说成"你的请求写错了"——这是会浪费排查时间的那类错误提示。**Lead 的决定：采纳，加 `ErrorCode.SERVICE_UNAVAILABLE`（→503）**；并顺手把 405 也补了 `ErrorCode.METHOD_NOT_ALLOWED`（原来归 `BAD_REQUEST`，同样的指错方向问题）。
+
+- **落地位置**：`app/schemas.py` 的 `ErrorCode`（8 个值）+ `app/errors.py` 的 `ERROR_STATUS` / `DEFAULT_MESSAGE`（8 行），**已由 Lead 直接实现**（不是我改的代码）。
+- **文档同步（我改的这两处）**：§7.0 状态码表的两行（405 → `METHOD_NOT_ALLOWED`、503 → `SERVICE_UNAVAILABLE`）、§7.1 接口 5 的错误码列、§7.3 的 `DEFAULT_MESSAGE` 与 `ERROR_STATUS` 两个代码块、§7.2 从"现在是 5 个 + 建议加 1 个"改写为 8 个的对照表、§7.0 的 503 段落。两份代码块现在与仓库**逐行一致**，照抄不会错。
+- **附带结论（我写进 §7.3 第 3 条）**：`AppError.__init__` 的第 4 个参数 `status_code` 现在**没有调用点了**。它不删——将来出现"同一个 `code` 要配两个状态码"时不必改构造函数签名；但默认不传。
+- **代价**：枚举 2 个值 + 映射表 2 行 + `DEFAULT_MESSAGE` 2 行，与我在回报里估的"约 2 行"同量级。
+
+**这件事的做法本身也记一笔**（Lead 明确认可，值得后来者照做）：发现"按字面执行验收会损害文档价值"时，**先提出替代口径和代价，而不是闷头把字符串删干净让验收数字好看**。本次具体表现：审核要求"文档里不得出现 `app/datasets.py` / `app/security/files.py` / `sales_sample.csv`"，而前两个名字在 **§2.1 的"已作废"说明**和 §14.2 的变更记录里**必须**出现（否则后来者会以为是被漏掉的）。**最终口径（Lead 已正式采纳）**：
+
+> `docs/ARCHITECTURE.md` **正文**（除 **§2.1**「已作废」说明与 §14.2 变更记录外）不得出现 `app/datasets.py`、`app/security/files.py`、`sales_sample.csv`；不得出现"业务错误一律 HTTP 200"作为**设计表述**。
+
+> 口径里的小修正：Lead 原话写的是"§2.2"，但文档里没有 §2.2 —— 那句"这两个提法已作废"在 **§2.1 依赖方向**的末尾（表格之后那一段）。**按 §2.1 执行**；这处编号笔误由我在本节改正，避免后来者按 §2.2 去核对（那里是 §8.2.2 之类的其他节）。
+
+按此口径自证（v1.1 收尾，逐节统计）：`sales_sample.csv` 共 3 处、**全部在 §14.2**；`app/datasets.py` 与 `app/security/files.py` 各 5 处（**§2.1 各 1 处 + §14.2 各 4 处**）；`业务错误一律 HTTP 200` 共 3 处（全在 §14.2，均为变更记录里的引用）；**正文其他位置 0 处**。
 
 ---
 
