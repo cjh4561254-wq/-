@@ -20,6 +20,7 @@ from app import config
 from app.api.routes_analysis import router as analysis_router
 from app.api.routes_datasets import router as datasets_router
 from app.api.routes_health import router as health_router
+from app.api.routes_workflows import router as workflows_router
 from app.errors import AppError, sanitize_detail
 from app.schemas import ApiError, ApiResponse, ErrorCode
 from app.runtime import runtime_environment
@@ -200,6 +201,7 @@ async def unexpected_exception_handler(request: Request, exc: Exception) -> JSON
 app.include_router(health_router, prefix="/api")
 app.include_router(datasets_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
+app.include_router(workflows_router, prefix="/api")
 
 
 @app.get("/", tags=["meta"], summary="根路径")
