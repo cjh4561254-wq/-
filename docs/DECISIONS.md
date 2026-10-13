@@ -484,7 +484,8 @@ probe_nobom.csv（无 BOM）→ reported encoding = 'utf-8-sig'   ✗ 文件里�
 
 **有牙的证据**：把翻译那行注释掉 → `tests/test_loader.py` 与
 `tests/test_data_layer_e2e.py` 共 `2 failed`，红在
-`AssertionError: assert 'utf-8-sig' == 'utf-8'`；恢复后 137 passed。
+`AssertionError: assert 'utf-8-sig' == 'utf-8'`；恢复后全绿（当时是 137 passed；
+总数会随测试增加而变，**别把这里的数字当成"现在多少项"**）。
 
 **测试为什么是两条而不是一条**：单看"带 BOM 报 utf-8-sig"或单看"不带 BOM 报 utf-8"，
 一个恒真的实现（永远返回 `utf-8-sig`、或永远返回 `utf-8`）都能骗过其中一条。
@@ -494,7 +495,8 @@ probe_nobom.csv（无 BOM）→ reported encoding = 'utf-8-sig'   ✗ 文件里�
 **影响到**：`app/data/loader.py`、`tests/test_loader.py`、
 `tests/test_data_layer_e2e.py`、`app/api/routes_datasets.py`（只消费不修改）。
 
-**状态**：已实现，`137 passed`（仓库根与 `tests/` 子目录两个入口都验过）。
+**状态**：已实现，当时全绿为 `137 passed`（仓库根与 `tests/` 子目录两个入口都验过）。
+**当前基线计数不写在这里** —— 会腐烂。要看现在多少项，跑一次 `pytest -q`，或看 `README.md` 的状态块。
 
 ---
 
