@@ -20,6 +20,15 @@ env/
 data/uploads/*
 !data/uploads/.gitkeep
 data/db/*.db
+# 图表也是同一类：`charts.render_chart()` 每次出图都会往 data/charts/<workflow_id>/
+# 里写一个 PNG，跑一次全量测试就是一百多个文件。它们是**可重新生成的产物**，
+# 不是源码 —— 但也不能"整个目录删掉"，接口 8 要按 URL 直接返回文件，
+# 目录不存在时 FileResponse 会 404。所以用"忽略内容、保留目录位"的写法：
+# 先忽略目录下所有东西，再用 `!` 放行一个 .gitkeep。
+# 这条是实测发现后补的（D5 交付时 ai-agent-engineer 报"仓库里躺着 148 个测试 PNG，
+# git check-ignore -v data/charts/ 零输出"），不是预防性加的。
+data/charts/*
+!data/charts/.gitkeep
 *.log
 
 # ---- 安装过程的临时残留 ----
