@@ -4,13 +4,14 @@
 由主控智能体调度专业子智能体，用真实的 Python 工具完成统计计算与图表生成，
 并校验报告中的关键数字。
 
-> **项目状态：第 2 天 / 共 7 天 —— 上传、数据理解与示例数据集已完成，通过独立 QA 复验，
-> 并通过第二阶段门禁（真实 HTTP 19 项攻击用例 + 干净检出全绿）。**
-> 已完成：应用骨架、配置层、健康检查、统一错误格式、**文件上传（CSV / xlsx）**、
-> **数据预览与详情**、**数据画像（缺失值 / 重复行 / 类型识别 / 五数概括）**、
-> **可复现的示例数据集**（`data/samples/sales.csv` + 生成脚本）、149 项自动化测试。
-> 验收证据见 [docs/STAGE2_ACCEPTANCE.md](docs/STAGE2_ACCEPTANCE.md)。
-> 分析工具、多智能体调度、大模型接入在第 3 天起逐步加入。
+> **项目状态：第 7 天 / 共 7 天 —— 全链路已跑通并全部提交（HEAD `a677425`）。**
+> 已完成：应用骨架与统一错误契约、**文件上传（CSV / xlsx）与数据画像**、
+> **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
+> 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
+> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**，594 项自动化测试。
+> 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
+> 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
+> 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
 > README 只写实际跑通的东西，不会提前写"已完成"。
 
 ---
@@ -135,9 +136,11 @@ python -m uvicorn app.main:app --reload --port 8000
 
 | 地址 | 用途 |
 |---|---|
+| http://127.0.0.1:8000/ | **分析页面**（前端单页：上传 → 提问 → 六步进度 → 图表 → 报告） |
 | http://127.0.0.1:8000/api/health | 健康检查，返回 JSON |
 | http://127.0.0.1:8000/docs | 自动生成的接口文档（可直接点按钮试接口） |
-| http://127.0.0.1:8000/ | 入口提示 |
+
+页面用的 CSS / JS 由 `/static/*` 提供（挂载的是 `app/web/` 目录，见 `app/main.py:79`）。
 
 `--reload` 表示改代码后自动重启，方便开发；正式跑的时候去掉这个参数。
 
@@ -148,8 +151,8 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**149 passed**（148 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
-**不需要先启动服务，也不占用端口**。
+预期：**594 passed**（593 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+**不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
 （`pytest.ini` 里开了 `--doctest-modules`，`testpaths = tests app`）。
@@ -178,30 +181,62 @@ python -m pytest
 ai-data-analyst-agent/
 ├─ app/
 │  ├─ __init__.py
-│  ├─ main.py                  # FastAPI 实例、CORS、启动钩子、统一错误处理
+│  ├─ main.py                  # FastAPI 实例、CORS、启动钩子、挂载 /static、四个异常处理器
 │  ├─ config.py                # Settings：把系统环境变量读成有类型的配置对象（不读 .env，D-19）
-│  ├─ runtime.py               # 进程状态 + 启动时的运行环境（临时目录）
+│  ├─ runtime.py               # 进程状态 + 启动时的运行环境（临时目录探测与回退）
 │  ├─ errors.py                # AppError、错误码到 HTTP 状态码的映射、路径脱敏
-│  ├─ schemas.py               # ApiResponse 统一响应外壳、ApiError、错误码
-│  ├─ schemas_dataset.py       # Dataset / DatasetProfile 等数据契约
+│  ├─ schemas.py               # ApiResponse 统一响应外壳、ApiError、ErrorCode
+│  ├─ schemas_dataset.py       # Dataset / DatasetSummary / DatasetProfile
+│  ├─ schemas_tool.py          # ToolResult / ChartResult（含 filename ↔ url 一致性校验）
+│  ├─ schemas_workflow.py      # AnalysisTask / TaskPlan / FinalReport / WorkflowState / WorkflowStatusData
+│  ├─ schemas_llm.py           # 模型回复的解析结构（LLMReply）
 │  ├─ api/
-│  │  ├─ routes_health.py      # GET /api/health
-│  │  └─ routes_datasets.py    # 上传 / 详情 / 画像
-│  └─ data/
-│     ├─ loader.py             # 读 CSV / xlsx：编码、分隔符、最小清洗、上限
-│     ├─ store.py              # 进程内数据集仓库（不写盘）
-│     └─ profiler.py           # 数据画像：缺失值、重复行、语义类型、五数概括
+│  │  ├─ routes_health.py      # 接口 1：GET /api/health
+│  │  ├─ routes_datasets.py    # 接口 2-4：上传 / 详情 / 画像
+│  │  ├─ routes_analysis.py    # 接口 5：POST /api/analysis（202，立刻返回）
+│  │  └─ routes_workflows.py   # 接口 6-8：轮询 / 报告 / 图表
+│  ├─ core/
+│  │  ├─ background.py         # BackgroundTasks 外壳：起后台、兜异常、盖 finished_at
+│  │  └─ registry.py           # 工作流注册表（进程内 dict + 一把锁）
+│  ├─ data/
+│  │  ├─ loader.py             # 读 CSV / xlsx：编码、分隔符、最小清洗、行列上限
+│  │  ├─ store.py              # 数据集仓库（DataFrame 只在内存里，不进 Pydantic）
+│  │  └─ profiler.py           # 数据画像：缺失值、重复行、语义类型、五数概括（零 LLM）
+│  ├─ tools/
+│  │  ├─ registry.py           # 白名单注册表：7 个工具的名字 / 参数 schema / 返回结构
+│  │  ├─ validate.py           # 5 类校验的前 4 类（工具名 → 参数 → 字段 → 操作）
+│  │  ├─ jsonable.py           # 返回值清洗：numpy 标量 / NaN / Timestamp → 纯 JSON 类型
+│  │  ├─ describe.py           # describe_dataset / missing_values
+│  │  ├─ aggregate.py          # group_aggregate / top_n
+│  │  ├─ compare.py            # compare_groups / correlation
+│  │  └─ timeseries.py         # time_series_summary
+│  ├─ llm/
+│  │  ├─ client.py             # OpenAI 兼容客户端：超时 + 重试 + 拿不到合法 JSON 就报错
+│  │  └─ prompts.py            # 两处模型调用的提示词（规划 / 写报告）
+│  ├─ agents/
+│  │  ├─ planner.py            # 问题 → TaskPlan（先走规则；配了 key 才问模型）
+│  │  ├─ analysis.py           # 执行单个任务：查白名单 → 校验 → 调工具 → 装 ToolResult
+│  │  ├─ charts.py             # 出图（中文字体 + 只摆位置、不做任何聚合）
+│  │  ├─ validation.py         # 报告数字溯源校验 + 报告拼装
+│  │  └─ orchestrator.py       # 六阶段编排：全项目唯一有权改 WorkflowState 的地方
+│  └─ web/                     # 前端单页：index.html / app.css / app.js（挂到 /static）
 ├─ scripts/
-│  └─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
-├─ tests/                      # 149 项，覆盖 loader / store / profiler / 接口 / 安全 / 示例数据
+│  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
+│  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完九段、自己关掉
+├─ tests/                      # 594 项（27 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
+│  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）
 │  └─ samples/
 │     └─ sales.csv             # 示例销售数据：2168 行 × 9 列，故意含缺失值 / 重复行 / 异常值
 ├─ docs/
-│  ├─ ARCHITECTURE.md          # 架构设计（含目录树、接口、校验、安全清单）
-│  ├─ STAGE2_ACCEPTANCE.md     # 第二阶段的验收说明（交付物、怎么自己跑一遍）
-│  └─ DECISIONS.md             # 决策记录：每条都写了"为什么"
+│  ├─ ARCHITECTURE.md          # 架构设计（目录树、字段级模型、接口、校验、安全、技术选型）
+│  ├─ WORKFLOW.md              # 一次提问从进到出（阶段 / 状态机 / 失败表现 / 手工复现命令）
+│  ├─ INTERVIEW_QA.md          # 面试问答 12 条（问 / 答 / 追问 / 证据）
+│  ├─ HIGHLIGHTS.md            # 亮点与难点（现象 → 根因 → 定位 → 修复 → 防复发）
+│  ├─ DECISIONS.md             # 决策记录：每条都写了"为什么"
+│  ├─ DEMO.md                  # scripts/demo.py 的真实运行输出
+│  └─ STAGE2_ACCEPTANCE.md     # 第二阶段的验收说明（交付物、怎么自己跑一遍）
 ├─ .env.example                # 环境变量清单（应用不读它；只有键名与占位值，无真实密钥）
 ├─ .gitattributes              # 行尾策略：示例 CSV 钉成 LF，保证克隆后字节一致
 ├─ .gitignore
@@ -239,12 +274,20 @@ ai-data-analyst-agent/
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/` | 入口提示 |
+| GET | `/` | **分析页面**（返回 `app/web/index.html`） |
+| GET | `/static/*` | 页面用的 CSS / JS（挂载 `app/web/` 目录） |
 | GET | `/api/health` | 服务状态与配置自检 |
 | POST | `/api/datasets/upload` | 上传 CSV / xlsx，落盘 + 解析 + 登记 |
 | GET | `/api/datasets/{dataset_id}` | 数据集详情（含前 5 行预览） |
 | GET | `/api/datasets/{dataset_id}/profile` | 数据画像（首次调用时计算，之后走缓存） |
+| POST | `/api/analysis` | **提交分析问题，返回 202 + `workflow_id`**（立刻返回，不等算完） |
+| GET | `/api/workflows/{workflow_id}` | 轮询状态：13 个小字段，**故意不含报告** |
+| GET | `/api/workflows/{workflow_id}/report` | 完整报告 + 校验结果（`report` / `validation` / `results` / `llm_used`） |
+| GET | `/api/workflows/{workflow_id}/charts/{filename}` | 图表 PNG（`filename` 形如 `a1b2c3d4e5f6.png`） |
 | GET | `/docs` | Swagger 接口文档（FastAPI 自动生成） |
+
+分析链路为什么要 202 + 轮询、每个阶段失败时长什么样、六种会变成 `FAILED` 的情况，
+都写在 [docs/WORKFLOW.md](docs/WORKFLOW.md)（含可直接复制的 PowerShell 复现命令）。
 
 上传的完整流程（顺序不能换，每一步都对应一个具体的失败场景）：
 
@@ -345,12 +388,12 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets
 
 ## 七天计划与当前进度
 
-| 阶段 | 内容 | 状态 |
+| 阶段 | 内容 | 状态与提交 |
 |---|---|---|
-| 第 1 天 | 项目骨架、配置、健康检查、统一错误格式、测试 | ✅ 完成（经独立 QA 复验） |
-| 第 2 天 | 文件上传与数据预览、数据画像、示例数据集 | ✅ 完成（见 [docs/STAGE2_ACCEPTANCE.md](docs/STAGE2_ACCEPTANCE.md)），经独立 QA 复验 + 门禁（19 项攻击用例、干净检出全绿） |
-| 第 3 天 | 工作流数据结构、主控智能体、数据理解智能体 | 未开始 |
-| 第 4 天 | 接入大模型 API、Tool Calling、数据分析智能体 | 未开始 |
-| 第 5 天 | 可视化智能体、结果校验、报告生成、串通完整流程 | 未开始 |
-| 第 6 天 | 网页交互、前后端联调、任务记录与失败处理 | 未开始 |
-| 第 7 天 | 完整测试、演示案例、架构文档、面试准备 | 未开始 |
+| 第 1 天 | 项目骨架、配置、健康检查、统一错误格式、测试 | ✅ 完成（`9d37bcb` → `460cf8c`），经独立 QA 复验 |
+| 第 2 天 | 错误契约收口、数据集模型冻结、上传 / 详情 / 画像三个接口、示例数据集 | ✅ 完成（`fe155af` → `eb276df`），经独立 QA 复验 + 门禁（19 项攻击用例、干净检出全绿） |
+| 第 3 天 | 工作流数据结构、7 个白名单工具 + 5 类校验、执行层与主控智能体底盘 | ✅ 完成（`de86db2` → `5123fb7`），D3 契约由 `tests/test_contracts_d3.py` 钉住 |
+| 第 4 天 | 接入大模型 API（规划 + 写报告，未配 key 走规则兜底）、六阶段编排、轮询 / 报告 / 图表三个接口 | ✅ 完成（`8850927` → `aa5b05e`） |
+| 第 5 天 | 图表智能体、数字溯源校验（六类 issue）、规则路径也配图 | ✅ 完成（`d18fdbf` → `618acc2`），D-22/D-23 记录了两处"修好必须能证明改回去会红" |
+| 第 6 天 | 网页交互：上传 / 概览 / 提问 / 六步进度 / 图表 / 报告校验，前后端联调 | ✅ 完成（`a703364`，前端由 `tests/test_frontend.py` 钉住） |
+| 第 7 天 | 端到端演示脚本与真实输出（[docs/DEMO.md](docs/DEMO.md)）、完整测试、三份交付文档（[WORKFLOW](docs/WORKFLOW.md) / [INTERVIEW_QA](docs/INTERVIEW_QA.md) / [HIGHLIGHTS](docs/HIGHLIGHTS.md)）、README 与架构文档收尾 | ✅ 完成（`a677425` + 本次文档提交） |

@@ -1866,6 +1866,39 @@ B. app/ 下未出现在树里的 .py: 无
 
 ---
 
+### 14.9 收尾交付（task-27）：三份新文档 + README 进度同步
+
+**基线**：`a677425`（= `a703364` D6 前端单页 + `a677425` 端到端演示脚本 `scripts/demo.py` 与 `docs/DEMO.md`）。本节只记录"文档追上了代码"这件事，**没有一处新增设计**。
+
+**新增的三个文件**（都在 `docs/`）：
+
+| 文件 | 覆盖什么 | 为什么单独成篇 |
+|---|---|---|
+| `docs/WORKFLOW.md` | 一次提问从进到出：上传七步 → 画像 → 提问（202）→ 六阶段 → 轮询 → 报告 → 图表；状态机与重试上限；六种会变成 `FAILED` 的情况；每个接口的失败表现（含 `WORKFLOW_TIMEOUT` 的 HTTP 码是 **200** 这个反直觉点）；末尾是可直接复制的 PowerShell 复现命令 | 架构文档回答"为什么这样设计"，但没人从"一次请求怎么流动"的角度串过全链路 |
+| `docs/INTERVIEW_QA.md` | 12 条问答，每条 `问 / 答 / 追问 / 证据（文件:行号 或 命令）` | 面试要的是"能被追问三层还站得住"的答案，散落在各处会漏 |
+| `docs/HIGHLIGHTS.md` | 亮点 5 条 + 难点 5 条（现象 → 根因 → 怎么定位 → 怎么修 → 怎么防复发）+ "最有价值的 3 条" | 踩过的坑不写下来，下次会再踩；写"注意 XX"没用，要写清当时的现象与定位路径 |
+
+**`README.md` 同步了四处**（这是本轮唯一被修改的既有文件）：
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| 第 7 行起的项目状态块 | "第 2 天 / 共 7 天"，只列到上传与画像 | "第 7 天 / 共 7 天、HEAD `a677425`"，列全链路 + 三份新文档的入口链接 |
+| 启动后的地址表 | `GET /` = "入口提示" | `GET /` = **分析页面**（返回 `app/web/index.html`），并补 `/static/*` 的去向（`app/main.py:79` 挂载 `app/web/`） |
+| 测试一节与目录树 | 期望值 **149 passed**（第二阶段口径） | **594 passed**（实测：`python -m pytest -q`，含 1 条 doctest；不含工作区里尚未提交的 `tests/test_charts_coverage.py` 那 7 条，含它是 601） |
+| 目录树与接口表 | 目录树只有 `app/{api,data}`；接口表 6 行 | 目录树补齐 `app/{core,tools,llm,agents,web}` 与 `scripts/demo.py`、`data/charts/`、三份新文档；接口表 11 行（接口 1–8 + `/` + `/static/*` + `/docs`） |
+| 七天计划表 | 第 3–7 天全是"未开始" | 每天写"交付了什么 + 提交 hash 区间"（`9d37bcb`→`460cf8c`、`fe155af`→`eb276df`、`de86db2`→`5123fb7`、`8850927`→`aa5b05e`、`d18fdbf`→`618acc2`、`a703364`、`a677425`+本次提交） |
+
+**本轮实测的数字**（真跑过，不是估的）：
+
+- `python -m pytest -q` → **594 passed in 16.94s**（另一个口径：含未提交的 `tests/test_charts_coverage.py` 是 601 passed in 25.63s）。
+- 真机端到端（服务起在本机端口，**未配 API Key**，走规则兜底）：上传 `data/samples/sales.csv` → `row_count=2168`、`column_count=9`、`size_bytes=141028`；`POST /api/analysis` → **202**；轮询 → `SUCCESS`、`step=done`、`step_index=6`、`has_report=true`；报告 → `checked_numbers=2`、`issues=0`、`llm_used=false`；图表 → `200 image/png`、**24 020 字节**。
+
+**行号口径（重要）**：本文档与 `docs/WORKFLOW.md` 里的 `app/` 行号取自**当次工作区**，即 HEAD `a677425` 加上 Lead 工作区里一处**尚未提交**的 `app/agents/orchestrator.py` 补丁（+20/−5）。那处补丁给 `_final_status()` 加了第 4 种降级原因（校验查出 error 级 issue → `SUCCESS_WITH_WARNINGS`），`WORKFLOW.md` §3.1 就是按**打完补丁**的版本写的。如果该补丁被回退或改写，`orchestrator.py` 的行号会整体前移（≤146 行前移 1 行、>295 行前移 9~15 行）—— 照 `grep -n` 重新对齐即可，**不要照抄旧行号**。
+
+**本轮明确没动的**：`app/`、`tests/`、`scripts/`、`.env.example`、`.gitignore`、`requirements*.txt` 一律未改（写入范围只有 `README.md` 与三份新文档 + `docs/ARCHITECTURE.md` 本节）。提交时逐文件点名，工作区里 Lead 的 `M app/agents/orchestrator.py` 与 QA 的 `?? tests/test_charts_coverage.py` **没有**进本次提交。
+
+---
+
 ## 附录 A：术语速查（给基础 Python 水平读者）
 
 | 词 | 大白话解释 |
