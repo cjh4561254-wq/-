@@ -35,6 +35,27 @@
 #   · `data/samples/**` 会连未来的 .xlsx 一起当成文本做行尾转换 ——
 #     那会把二进制文件改坏（xlsx 是 zip，里面字节含 0x0D 0x0A 序列）。
 #   · 全仓 `* text=auto eol=lf` 会一次性改变所有文件在 Windows 上的检出行为，
-#     而本项目里只有示例数据需要"逐字节稳定"；源码是 CRLF 还是 LF 不影响任何
-#     测试。收尾期不做这种范围外的大改动。
+#     范围远大于本文件要解决的问题。源码用下面那条单独管。
+#
+# == 为什么源码也钉 `*.py text eol=lf`（D4 追加，与上面那条不是一个理由）==
+#
+# 上面 sales.csv 那条是**必须修**：它有逐字节断言，CRLF 会让 3 条测试变红。
+# `*.py` 这条**不会让任何测试变红** —— Python 完全容忍 CRLF，也没有任何测试去校验
+# 源码的字节。所以它是**一致性隐患**，不是"会红的 bug"，两者不能混为一谈。
+#
+# 隐患具体是什么（实测）：本机 `core.autocrlf=true`，`.gitattributes` 只管住了
+# `data/samples/*.csv`，于是
+#   · 仓库里 59 个 .py 的 blob 全是 LF（提交时归一化）✓
+#   · 但**工作区有 5 个 .py 带 CR**（app/data/loader.py、app/errors.py、
+#     tests/test_errors.py、tests/test_loader.py、tests/test_upload.py）——
+#     它们是"检出成 CRLF 之后再没被改过"的文件，而改过的文件被 git 重新写成了 LF。
+#   · `git archive HEAD app/main.py` 出来的数据段是 CRLF（实测 CR=220 / LF=221）。
+# 后果不是测试红，而是：**同一个文件在不同机器/不同操作后行尾不同**，
+# 任何"比较源码字节"的脚本（本项目的 AST/哈希类探针、将来可能的代码检查）
+# 都会得到机器相关的结果。收尾期把这条钉住，成本一行、零风险。
+#
+# 为什么 `text eol=lf` 不会把工作区弄脏：`text` 属性让 git 在**比较时**先归一化，
+# 所以那 5 个带 CR 的 .py 依然显示为"未修改"（实测 `git status --short` 里
+# 没有任何已跟踪的 .py 被标脏）。它管的是"以后提交/检出的行尾"。
 data/samples/*.csv text eol=lf
+*.py text eol=lf
