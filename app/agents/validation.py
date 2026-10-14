@@ -34,13 +34,18 @@ D4 时这里写死 `False`，导致真 key 规划成功后报告说"未使用大
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from app import config
+from app.schemas_tool import ToolResult
 from app.schemas_workflow import (
     FinalReport,
     ReportSection,
+    TaskStatus,
+    ValidationIssue,
     ValidationResult,
     WorkflowState,
 )
@@ -221,7 +226,11 @@ def _summarize_missing(data: dict[str, Any]) -> str:
         ]
         sentence = f"共检查 {len(columns)} 列，其中 {len(with_nulls)} 列有缺失值：" + "、".join(parts)
         if len(with_nulls) > 3:
-            sentence += f"，另有 {len(with_nulls) - 3} 列也存在缺失"
+            # 这里**故意不写"另有 N 列"**：N = len(with_nulls) - 3 是展示层算出来的，
+            # 工具结果里没有这个数，`validate()` 会（正确地）把它当成找不到出处的数字。
+            # 与其为了让校验放行而放宽判据，不如让报告只说它有出处的话 ——
+            # "见下方表格"把信息留住了，表格里就是完整的 9 行列缺失统计。
+            sentence += "，其余有缺失的列见下方表格"
 
     if duplicate:
         sentence += f"；完全重复的行有 {_num(duplicate)} 行。"
@@ -471,3 +480,459 @@ def _percent(value: Any) -> str:
 def _clip(text: str, limit: int) -> str:
     """截断过长的文本。用"…"结尾，让人一眼看出是被截断的。"""
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+# ---------------------------------------------------------------------------
+# D5：数字溯源校验（`validate`）
+#
+# 这一步回答的问题是："报告里那些数字，真的都是工具算出来的吗？"
+# 它是这套系统"不编数字"这条承诺的**最后一道防线**：规划靠工具白名单 + 参数校验，
+# 执行靠 `app/tools/validate.py`，报告靠这里。
+#
+# ## 两把尺子
+#
+# 报告里的数字分两类，出处不同，所以判据也必须不同：
+#
+# 1. **数值**（工具算出来的，例如 `24,871,657.00`、`0.99`）：必须能在某个
+#    `ToolResult.data` 里找到出处。
+# 2. **规模量**（报告自己数出来的，例如"共 6 行结果""共 5 列有缺失值"）：它们是
+#    **数**出来的，不是算出来的 —— `len(rows)`、某个键"有值"的条数。这类数字
+#    不会以数值的形式出现在 data 里，所以允许集里必须包含"结构计数"。
+#    不这么做的话，诚实的模板报告会被自己抓成编造，那这个校验就没人信了。
+#
+# ## 为什么允许"四舍五入后相等"
+#
+# `_num` 把 float 写成两位小数、`_percent` 把占比写成一位小数的百分比，所以报告
+# 里的 `0.99` 对应 data 里的 `0.9872`、`1.1` 对应 `0.0111` —— 它们是**同一个事实
+# 的不同写法**，不是编造。只认字面相等的话模板报告会满屏误报。
+# 反过来说，编造的数字（比如"利润率 47.5%"）也不会因为这条容差蒙混过关：
+# 它得先有一个真的数据点落在它附近才行。
+#
+# ## 为什么不校验 `report.summary`
+#
+# 契约（架构文档 §3.5.1 与任务书）点名的是 `sections[].text`。这也有道理：summary
+# 里的数字是"规划了几个任务、成功几个"，属于**计划层面**的计数，不来自任何一次
+# 工具调用；把它一起校验就得为它单独造一套允许集，反而模糊了"数字必须有工具出处"
+# 这条主线。sections 才是结论所在。
+# ---------------------------------------------------------------------------
+
+# 报告"短得像没写完"的判据（正文总字符数 = summary + 所有 section）。
+# 阈值是**量出来的**，不是拍的（`.tmp/probe_d5_short_forms.py` 实测）：
+#   - 真实模板报告：158 字（最短的单任务）～ 198 字（缺失值那条最长）
+#   - 所有任务都失败时的报告：188 字（那段"没有可用的分析结果"本身不短）
+#   - `_minimal_report()` 兜底：94 字 —— 报告生成那一步炸了才会有它
+# 取 120：兜底的 94 会被记一条 warning（这是对的，"报告生成遇到问题"值得被看见），
+# 而真实报告最短的 158 离它还有 38 字的余量，不会误报。
+_MIN_REPORT_CHARS = 120
+
+# 数字的抽取规则。前面那个负向后顾 `(?<![A-Za-z_0-9])` 是必需的：没有它，
+# 段尾的"任务：T1"里的 1 会被当成一个数字抽出来，而它根本不是数据结论，
+# 于是每一份报告都会凭空多出一个"找不到出处"的数字。前面是数字时也挡掉，
+# 是为了让 `2024-01` 里的 `01` 单独被识别成 1（而不是把 `-01` 连起来）。
+_NUMBER_RE = re.compile(r"(?<![A-Za-z_0-9])(-?\d[\d,]*(?:\.\d+)?)")
+
+# 字符串里嵌着的数字也算出处：时间序列的期间标签 `2024-01` 里的 2024 和 1
+# 就是这个来源，报告正文写"时间从 2024-01 到 2024-12"是完全诚实的。
+_EMBEDDED_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+# "某列 的 某统计量"这个句式（模板的 `_summarize_describe` 就是它）。
+_COLUMN_STAT_RE = re.compile(
+    r"([^\s，。、；：（）()\[\]{}]+)\s*的(?:均值|中位数|平均数|最大值|最小值|标准差|方差)"
+)
+
+# "列名 = 值"这个句式（模板的 `_summarize_rows` 就是它）。
+_COLUMN_ASSIGN_RE = re.compile(r"([^\s，。、；：（）()\[\]{}]+)\s*=\s*")
+
+# 工具会拼出来的聚合列后缀（`销售额_sum` 这种）。它们不是画像里的列，
+# 但它们是**真实存在的工具输出列**，不能算"编造的列名"。
+_AGG_SUFFIXES = ("sum", "mean", "count", "min", "max", "median")
+
+
+def validate(state: WorkflowState) -> ValidationResult:
+    """核对报告里的数字与列名，返回一份校验结果（**完全不调大模型**）。
+
+    这一步只**读** `state`，不改报告、不重跑工具、不决定工作流状态 ——
+    决定状态是 Orchestrator 的事（架构文档 §3.5.1 的三条"不能做"）。
+    `passed` 的口径：没有任何 `severity == "error"` 的问题。
+    warning 只是提醒（例如某个任务返回 0 行），不推翻整份报告。
+
+    **绝不抛异常**：校验本身出错时返回一份 `passed=False` 的最小结果。
+    这里不能让它把工作流带崩 —— 校验是"最后一道防线"，防线自己塌了要留下痕迹，
+    而不是把已经算好的分析结果一起毁掉。
+    """
+    try:
+        return _validate(state)
+    except Exception as exc:  # noqa: BLE001 —— 校验层刻意兜住一切异常，见上面的理由
+        logger.exception("数字溯源校验本身出错了")
+        return ValidationResult(
+            passed=False,
+            checked_numbers=0,
+            unsupported_numbers=[],
+            issues=[
+                # 6 个 code 是冻结的（`tests/test_contracts_d5.py` 逐个钉过），
+                # 里面没有"校验自身失败"这一种。与其新造一个，不如用最接近的
+                # `FAILED_TASK`，并在消息里说清是**校验这一步**出的问题。
+                ValidationIssue(
+                    severity="error",
+                    code="FAILED_TASK",
+                    message=(
+                        f"校验过程本身出错了（{type(exc).__name__}），"
+                        "这次分析的数字没有被核对过，请查服务日志。"
+                    ),
+                    task_id=None,
+                )
+            ],
+            checked_at=datetime.now(timezone.utc),
+        )
+
+
+def _validate(state: WorkflowState) -> ValidationResult:
+    """按顺序跑五类检查，把结果拼成 `ValidationResult`。"""
+    checked, unsupported, number_issues = _check_numbers(state)
+    issues: list[ValidationIssue] = []
+    issues.extend(_check_tasks(state))
+    issues.extend(_check_charts(state))
+    issues.extend(number_issues)
+    issues.extend(_check_columns(state))
+    issues.extend(_check_report_length(state))
+    return ValidationResult(
+        passed=not any(issue.severity == "error" for issue in issues),
+        checked_numbers=checked,
+        unsupported_numbers=unsupported,
+        issues=issues,
+        checked_at=datetime.now(timezone.utc),
+    )
+
+
+def _check_tasks(state: WorkflowState) -> list[ValidationIssue]:
+    """任务层面的问题：失败、被跳过、成功但一行结果都没有。"""
+    issues: list[ValidationIssue] = []
+    if state.plan is not None:
+        for task in state.plan.tasks:
+            if task.status is TaskStatus.FAILED:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="FAILED_TASK",
+                        message=f"任务 {task.task_id}（{task.description}）执行失败，报告里缺了这一部分结论。",
+                        task_id=task.task_id,
+                    )
+                )
+            elif task.status is TaskStatus.SKIPPED:
+                # 被跳过本身不是新问题：它的根因是依赖的任务失败了，那条已经记了
+                # error。这里记 warning 是为了让"这份报告少了一块"可见，
+                # 而不是把同一个错误算两遍。
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        code="FAILED_TASK",
+                        message=(
+                            f"任务 {task.task_id}（{task.description}）因为依赖的任务失败被跳过了，"
+                            "根因记在上面那条失败里。"
+                        ),
+                        task_id=task.task_id,
+                    )
+                )
+    for result in state.results:
+        if not result.ok:
+            continue
+        if _is_empty_result(result):
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="EMPTY_RESULT",
+                    message=(
+                        f"任务 {result.task_id} 成功了，但一行结果都没返回"
+                        f"（工具 {result.tool_name}）—— 这份数据在这条问题下确实没有结果。"
+                    ),
+                    task_id=result.task_id,
+                )
+            )
+    return issues
+
+
+def _is_empty_result(result: ToolResult) -> bool:
+    """这次工具调用是不是"成功了但没结果"。
+
+    两种表现都要认：工具报了 `row_count == 0`，或者 `rows` 是个空列表。
+    只认其中一种的话，某个工具忘了填 `row_count` 就会漏掉。
+    """
+    data = result.data if isinstance(result.data, dict) else {}
+    row_count = data.get("row_count")
+    if isinstance(row_count, int) and not isinstance(row_count, bool) and row_count == 0:
+        return True
+    rows = data.get("rows")
+    return isinstance(rows, list) and not rows
+
+
+def _check_charts(state: WorkflowState) -> list[ValidationIssue]:
+    """图表层面的问题：登记的图找不到文件、找不到出处，以及"该有图却没有"。"""
+    issues: list[ValidationIssue] = []
+    charts_dir = config.get_settings().charts_path
+    task_ids = {result.task_id for result in state.results}
+    charted: set[str] = set()
+
+    for chart in state.charts:
+        charted.add(chart.source_task_id)
+        if chart.source_task_id not in task_ids:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="MISSING_CHART_FILE",
+                    message=(
+                        f"图表 {chart.filename} 记的是任务 {chart.source_task_id} 画的，"
+                        "但这次分析里没有这个任务的结果，这张图的出处对不上。"
+                    ),
+                    task_id=chart.source_task_id,
+                )
+            )
+        path = charts_dir / state.workflow_id / chart.filename
+        if not path.is_file():
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="MISSING_CHART_FILE",
+                    message=(
+                        f"图表 {chart.filename} 在结果里登记了，但磁盘上没有这个文件。"
+                        "前端拿到这个 URL 只会显示一张裂图，比「这次没有图」更难查。"
+                    ),
+                    task_id=chart.source_task_id,
+                )
+            )
+
+    # 闭环检查：任务要求出图、任务本身成功了，却没有登记对应的图 —— 那一定是
+    # "出图"这一步失败了（Orchestrator 出图失败时不登记半个对象，见 §8.2.2）。
+    # 出图失败时 `state.validation` 还不存在，没别的地方能记这件事，所以在这里补。
+    if state.plan is not None:
+        for task in state.plan.tasks:
+            if task.chart is None or task.status is not TaskStatus.SUCCESS:
+                continue
+            if task.task_id not in charted:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="MISSING_CHART_FILE",
+                        message=(
+                            f"任务 {task.task_id}（{task.description}）要求出图，但这次分析里没有它的图 —— "
+                            "出图那一步失败了，具体原因在服务日志里。"
+                        ),
+                        task_id=task.task_id,
+                    )
+                )
+    return issues
+
+
+def _check_numbers(state: WorkflowState) -> tuple[int, list[str], list[ValidationIssue]]:
+    """核心检查：报告正文里每个数字，都要能在工具结果里找到出处。
+
+    返回 `(核对过的数字个数, 找不到出处的原始写法, 问题列表)`。
+    """
+    report = state.report
+    if report is None:
+        # 报告压根没生成，没有数字可核对。这件事由 `_check_report_length` 记，
+        # 这里不重复报。
+        return 0, [], []
+
+    allowed = _allowed_numbers(state.results)
+    checked = 0
+    unsupported: list[str] = []
+    issues: list[ValidationIssue] = []
+
+    for section in report.sections:
+        text = section.text or ""
+        for raw in _NUMBER_RE.findall(text):
+            value = _to_float(raw)
+            if value is None:
+                continue
+            checked += 1
+            if _is_supported(value, allowed):
+                continue
+            if raw not in unsupported:
+                unsupported.append(raw)
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="UNSUPPORTED_NUMBER",
+                    message=(
+                        f"报告里出现了 {raw}，但所有工具结果里都找不到这个数字的出处。"
+                        f"这一段是：「{_clip(text, 60)}」"
+                    ),
+                    task_id=section.cites[0] if section.cites else None,
+                )
+            )
+    return checked, unsupported, issues
+
+
+def _allowed_numbers(results: list[ToolResult]) -> set[float]:
+    """把"允许出现在报告里的数字"收集成一个集合。
+
+    三类来源，缺一不可：
+    1. `data` 里的每个数值（工具算出来的结果本身）；
+    2. 字符串里嵌着的数字（期间标签 `2024-01`）；
+    3. **结构计数** —— 每个 list/dict 的长度，以及"某个键有值的条数"。
+       报告里的"共 6 行结果"= `len(rows)`、"共 5 列有缺失值"= `null_count` 有值的
+       列数，都是这一类。它们不是算出来的，但也没有别的出处。
+    """
+    allowed: set[float] = set()
+    for result in results:
+        _collect_numbers(result.data, allowed)
+    return allowed
+
+
+def _collect_numbers(node: Any, allowed: set[float]) -> None:
+    """递归收集 `node` 里所有可以当作"数字出处"的值。"""
+    # bool 是 int 的子类，必须排在前面挡掉：不然报告里写"是/否"会变成
+    # 数字 1/0 的出处，等于凭空给编造的 1 开了后门。
+    if isinstance(node, bool):
+        return
+    if isinstance(node, (int, float)):
+        allowed.add(float(node))
+        return
+    if isinstance(node, str):
+        for text in _EMBEDDED_NUMBER_RE.findall(node):
+            allowed.add(float(text))
+        return
+    if isinstance(node, dict):
+        allowed.add(float(len(node)))
+        for value in node.values():
+            _collect_numbers(value, allowed)
+        return
+    if isinstance(node, list):
+        allowed.add(float(len(node)))
+        for item in node:
+            _collect_numbers(item, allowed)
+        # "某个键有值的条数"：`missing_values` 的 columns 是 9 个 dict，
+        # 其中 null_count 有值的 5 个 —— 报告里的"共 5 列有缺失值"就是这个 5。
+        if node and all(isinstance(item, dict) for item in node):
+            for key in node[0]:
+                allowed.add(float(sum(1 for item in node if item.get(key))))
+        return
+
+
+def _to_float(raw: str) -> float | None:
+    """把抽出来的字符串读成 float。带千分位的 `24,871,657.00` 也认。"""
+    try:
+        return float(raw.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _is_supported(value: float, allowed: set[float]) -> bool:
+    """报告里的这个数字，在允许集里找得到出处吗。"""
+    return any(_same_number(value, candidate) for candidate in allowed)
+
+
+def _same_number(report_value: float, data_value: float) -> bool:
+    """两个数算不算"同一个事实的两种写法"。
+
+    三种写法都认（对应架构文档 §3.5.1 的容差规则）：
+    1. 绝对值相等 —— 正负号不同也算，因为工具可能返回负数而报告写的是幅度；
+    2. 四舍五入到 0/1/2 位小数后相等 —— `_num` 写两位小数、`_percent` 写一位小数；
+    3. 百分比与小数互换 —— `_percent` 把 `0.0111` 写成 `1.1%`，这两个是同一个数。
+    """
+    if report_value == data_value or abs(report_value) == abs(data_value):
+        return True
+    for digits in (0, 1, 2):
+        if round(abs(report_value), digits) == round(abs(data_value), digits):
+            return True
+    for scaled in (data_value * 100, data_value / 100):
+        if report_value == scaled or abs(report_value) == abs(scaled):
+            return True
+        for digits in (0, 1, 2):
+            if round(abs(report_value), digits) == round(abs(scaled), digits):
+                return True
+    return False
+
+
+def _check_columns(state: WorkflowState) -> list[ValidationIssue]:
+    """画像一致性：报告里点名的列，必须是真实存在的列。
+
+    这里只认模板自己会写的那两种句式（"X 的均值是…"、"X = 值"）。
+    抓不到的自由行文交给 `UNSUPPORTED_NUMBER` 兜底 —— 编造的列名后面通常
+    紧跟着编造的数字，数字那关会拦下它。硬要去解析任意中文句子，
+    只会换来一堆误报。
+    """
+    report = state.report
+    if report is None:
+        return []
+    known = _known_names(state)
+    if not known:
+        return []
+
+    issues: list[ValidationIssue] = []
+    seen: set[str] = set()
+    for section in report.sections:
+        text = section.text or ""
+        candidates = _COLUMN_STAT_RE.findall(text) + _COLUMN_ASSIGN_RE.findall(text)
+        for name in candidates:
+            name = name.strip()
+            if not name or name in seen or name in known:
+                continue
+            seen.add(name)
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="UNKNOWN_COLUMN",
+                    message=f"报告里提到了「{name}」，但这份数据的列里没有它（真实列名见数据画像）。",
+                    task_id=section.cites[0] if section.cites else None,
+                )
+            )
+    return issues
+
+
+def _known_names(state: WorkflowState) -> set[str]:
+    """所有"真实存在"的列名：画像里的列、工具报告的输出列、结果行的键。
+
+    聚合列（`销售额_sum`）也在里面 —— 它是工具真实拼出来的列名，
+    不是编造的。少了它，每一份分组汇总的报告都会被误报一次。
+    """
+    names: set[str] = set()
+    profile = state.profile
+    if profile is not None:
+        for column in profile.columns:
+            names.add(column.name)
+            for suffix in _AGG_SUFFIXES:
+                names.add(f"{column.name}_{suffix}")
+    for result in state.results:
+        names.update(str(name) for name in result.columns)
+        data = result.data if isinstance(result.data, dict) else {}
+        for key in ("rows", "stats", "pairs"):
+            for row in _as_dict_list(data.get(key)):
+                names.update(str(name) for name in row)
+    return names
+
+
+def _as_dict_list(value: Any) -> list[dict[str, Any]]:
+    """只挑出 list 里的 dict，别的元素直接忽略（工具结果的形状由工具保证，
+    校验层不做类型断言，读到什么算什么）。"""
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _check_report_length(state: WorkflowState) -> list[ValidationIssue]:
+    """报告是不是"短得像没写完"。"""
+    report = state.report
+    if report is None:
+        return [
+            ValidationIssue(
+                severity="error",
+                code="SHORT_REPORT",
+                message="这次分析没有生成报告，没有任何结论可以核对。",
+                task_id=None,
+            )
+        ]
+    total = len(report.summary or "") + sum(len(section.text or "") for section in report.sections)
+    if total < _MIN_REPORT_CHARS:
+        return [
+            ValidationIssue(
+                severity="warning",
+                code="SHORT_REPORT",
+                message=(
+                    f"报告正文只有 {total} 个字，短得像是没写完 —— "
+                    "可能是报告那一步出了问题，服务日志里有记录。"
+                ),
+                task_id=None,
+            )
+        ]
+    return []

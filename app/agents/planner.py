@@ -35,7 +35,7 @@ from uuid import uuid4
 
 from app import config
 from app.schemas_dataset import DatasetProfile
-from app.schemas_workflow import AnalysisTask, TaskPlan
+from app.schemas_workflow import AnalysisTask, ChartRequest, TaskPlan
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,97 @@ _MAX_TASKS = 8
 # 一条都没命中时的兜底任务：至少给用户一份描述性统计，
 # 而不是回一句"我不知道你想问什么"——那是产品失败，不是数据失败。
 _FALLBACK_DESCRIPTION = "对每个数值列做描述性统计（计数、均值、分位数、最大最小值）"
+
+
+# ---------------------------------------------------------------------------
+# 出图请求（D5）：计划阶段就决定"这个任务要不要配图、画哪两列"
+# ---------------------------------------------------------------------------
+
+# 为什么出图这件事要在**计划阶段**定下来，而不是执行完再猜：
+# `AnalysisTask.chart` 是契约里的字段，执行阶段的 `run_task` 只认工具、不认图；
+# 图由编排器（charting 阶段）拿着"任务 + 工具结果"去画。所以"画哪两列"必须在
+# 任务被创建时就写清楚 —— 到了 charting 阶段再回头看结果去猜，猜错了没人能发现。
+#
+# 哪些工具配图：**只给"结果里有 rows"的工具配**。这不是"顺手多给几个"，
+# 而是三类工具各自的形状决定的：
+#   - 有 rows（group_aggregate / top_n / compare_groups / time_series_summary）→ 能画
+#   - describe_dataset 的 stats 是"每列一行统计量"，画出来是 9 根含义不同的柱子，
+#     读者会以为在比较列与列的大小 —— 不配图才是对的
+#   - missing_values 的 columns 是"每列的缺失个数"，形状上能画，但 9 列里绝大多数是 0，
+#     图上只有一两根柱子立着，看不出信息
+#   - correlation 只有 pairs（哪两列、一个系数），没有原始数据点，画不出散点图
+_CHART_TYPE_BY_TOOL: dict[str, str] = {
+    "group_aggregate": "bar",
+    "top_n": "bar",
+    "compare_groups": "bar",
+    "time_series_summary": "line",
+}
+
+# `ChartRequest.title` 有 `max_length=40` 的契约限制。标题是给人看的，
+# 超出就截断并加省略号 —— 让 TaskPlan 构造失败（因为标题长了 2 个字）
+# 是拿契约去惩罚用户，代价完全不成比例。
+_MAX_TITLE_CHARS = 40
+
+
+def _chart_for(tool_name: str, params: dict[str, Any], title: str) -> ChartRequest | None:
+    """给一个任务配出图请求；这个工具不配图时返回 `None`。
+
+    `x_field` / `y_field` 必须是**工具结果里真实存在的列名**，所以它们是从
+    `params` 按各工具的列名推导规则算出来的，不是猜的：
+
+    - `group_aggregate`：结果列是"分组列 + `{metric}_{agg}`"（见 `app/tools/aggregate.py`）
+    - `compare_groups`：结果列是"分组列 + `{metric}_{agg}` + 差值"
+    - `time_series_summary`：结果列是"`period` + `{metric}_{agg}`（+ 环比）"
+    - `top_n`：`columns` 不传时只返回"分组列 + 排序列"，所以 `x_field` 和 `y_field`
+      都是 `by` 这一列（x 轴用行号当标签，见 `app/agents/charts.py`）
+
+    参数缺了关键项时返回 `None` 而不是抛异常：计划阶段的任务本来就该是
+    "能执行就执行"，配不出图顶多是少一张图，不该让整份计划失败。
+    """
+    chart_type = _CHART_TYPE_BY_TOOL.get(tool_name)
+    if chart_type is None:
+        return None
+
+    if tool_name == "group_aggregate":
+        group_by = params.get("group_by") or []
+        metric = params.get("metric")
+        # 不传 metric 时聚合的是行数，结果列名就是 `count`（aggregate.py 的命名规则）
+        value_column = f"{metric}_{params.get('agg', 'sum')}" if metric else "count"
+        if not group_by:
+            return None
+        x_field, y_field = str(group_by[0]), value_column
+    elif tool_name == "compare_groups":
+        x_field = params.get("group_by")
+        metric = params.get("metric")
+        if not x_field or not metric:
+            return None
+        x_field = str(x_field)
+        y_field = f"{metric}_{params.get('agg', 'mean')}"
+    elif tool_name == "time_series_summary":
+        metric = params.get("metric")
+        if not metric:
+            return None
+        x_field, y_field = "period", f"{metric}_{params.get('agg', 'sum')}"
+    else:  # top_n：结果里只有 by 这一列有数值
+        by = params.get("by")
+        if not by:
+            return None
+        x_field = y_field = str(by)
+
+    return ChartRequest(
+        chart_type=chart_type,
+        x_field=x_field,
+        y_field=y_field,
+        title=_clip_title(title),
+    )
+
+
+def _clip_title(title: str) -> str:
+    """把标题夹到契约允许的长度内。空标题给一个中性说法，避免前端显示空白。"""
+    text = (title or "").strip() or "分析结果"
+    if len(text) <= _MAX_TITLE_CHARS:
+        return text
+    return text[: _MAX_TITLE_CHARS - 1] + "…"
 
 
 @dataclass(frozen=True)
@@ -106,6 +197,7 @@ def plan_with_rules(question: str, profile: DatasetProfile, max_steps: int = 6) 
                 tool_name=rule.tool_name,
                 params=params,
                 description=description,
+                chart=_chart_for(rule.tool_name, params, description),
             )
         )
 
@@ -358,6 +450,7 @@ def _tasks_from_reply(reply, profile: DatasetProfile, limit: int) -> list[Analys
             logger.warning("丢弃任务：工具 %s 的参数不可用（%s）", call.name, reason)
             continue
 
+        description = _describe(call.name, params)
         tasks.append(
             AnalysisTask(
                 task_id=f"T{len(tasks) + 1}",
@@ -365,7 +458,8 @@ def _tasks_from_reply(reply, profile: DatasetProfile, limit: int) -> list[Analys
                 kind=_KIND_BY_TOOL.get(call.name, "describe"),
                 tool_name=call.name,
                 params=params,
-                description=_describe(call.name, params),
+                description=description,
+                chart=_chart_for(call.name, params, description),
             )
         )
 

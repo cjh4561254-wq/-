@@ -30,12 +30,14 @@ from datetime import datetime, timezone
 
 from app import config
 from app.agents.analysis import run_task
+from app.agents.charts import render_chart
 from app.agents.planner import plan as plan_tasks
-from app.agents.validation import build_report
+from app.agents.validation import build_report, validate
 from app.data.profiler import build_profile
 from app.data.store import store
 from app.errors import AppError
 from app.schemas import ApiError, ErrorCode
+from app.schemas_tool import ToolResult
 from app.schemas_workflow import TaskStatus, WorkflowState, WorkflowStatus
 
 logger = logging.getLogger(__name__)
@@ -137,9 +139,12 @@ def run_workflow(state: WorkflowState) -> None:
 
     # ---- 阶段 6/6：validation ----
     _enter(state, WorkflowStatus.VALIDATING, "validation")
-    # D5 才做 `validate()`（报告里的数字逐个溯源，抓编造）。D4 在这里只做一件事：
-    # 依据"有没有失败的任务 / 有没有出报告"决定最终状态（§5.4 第 5 条）。
-    # `state.validation` 保持 None 是**诚实**的：没跑过的校验不该给一个空壳结果。
+    # 报告里的数字逐个拿回 `state.results` 找出处，抓编造（§3.5.1）。
+    # `validate()` 与 `build_report()` 一样恒不抛异常：校验本身出错也只是
+    # 一条 issue，不该让一条已经算完的工作流变成 FAILED。
+    state.validation = validate(state)
+    # 最终状态仍然只看"有没有失败的任务 / 有没有出报告"。**校验发现的问题不在这里降级**：
+    # 那需要先定义"哪种 severity 才算数"，是另一个任务的范围（§5.4 第 5 条）。
     _finish(state, _final_status(state))
 
 
@@ -235,21 +240,55 @@ def _execute_one(state: WorkflowState, task: object, df: object) -> None:
 
 
 def _render_charts(state: WorkflowState) -> None:
-    """D4 的 charting 阶段：**明确地什么都不做**，并把理由写进日志。
+    """charting 阶段：把每个"配了图且算成功"的任务交给 `charts.render_chart` 画成 PNG。
 
-    两样东西都还没到：`app/agents/charts.py` 是 D5 的文件；D4 的规则计划器也不会给任务
-    配 `AnalysisTask.chart`（规则兜底只产出工具调用）。这种情况下唯一正确的做法是
-    让 `state.charts` 保持空列表。
+    ## 为什么是"写文件 + 登记"两件事紧挨着
 
-    **绝不伪造 `ChartResult`**：前端拿到一个指向不存在 PNG 的 URL，比"这次没有图"
-    难排查得多 —— 前者看起来像后端坏了，后者只是"还没做"。
+    §8.2.2 定的纪律：`render_chart` 自己只算数据、存 PNG、返回 `ChartResult`，
+    **绝不碰 `state`**；登记进 `state.charts` 由这里做，且必须紧跟在它返回之后。
+    中间隔了别的事情，就可能出现"PNG 写好了、`state.charts` 里没有"（前端看不到图）
+    或者反过来"登记了、文件没写"（前端拿到死链）。两种都只有用户先发现。
 
-    D5 的落点（写在这里，免得接手的人去翻文档）：遍历 `state.plan.tasks`，
-    对 `task.chart is not None` 且对应 `ToolResult` 成功的任务调
-    `charts.render_chart(...)`；出图失败记 `MISSING_CHART_FILE` warning 并继续
-    （§5.4 第 2 条），**不要登记半个图表对象**（§8.2.2）。
+    ## 出图失败为什么不算任务失败
+
+    §5.4 第 2 条：出图失败不中断工作流。数字已经算出来了，报告也照样出，
+    只是少一张图 —— 这时候把整条工作流标成失败，等于用"画图"这一个环节
+    否定了全部计算。所以这里 `logger.exception` 记完整堆栈（这是开发期 bug 信号），
+    然后 `continue`。**不登记半个对象**：`ChartResult` 只在真写成功之后才 append。
+
+    校验阶段会把"任务配了图、`state.charts` 里却没有"记成一条 `MISSING_CHART_FILE`
+    （见 `app/agents/validation.py` 的 `_check_charts`），所以这里不需要额外记账。
     """
-    logger.info("D4 阶段不出图（charts 模块与 chart 请求都要到 D5 才有），state.charts 保持为空")
+    if state.plan is None:
+        return
+
+    for task in state.plan.tasks:
+        if task.chart is None:
+            continue
+        result = _result_for(state, task.task_id)
+        if result is None or not result.ok:
+            # 任务没成功就没有可画的数据；任务级的失败已经记在 results 里了，
+            # 这里再报一次只是重复。
+            continue
+        try:
+            chart = render_chart(result, task.chart, state.workflow_id)
+        except Exception:
+            logger.exception(
+                "工作流 %s 的任务 %s 出图失败，跳过这张图（分析结果与报告不受影响）",
+                state.workflow_id,
+                task.task_id,
+            )
+            continue
+        state.charts.append(chart)
+
+
+def _result_for(state: WorkflowState, task_id: str) -> ToolResult | None:
+    """取某个任务最后一次的 `ToolResult`（重试会留两条，最后一条才算数）。"""
+    latest = None
+    for result in state.results:
+        if result.task_id == task_id:
+            latest = result
+    return latest
 
 
 def _final_status(state: WorkflowState) -> WorkflowStatus:

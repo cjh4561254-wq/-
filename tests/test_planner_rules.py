@@ -24,11 +24,12 @@ import pandas as pd
 import pytest
 
 from app import config
+from app.agents.analysis import run_task
 from app.agents.planner import llm_is_configured, plan_with_rules
 from app.data.loader import load_dataframe
 from app.data.profiler import build_profile
 from app.schemas_dataset import DatasetProfile
-from app.schemas_workflow import TaskPlan
+from app.schemas_workflow import AnalysisTask, TaskPlan
 from app.tools import registry
 from app.tools.validate import validate_call
 
@@ -370,3 +371,274 @@ def test_llm_is_configured_reads_settings_at_call_time(monkeypatch: pytest.Monke
     monkeypatch.setattr(config, "get_settings", lambda: fake)
 
     assert llm_is_configured() is True
+
+
+# ---------------------------------------------------------------------------
+# 出图请求（D5）：计划阶段就要说清"画哪两列"
+# ---------------------------------------------------------------------------
+
+
+def test_chart_is_attached_only_to_tools_that_return_rows(sales_profile: DatasetProfile) -> None:
+    """只有"结果里有 rows"的四个工具配图；另外三个不配。
+
+    这不是"顺手多给几个"：`describe_dataset` 的 `stats` 是"每列一行统计量"，
+    画出来是 9 根含义不同的柱子；`missing_values` 的绝大多数列是 0，图上只有
+    一两根柱子立着；`correlation` 只有 `pairs`（哪两列 + 一个系数），
+    没有原始数据点。三种都不该出图。
+    """
+    plan = plan_with_rules("各地区的销售额、缺失值、趋势和关系都要看", sales_profile)
+    by_tool = {task.tool_name: task for task in plan.tasks}
+
+    for tool_name in ("group_aggregate", "top_n", "compare_groups", "time_series_summary"):
+        task = by_tool.get(tool_name)
+        if task is None:  # 这个问题没命中那条规则，跳过（另有专门的用例覆盖）
+            continue
+        assert task.chart is not None, f"{tool_name} 应该配图"
+
+    for tool_name in ("describe_dataset", "missing_values", "correlation"):
+        task = by_tool.get(tool_name)
+        if task is None:
+            continue
+        assert task.chart is None, f"{tool_name} 不该配图"
+
+
+def test_chart_fields_match_what_the_tool_actually_returns(
+    sales_profile: DatasetProfile, sales_df: pd.DataFrame
+) -> None:
+    """**图里画的两列必须是工具结果里真实存在的列** —— 这条是出图正确性的核心。
+
+    列名推导规则写在 `planner._chart_for` 的注释里（`{metric}_{agg}` 等），
+    它和工具实现是两处独立的代码，很容易对不上。对不上的表现是：
+    `charts.py` 走兜底路径，用别的列画图，而标题写着"销售额" ——
+    图看着正常，画的却是另一列。
+
+    所以这里**真的跑一遍工具**，拿它返回的 `columns` 来核对，而不是手抄一份
+    预期的列名（手抄的清单会和工具实现一起腐烂）。
+    """
+    plan = plan_with_rules("各地区的销售额、最高的商品、趋势和比较都要看", sales_profile)
+
+    checked = 0
+    for task in plan.tasks:
+        if task.chart is None:
+            continue
+        result = run_task(task, sales_df)
+        assert result.ok, f"{task.tool_name} 应该执行成功：{result.error_message}"
+
+        real_columns = set(result.data.get("columns") or [])
+        rows = result.data.get("rows") or []
+        if rows:
+            real_columns |= set(rows[0].keys())
+
+        assert task.chart.x_field in real_columns, (
+            f"{task.tool_name} 的 x_field={task.chart.x_field!r} 不在工具返回的列里：{real_columns}"
+        )
+        assert task.chart.y_field in real_columns, (
+            f"{task.tool_name} 的 y_field={task.chart.y_field!r} 不在工具返回的列里：{real_columns}"
+        )
+        checked += 1
+
+    assert checked >= 3, f"这个问题应该至少命中 3 个出图任务，实际 {checked} 个"
+
+
+def test_chart_titles_respect_the_contract_limit(sales_profile: DatasetProfile) -> None:
+    """`ChartRequest.title` 的契约上限是 40 字 —— 超了 `TaskPlan` 会直接抛异常。
+
+    规则生成的描述都很短，这条更像一道闸门：以后有人把描述写长（比如把整个问题
+    抄进标题），这里会立刻红，而不是等用户提问时才炸。
+    """
+    for question in QUESTIONS:
+        plan = plan_with_rules(question, sales_profile)
+        for task in plan.tasks:
+            if task.chart is None:
+                continue
+            assert task.chart.title, "标题不能是空的"
+            assert len(task.chart.title) <= 40, f"标题太长：{task.chart.title!r}"
+
+
+def test_chart_types_are_only_bar_or_line(sales_profile: DatasetProfile) -> None:
+    """规则路径只出 bar 与 line —— 不出 pie/scatter。
+
+    饼图在 6 个分组时还能看，20 个分组时是一圈细线；散点图需要两个数值列，
+    而规则计划器产出的任务里没有"两个数值列"这种形状。契约允许四种，
+    不代表每种都该被自动用上。
+    """
+    for question in QUESTIONS:
+        plan = plan_with_rules(question, sales_profile)
+        for task in plan.tasks:
+            if task.chart is None:
+                continue
+            assert task.chart.chart_type in {"bar", "line"}, (
+                f"{task.tool_name} 产出了 {task.chart.chart_type}"
+            )
+
+
+def test_trend_gets_a_line_chart_and_aggregates_get_bars(sales_profile: DatasetProfile) -> None:
+    """图型要跟 `kind` 对上：趋势是折线，聚合/比较是柱状。
+
+    折线图表达"随时间变化"，柱状图表达"类别之间的大小"。给趋势配柱状图不算错，
+    但读者会下意识去比"哪根柱子高"，而趋势问题的答案是"在涨还是在跌"。
+    """
+    plan = plan_with_rules("各月份的销售额变化、各地区的销售额比较", sales_profile)
+    by_tool = {task.tool_name: task for task in plan.tasks}
+
+    trend = by_tool.get("time_series_summary")
+    assert trend is not None and trend.chart is not None
+    assert trend.chart.chart_type == "line"
+
+    for tool_name in ("group_aggregate", "compare_groups"):
+        task = by_tool.get(tool_name)
+        if task is None:
+            continue
+        assert task.chart is not None
+        assert task.chart.chart_type == "bar"
+
+
+def test_top_n_uses_the_same_column_for_both_axes(sales_profile: DatasetProfile) -> None:
+    """`top_n` 只返回一列（排序列），所以 x 和 y 都是它 —— x 轴用行号当标签。
+
+    `top_n` 不传 `columns` 时只返回"分组列 + 排序列"，这里只有排序列，
+    所以 x_field 和 y_field 必然是同一个名字（`charts.py` 据此改用行号）。
+    """
+    plan = plan_with_rules("找出销售额最高的十个商品", sales_profile)
+    task = _first_task(plan, "top_n")
+
+    assert task is not None and task.chart is not None
+    assert task.chart.x_field == task.chart.y_field == "销售额"
+
+
+def test_chart_requests_are_never_invented_for_another_dataset() -> None:
+    """**反向证伪**：换一份列名完全不同的数据，不能产出写死的"地区/销售额"。
+
+    这是最危险的一类 bug：在 `sales.csv` 上一切正常（因为列名刚好对得上），
+    换个数据集就画错列 —— 或者更糟，任务失败。所以这里造一个三列小数据集
+    （`aa`/`bb`/`cc`，与中文列名毫无关系），确认产出的字段名只可能来自它自己。
+
+    注意 `y_field` 有两种来源，断言方式必须分开：
+    - `top_n` 的 `y_field` 是**画像里的列**（就是 `by` 那一列）；
+    - 聚合类的 `y_field` 是**工具现算出来的派生列**（`bb_sum`），画像里根本没有它 ——
+      所以对它的断言是"真的跑一遍工具，看它返回的列里有没有这个名字"，
+      而不是"它在画像里"。把后者写进断言，会在任何数据集上误报。
+    """
+    df = pd.DataFrame(
+        {
+            "aa": ["x", "y", "x", "y"],
+            "bb": [1.0, 2.0, 3.0, 4.0],
+            "cc": [10, 20, 30, 40],
+        }
+    )
+    profile = build_profile(df, "ds-tiny")
+
+    plan = plan_with_rules("各 aa 的 bb 汇总、bb 最高的前 2 行、bb 的趋势", profile)
+    real_columns = {column.name for column in profile.columns}
+
+    checked = 0
+    for task in plan.tasks:
+        if task.chart is None:
+            continue
+
+        # x_field 一定是画像里的列（它是分组维度，不是算出来的）
+        assert task.chart.x_field in real_columns, f"x 字段是编的：{task.chart.x_field}"
+        assert "地区" not in (task.chart.x_field, task.chart.y_field)
+        assert "销售额" not in (task.chart.x_field, task.chart.y_field)
+
+        # y_field 用工具的真实输出来核对（派生列只存在于工具结果里）
+        result = run_task(task, df)
+        assert result.ok, f"{task.tool_name} 应该执行成功：{result.error_message}"
+        produced = set(result.data.get("columns") or [])
+        rows = result.data.get("rows") or []
+        if rows:
+            produced |= set(rows[0].keys())
+        assert task.chart.y_field in produced, (
+            f"{task.tool_name} 的 y_field={task.chart.y_field!r} 不在工具返回的列里：{produced}"
+        )
+        checked += 1
+
+    assert checked >= 2, f"这份数据应该至少命中 2 个出图任务，实际 {checked} 个"
+
+
+def test_chart_requests_survive_a_round_trip_through_the_model_path() -> None:
+    """模型路径也要配图：`_tasks_from_reply` 造任务时同样调 `_chart_for`。
+
+    走模型时参数是模型给的，`_chart_for` 只认参数里的键 —— 所以这里直接调它，
+    断言"模型给的合法参数"能产出正确的字段名。不 mock 网络：`_chart_for` 是
+    纯函数，测它不需要模型。
+    """
+    from app.agents.planner import _chart_for
+
+    chart = _chart_for(
+        "group_aggregate",
+        {"group_by": ["地区"], "metric": "销售额", "agg": "sum"},
+        "按地区分组汇总销售额",
+    )
+
+    assert chart is not None
+    assert chart.x_field == "地区"
+    assert chart.y_field == "销售额_sum"
+    assert chart.chart_type == "bar"
+
+
+def test_aggregate_suffix_follows_the_agg_the_model_asked_for() -> None:
+    """**派生列名必须跟着 `agg` 走**，不能写死一个后缀。
+
+    规则路径只会产出 `agg="mean"`（`compare_groups` 的默认值），所以
+    "写死 `_mean`"这个 bug 在规则路径上**完全看不出来** —— 它只在模型
+    自己指定了 `agg="sum"` 时才现形：工具返回 `销售额_sum`，图请求却写
+    `销售额_mean`，于是 `charts.py` 走兜底路径拿最后一列画图，
+    标题写着"销售额"而画的其实是"差值"那一列。
+
+    这条直接调 `_chart_for` 并显式传 `agg="sum"`，就是为了盖住规则路径
+    永远走不到的那个分支。
+    """
+    from app.agents.planner import _chart_for
+
+    summed = _chart_for(
+        "compare_groups",
+        {"group_by": "地区", "metric": "销售额", "agg": "sum"},
+        "按地区分组比较销售额",
+    )
+    default = _chart_for("compare_groups", {"group_by": "地区", "metric": "销售额"}, "比较")
+
+    assert summed is not None and default is not None
+    assert summed.y_field == "销售额_sum", "agg=sum 时派生列是 销售额_sum"
+    assert default.y_field == "销售额_mean", "不传 agg 时 compare_groups 的默认值是 mean"
+
+    # 时间序列与分组汇总同理，三个工具的命名规则是同一套（`{metric}_{agg}`）
+    series = _chart_for(
+        "time_series_summary", {"date_column": "日期", "metric": "销售额", "agg": "mean"}, "走势"
+    )
+    assert series is not None
+    assert series.y_field == "销售额_mean"
+
+
+def test_chart_for_returns_none_when_params_are_incomplete() -> None:
+    """参数缺关键项 → 返回 `None`，不抛异常，**更不许编一个列名顶上**。
+
+    计划阶段的任务本来就该"能执行就执行"：配不出图顶多少一张图，
+    不该让整份计划失败（`TaskPlan` 一抛，用户连数字都拿不到）。
+
+    但"不抛异常"不等于"随便给个字段名"：如果这里编一个列名，
+    图会画出来、标题也对，画的内容却和标题无关 —— 那比没有图更糟。
+    """
+    from app.agents.planner import _chart_for
+
+    assert _chart_for("group_aggregate", {}, "标题") is None
+    assert _chart_for("compare_groups", {"group_by": "地区"}, "标题") is None
+    assert _chart_for("time_series_summary", {}, "标题") is None
+    assert _chart_for("top_n", {}, "标题") is None
+    assert _chart_for("describe_dataset", {}, "标题") is None
+    assert _chart_for("missing_values", {}, "标题") is None
+    assert _chart_for("correlation", {}, "标题") is None
+
+
+def test_long_titles_are_clipped_instead_of_breaking_the_plan() -> None:
+    """标题超长 → 截断，而不是让 `ChartRequest` 抛 `ValidationError`。
+
+    拿契约去惩罚用户（因为描述长了两个字，整份计划构造失败）代价完全不成比例。
+    """
+    from app.agents.planner import _chart_for
+
+    chart = _chart_for("top_n", {"by": "销售额", "n": 10}, "很长的标题" * 20)
+
+    assert chart is not None
+    assert len(chart.title) <= 40
+    assert chart.title.endswith("…")
