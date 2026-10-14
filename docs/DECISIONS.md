@@ -994,3 +994,51 @@ D5 才把"解释"也交给模型。把这两件事混在一句话里说（"跑�
 **状态**：D4 验收② 已用真 key 实测通过；探针在 `.tmp/`（不进仓库）。
 
 ---
+
+## D-22 "数字对、话是假的"要当成一类 bug；修好了必须证明"改回去会红"
+
+**背景**：D4 QA 复验（基线 `d4fd727`）报了两条"重要"问题。它们的共同点是
+**一个数字都没错，错的是描述这些数字的话**，而且两条都是**零测试覆盖**：
+
+1. `app/agents/validation.py` 的 `_summarize_correlation` 取 `pairs[0]`，
+   而 `app/tools/compare.py:76-85` 的 `pairs` 是按**列序**构造的、没有排序。
+   sales.csv 上 `pairs[0]` = 销量/单价 `r=-0.0457`，真正 |r| 最大的是
+   销售额/利润 **0.9872** —— 于是报告写「相关性最强的一对是 销量 与 单价，
+   相关系数 -0.05」。
+2. `build_report` 里 `llm_used` **硬编码 `False`**（理由是"D4 只有模板路径"）。
+   真 key 规划成功后 `plan.source == "llm"`，而报告首段、接口 7 的 `llm_used`、
+   前端横幅三处一致显示"未使用大模型"。
+
+**为什么零覆盖本身就是问题**：QA 把实现改成正确写法时 **490 passed，一条都没红**。
+也就是说 —— "报告里这句话是假的"这个 bug，在当时是**被整个测试集体放过去**的。
+
+**决定**
+
+1. **诚实性字段（`llm_used`、首段 NOTICE、"最强/最弱"这类排序词）按 `plan.source`
+   等真值推导，不写死。** 理由：字段 docstring 已经把它定义为"这次到底有没有用模型"
+   （`app/schemas_workflow.py:210`），写死会让它变成一句**永远成立但可以随时为假**的陈述。
+2. **修好之后必须证明"改回去会红"**，否则等于没修。本次变异 3/3 有牙：
+
+   | 变异 | 红线数 | 说明 |
+   |---|---|---|
+   | `max(|r|)` → `valid[0]` | 2 | correlation 挑最强那对 |
+   | `_llm_used` → `return False` | 3 | D4 的硬编码写法 |
+   | 首段恒 `TEMPLATE_NOTICE` | 2 | 报告首段二选一 |
+
+   三个变异都要**先写测试再变异**（第一轮没测试时 3/3 全绿），
+   还原后逐字符一致、复跑仍 505 passed / 0 failed。
+3. **跨文件引用"另一个文件已经排好序"时，先 grep 确认。** 第 1 条的笔记
+   （`app/agents/validation.py:201-202`）称"compare.py 已按 |r| 排好序" ——
+   那句话让 review 的人也一起放过去了。**注释里的前提和代码里的前提一样会骗人**，
+   要一起验。
+
+**影响到**：`app/agents/validation.py`（`_summarize_correlation` / `_llm_used` /
+`_summary` / `_minimal_report` / 两个 NOTICE 常量）、
+`tests/test_validation.py`（新增 9 条，逐字写死常量、不从实现 import）。
+
+**状态**：已落地（`aff1df6`）。505 passed / 4 skipped；
+真 key 实测 `plan.source=llm` → `llm_used=True` + 首段为 `LLM_PLANNED_NOTICE`，
+六地区零容差对账通过。
+
+
+---
