@@ -9,7 +9,7 @@
 > 已完成：应用骨架与统一错误契约、**文件上传（CSV / xlsx）与数据画像**、
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
-> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**，646 项自动化测试。
+> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**，798 项自动化测试。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
 > 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
@@ -152,7 +152,7 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**646 passed**（645 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**798 passed**（797 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
@@ -175,6 +175,25 @@ python -m pytest
 `app.config.LLM_ENV_VAR_NAMES` 这一份清单，不另外抄一份，免得两边漂移。
 决策记录见 [docs/DECISIONS.md](docs/DECISIONS.md) D-19（配置来源改为系统环境变量）
 与 D-20（测试不许依赖外壳的编码设置）。
+
+### 交接文档的自检
+
+[docs/HISTORY_ROBUSTNESS.md](docs/HISTORY_ROBUSTNESS.md) 是历史归档健壮性的交接文档，
+里面写了大量「代码第 NNN 行是什么」「用例 X 钉住行为 Y」「期望值 200」这类**会腐烂的断言**。
+`scripts/check_docs.py` 把它们变成可执行检查：
+
+```powershell
+& ".\.venv\Scripts\python.exe" scripts\check_docs.py
+```
+
+退出码 `0` = 文档与仓库一致；`1` = 逐条打印对不上的地方。它核对三个维度：
+**行号锚点**（文档里的 `` `文件:NNN` `` 必须与代码里自己声明的锚点注释同行）、
+**用例存在性**（文档提到的 `test_*` 必须真实存在，用 `ast` 收集）、
+**断言方向**（文档写死的 `<用例名> -> 200`，脚本会**真的执行该用例**再比对实测状态码）。
+
+> 它防腐烂，**不防遗漏**：只核对文档里写了的东西。判断性叙述（「为什么修」）
+> 无法机械复核；代码锚点与文档引用**同谋地一起改错**它也看不出来。
+> 设计边界与探针有效性证明见该文档第 ⑦ 节。
 
 ## 目录结构
 
@@ -223,8 +242,9 @@ ai-data-analyst-agent/
 │  └─ web/                     # 前端单页：index.html / app.css / app.js（挂到 /static）
 ├─ scripts/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
+│  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上
 │  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完九段、自己关掉
-├─ tests/                      # 646 项（30 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+├─ tests/                      # 797 项（36 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
 │  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）
@@ -237,6 +257,7 @@ ai-data-analyst-agent/
 │  ├─ HIGHLIGHTS.md            # 亮点与难点（现象 → 根因 → 定位 → 修复 → 防复发）
 │  ├─ DECISIONS.md             # 决策记录：每条都写了"为什么"
 │  ├─ DEMO.md                  # scripts/demo.py 的真实运行输出
+│  ├─ HISTORY_ROBUSTNESS.md    # 历史归档健壮性：三个已实证缺陷的完整证据链 + 修复状态 + 方法学
 │  └─ STAGE2_ACCEPTANCE.md     # 第二阶段的验收说明（交付物、怎么自己跑一遍）
 ├─ .env.example                # 环境变量清单（应用不读它；只有键名与占位值，无真实密钥）
 ├─ .gitattributes              # 行尾策略：示例 CSV 钉成 LF，保证克隆后字节一致

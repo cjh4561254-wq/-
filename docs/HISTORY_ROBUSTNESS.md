@@ -364,7 +364,7 @@ PowerShell 会重组行尾，数出来是假的。要数行就 `read_bytes()` �
 |---|---|
 | **旧行为** | `status=WorkflowStatus(record.status)` 硬转 → 非法值抛 `ValueError` → 兜底 handler 翻 **500**，同页合法行**一条都拿不到** |
 | **新行为** | 认不出来时**原样透出字符串**：`"RUNNING"` 就回 `"RUNNING"`，`" Success"` 就回 `" Success"`（**逐字**，不 strip、不改大小写） |
-| **修复手法** | 新增 `_coerce_enum(enum_cls, raw)`（`routes_workflows.py:155`），`except ValueError: return raw`；调用点 `:207` |
+| **修复手法** | 新增 `_coerce_enum(enum_cls, raw)`（定义见「行号锚点」块的 `:155`），`except ValueError: return raw`；调用点 `:215` |
 | **对应用例** | `test_one_bad_row_no_longer_poisons_the_listing`、`test_miscased_and_bogus_statuses_are_passed_through_verbatim`（7 参数化）、`test_every_page_is_served_even_the_one_with_the_bad_row`、`test_ten_legal_rows_plus_one_bad_row_all_eleven_are_returned` |
 
 #### 修复 2：`error_code`（可空列，原 `:159`）
@@ -373,21 +373,36 @@ PowerShell 会重组行尾，数出来是假的。要数行就 `read_bytes()` �
 |---|---|
 | **旧行为** | `ErrorCode(record.error_code)` 硬转 → `'TIMEOUT_LEGACY'` / `'bogus'` / `''` 全部 **500** |
 | **新行为** | 同样降级透出；★ **`''` 回 `""` 而不是 `None`** —— 空串与"无错误"语义不同，不许合并 |
-| **修复手法** | 同一 `_coerce_enum`，调用点 `:212-216`（`error_code is not None` 短路保留） |
+| **修复手法** | 同一 `_coerce_enum`，调用点 `:223`（`error_code is not None` 短路保留） |
 | **对应用例** | `test_one_bad_error_code_no_longer_poisons_the_listing`（3 参数化）、`..._poisons_the_detail_endpoint`（3 参数化）、`test_null_error_code_rows_are_unaffected`、`test_a_row_bad_only_in_error_code_blames_error_code` |
 
-#### 修复 3：`report_text`（可空列，原 `:237`，修复后 `:294`）
+#### 修复 3：`report_text`（可空列，原 `:237`，修复后 `:312`）
 
 | | |
 |---|---|
 | **旧行为** | `FinalReport.model_validate_json(record.report_text)` 无兜底 → pydantic `ValidationError` → 兜底 handler 翻 **500**，**该条记录的详情永久打不开**（列表正常，所以用户看到"能列出、点进去就报错"） |
 | **新行为** | 解析失败 → **`report` 降级为 `None`**，记录本身（`status`/`question`/时间/`has_report`）**照常返回**；**同时记一条 warning 日志**（不吞错） |
-| **修复手法** | 新增 `_parse_report(raw) -> FinalReport \| None`（`routes_workflows.py:172`），`except ValidationError: logger.warning(..., exc_info=True); return None`；调用点 `:294` |
+| **修复手法** | 新增 `_parse_report(raw) -> FinalReport \| None`（定义见「行号锚点」块的 `:178`），`except ValidationError: logger.warning(..., exc_info=True); return None`；调用点 `:312` |
 | **对应用例** | `test_a_bad_report_text_no_longer_breaks_the_detail_endpoint`（3 参数化）、`test_an_empty_string_report_text_is_also_poison`、`test_a_bad_report_text_is_logged_not_swallowed`、`test_a_bad_report_text_row_does_not_poison_its_page`、`test_the_report_path_no_longer_reaches_the_fallback_handler` |
 
 ★ **与 status 降级的不对称是刻意的**：`status` 降级成字符串后用户还能看到值本身；
 而 `FinalReport` 是一棵嵌套结构，给它喂半截数据比给 `None` 更糟。
 理由写在 `_parse_report` 的 docstring 里。
+
+### 行号锚点
+
+下面每个 `行号锚点` 行由 `scripts/check_docs.py` 核对：它与
+`app/api/routes_workflows.py` 里**代码自己声明**的同名锚点注释互相印证
+（代码里写着 ``# **:NNN** `<该行原文>` ``）。**改代码时这两个地方必须一起改**，
+否则 `check_docs.py` 会红 —— 这正是它存在的意义：把「文档腐烂」变成一次红灯。
+
+行号锚点 `app/api/routes_workflows.py:155`
+行号锚点 `app/api/routes_workflows.py:178`
+行号锚点 `app/api/routes_workflows.py:215`
+行号锚点 `app/api/routes_workflows.py:222`
+行号锚点 `app/api/routes_workflows.py:268`
+行号锚点 `app/api/routes_workflows.py:311`
+行号锚点 `app/api/routes_workflows.py:321`
 
 ### ⚠️ 本轮最值钱的坑：只加 `_coerce_enum` 不够
 
@@ -421,15 +436,30 @@ PowerShell 会重组行尾，数出来是假的。要数行就 `read_bytes()` �
 2. `error_code` 空串透出为 `""`，与 `None`（无错误）**语义不同**，必须区分；
 3. 同页合法行**一条不少**（1 坏 + N 合法 → N+1 行）；
 4. `total` 仍是 `store.count()`（**全库行数，含坏行**）—— 前端据此算总页数；
-5. 两处枚举构造（`:207` / `:212`）**必须同批修**，只修一处对"双坏行"零效果。
+5. 两处枚举构造（`:215` / `:223`）**必须同批修**，只修一处对"双坏行"零效果。
 
 ⚠️ `WorkflowStatus` **没有 `UNKNOWN` / `INVALID` 成员**（10 个全是业务状态），
 所以"降级成一个占位枚举值"这条路走不通（要么新增成员牵动前端与 `TERMINAL_STATUSES`，
 要么用 `FAILED` 撒谎）。**原样保留字符串**是唯一不撒谎的降级方式 —— 这也是本轮选择它的原因。
 
+### 断言方向
+
+下面每一行都是 `scripts/check_docs.py` 的**可执行断言**：它会以真实夹具**执行**该用例，
+把用例体里发出的**第一个请求**实测到的状态码，与这里写死的期望值比对。
+所以「文档说 200、用例其实已经是 500」这种腐烂会变成一次红灯，而不是一句无人核对的散文。
+
+投喂行 `test_one_bad_row_no_longer_poisons_the_listing -> 200`
+投喂行 `test_ten_legal_rows_plus_one_bad_row_all_eleven_are_returned -> 200`
+投喂行 `test_one_bad_error_code_no_longer_poisons_the_listing -> 200`
+投喂行 `test_a_bad_report_text_no_longer_breaks_the_detail_endpoint -> 200`
+投喂行 `test_a_bad_report_text_row_does_not_poison_its_page -> 200`
+投喂行 `test_the_listing_is_unaffected_by_a_bad_report_text -> 200`
+投喂行 `test_a_null_report_text_row_is_unaffected -> 200`
+投喂行 `test_a_healthy_history_is_unaffected -> 200`
+
 ### 遗留：`tests/test_errors.py` 仍是兜底 handler 的守卫
 
-修掉 `:294` 之后，"坏 `report_text` → 抛 `ValidationError` → 兜底 handler 翻 500"
+修掉 `:312` 之后，"坏 `report_text` → 抛 `ValidationError` → 兜底 handler 翻 500"
 这条**触发路径消失了**。于是 task-37 的 `test_fallback_handler_leaks_no_paths`
 （它当年靠这条路实测"`ValidationError` 确实被 `@app.exception_handler(Exception)` 接住"
 + "响应体不泄漏本机路径"）**不再有可测对象**。
@@ -639,6 +669,74 @@ test_the_report_path_no_longer_reaches_the_fallback_handler
 
 ---
 
+## ⑦ 防腐烂：`scripts/check_docs.py`
+
+本文是交接文档，但它靠**大量「代码第 NNN 行是表达式 Z」「用例 X 钉住行为 Y」
+「期望值 200」**来讲故事 —— 这些断言**无法靠人肉长期复核**。代码一改，
+行号漂移、用例改名、断言方向翻转，文档就开始骗人，而读它的人
+（接手人 / 面试官）没有理由怀疑它。
+
+`scripts/check_docs.py` 把这些断言变成**可执行的检查**：
+
+```
+& ".\.venv\Scripts\python.exe" scripts\check_docs.py
+```
+
+退出码 `0` = 全部对得上；`1` = 有对不上的条目（逐条打印）。
+
+### 它核对哪三个维度
+
+| 维度 | 做法 | 能抓住什么 |
+|---|---|---|
+| **① 行号锚点** | 本文「行号锚点」块里的 `` `文件.py:NNN` ``，必须与**代码里自己声明的**锚点注释（`` # **:NNN** `<该行原文>` ``）落在同一行 | 代码改了一行、注释/文档没跟上 |
+| **② 用例存在性** | 文档提到或被锚点标注的每个 `test_*`，必须在 `tests/` 里真实存在（用 `ast` 收集，**不扫文本**） | 用例被改名/删除，文档还在引用它 |
+| **③ 断言方向** | 文档「断言方向」块里写死的 `<用例名> -> 200`，脚本会**以真实夹具执行该用例**，把它实际发出的第一个请求的状态码与之比对 | 「文档说 200、用例其实已经是 500」 |
+
+维度 ③ 的采集钩子是 `tests/test_history_robustness.py` 里的
+`_record_acceptance_status(func)`：它只**观察**不改行为，在请求发出的那一刻
+取值 —— 所以即使用例自己的断言后来失败了，记录到的也还是它**真的看到**的数字。
+
+### 它**不**保证什么（诚实边界）
+
+- 只核对文档里**写了**的东西。文档漏写的属性（某个坏行不再返回、
+  某个字段被悄悄丢掉）它一无所知 —— **它防腐烂，不防遗漏。**
+- 不核对散文：判断性叙述（「为什么修」「影响面多大」）无法机械复核。
+- 只要代码锚点与文档引用**同谋地一起改错**，它看不出来（两者一致它就绿）。
+  **它防的是单边漂移。**
+
+### 探针有效性（task-39 自证：3 种漂移各注入一次）
+
+一个"守护哨兵"如果对任何改坏都无反应，它就是安慰剂。三类漂移各注入一次，
+`.tmp/prove_check_docs.py`（**字节级 I/O** + 工作区字节备份 + `try/finally`）：
+
+```
+BASELINE rc=0 | 文档与仓库一致：行号锚点 7 条（代码锚点 7 个）、
+                用例 23 个全部存在、断言方向 12 个参数化实例
+
+=== M1 代码锚点行号漂移一位（:215 -> :216）===
+  改坏 rc=1 | 不一致 2 条：   ← 代码锚点自校验 + 文档对不上，双响
+  还原逐字节一致 -> True（26310 bytes）；复跑 rc=0
+=== M2 文档锚点行号漂移一位（:215 -> :216）===
+  改坏 rc=1 | 不一致 1 条：
+    [行号漂移] docs/HISTORY_ROBUSTNESS.md:401 声明
+      `app/api/routes_workflows.py:216` 是 'status=_coerce_enum(...)'，
+      实际是 'created_at=record.created_at,'
+  还原逐字节一致 -> True（39908 bytes）；复跑 rc=0
+=== M3 文档期望值 200 改成 500 ===
+  改坏 rc=1 | 不一致 1 条：
+    [断言方向] docs/HISTORY_ROBUSTNESS.md:451 文档说
+      `test_one_bad_row_no_longer_poisons_the_listing` 期望 500，实测 200
+  还原逐字节一致 -> True（39908 bytes）；复跑 rc=0
+```
+
+三个变异**全部被抓住**，且还原后逐字节一致、复跑复绿。
+
+★ **M3 是最有说服力的一条**：它不是"文本对不上"，而是**真的把用例跑了一遍**，
+用实测状态码推翻了文档里写死的期望值。这正是维度 ③ 存在的理由 ——
+只比对文本的哨兵抓不住"断言方向被悄悄翻回去"。
+
+---
+
 ## 附：本文相关文件
 
 | 路径 | 作用 |
@@ -649,7 +747,9 @@ test_the_report_path_no_longer_reaches_the_fallback_handler
 | `.tmp/acc2/prove_r38.py` | 第一轮探针（M154/M159/MBOTH/MFIELD，42 条时代） |
 | `.tmp/acc2/prove_r38b.py` | **终局探针**（五个变异，44 条时代，工作区字节还原） |
 | `.tmp/acc2/rename_stale.py` | 把过时用例名批量改成正向命名的字节级脚本（**不在 git 里**） |
-| `app/api/routes_workflows.py` | 三处修复全在此：`:155` `_coerce_enum` / `:172` `_parse_report` / 调用点 `:207` `:212` `:294` |
+| `scripts/check_docs.py` | ⑦ 防腐烂核对脚本：行号锚点 / 用例存在性 / 断言方向三个维度（**在 git 里**） |
+| `.tmp/prove_check_docs.py` | ⑦ 的探针有效性证明（3 种漂移注入 + 逐字节还原，**不在 git 里**） |
+| `app/api/routes_workflows.py` | 三处修复全在此：`:155` `_coerce_enum` / `:178` `_parse_report` / 调用点 `:215` `:223` `:312` |
 | `app/main.py` | 兜底 handler（把未预期异常翻成 500），`sanitize_detail(str(exc))[:500]` |
 | `tests/test_errors.py` | 兜底 handler 的**独立**守卫（`unexpected_exception_handler` + 路径不泄漏） |
 | `app/data/history.py` | 数据层，对毒行完全正常，**不需要改** |

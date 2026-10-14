@@ -163,13 +163,20 @@ def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:
     只在字符串这种**历史文本**上使用；值来自内部常量时不要用。
     取证与影响面见 `docs/HISTORY_ROBUSTNESS.md`。
     """
+    # **:155** `def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:`
+    # 行号锚点：由 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块 + `scripts/check_docs.py` 共同核对。
     try:
         return enum_cls(raw)
     except ValueError:
         return raw  # type: ignore[return-value]
 
+# 行号锚点：上面那个 `**:155**` 被 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块引用，
+# 由 `scripts/check_docs.py` 核对。**改动 `_coerce_enum` 时请同步文档**，别只改注释。
+
+
 
 def _parse_report(raw: str) -> FinalReport | None:
+    # **:178** `def _parse_report(raw: str) -> FinalReport | None:`
     """归档的 `report_text` → `FinalReport`，**坏数据不抛异常、降级成 `None`**。
 
     这是第三处同类降级（前两处是 `status` / `error_code`，见 `_coerce_enum`）：
@@ -204,12 +211,14 @@ def _item_from_record(record: HistoryRecord) -> HistoryItem:
     return HistoryItem(
         workflow_id=record.workflow_id,
         question=record.question,
+        # **:215** `        status=_coerce_enum(WorkflowStatus, record.status),`  ^{用例覆盖 test_one_bad_row_no_longer_poisons_the_listing}
         status=_coerce_enum(WorkflowStatus, record.status),
         created_at=record.created_at,
         finished_at=record.finished_at,
         has_report=record.has_report,
         llm_used=record.llm_used,
         error_code=(
+            # **:222** `            _coerce_enum(ErrorCode, record.error_code)`  ^{用例覆盖 test_one_bad_error_code_no_longer_poisons_the_listing}
             _coerce_enum(ErrorCode, record.error_code)
             if record.error_code is not None
             else None
@@ -252,6 +261,10 @@ def list_history(
     return ApiResponse[HistoryListData](
         ok=True,
         data=HistoryListData(
+            # **:268** `            items=[_item_from_record(record) for record in records],`
+            # ^{用例覆盖 test_one_bad_row_no_longer_poisons_the_listing}
+            # 行号锚点：见 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块，
+            # 由 `scripts/check_docs.py` 核对。
             items=[_item_from_record(record) for record in records],
             total=store.count(),
             limit=limit,
@@ -291,12 +304,20 @@ def get_history_detail(workflow_id: str) -> ApiResponse[HistoryDetailData]:
         )
 
     report = (
+        # **:311** `        _parse_report(record.report_text)`
+        # ^{用例覆盖 test_a_bad_report_text_no_longer_breaks_the_detail_endpoint}
+        # 行号锚点：见 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块，
+        # 由 `scripts/check_docs.py` 核对。
         _parse_report(record.report_text)
         if record.report_text is not None
         else None
     )
     return ApiResponse[HistoryDetailData](
         ok=True,
+        # **:321** `        data=HistoryDetailData(item=_item_from_record(record), report=report),`
+        # ^{用例覆盖 test_a_bad_report_text_no_longer_breaks_the_detail_endpoint}
+        # 行号锚点：见 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块，
+        # 由 `scripts/check_docs.py` 核对。
         data=HistoryDetailData(item=_item_from_record(record), report=report),
         error=None,
     )

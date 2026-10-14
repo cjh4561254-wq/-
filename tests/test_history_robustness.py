@@ -45,6 +45,7 @@ task-38 时该缺陷**已修复**（Lead 改的产品代码，本文件负责把
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -118,6 +119,114 @@ def _legal_id(i: int) -> str:
 def _client():
     """把服务端异常翻成 500 响应体，而不是让异常冒到测试里。"""
     return TestClient(app, raise_server_exceptions=False)
+
+
+# --------------------------------------------------------------------------
+# 供 `scripts/check_docs.py` 使用的「实测状态码」采集钩子
+# --------------------------------------------------------------------------
+# 为什么长在测试文件里，而不是让核对脚本自己去跑 HTTP：那段 harness
+# （monkeypatch 环境变量 + registry.clear() + lifespan 建表）就在这里，
+# 复刻一份必然漂移。核对脚本只调用 `_record_acceptance_status()`。
+#
+# 钩子只**观察**，不改行为：把用例**体**里发出的第一个请求的状态码记下来，
+# 在请求发出的那一刻取值 —— 所以即使用例自己的断言后来失败了，
+# 记录到的也还是它当时**真的看到**的那个数字。
+_CAPTURED_STATUS: list[int] = []
+_ORIGINAL_GET = TestClient.get
+
+
+def _recording_get(self, *args, **kwargs):
+    response = _ORIGINAL_GET(self, *args, **kwargs)
+    if not _CAPTURED_STATUS:
+        _CAPTURED_STATUS.append(response.status_code)
+    return response
+
+
+@contextmanager
+def _capture_status():
+    """用例期间的捕获窗口；`_client()` 只在窗口**内**才挂钩。"""
+    TestClient.get = _recording_get
+    try:
+        yield _CAPTURED_STATUS
+    finally:
+        TestClient.get = _ORIGINAL_GET
+
+
+def _record_acceptance_status(func):
+    """以真实夹具执行 `func`，返回 `{参数化 id 或 "": 首个响应状态码}`。
+
+    给 `scripts/check_docs.py` 用：文档的「投喂行」写死了
+    `<用例名> -> 200`，本函数把**每个参数化实例**实测到的状态码交回去，
+    让「文档说 200、用例其实已经是 500」这种腐烂变成一条红灯。
+
+    夹具与 rest 用例逐字同源（`tmp_path` + 环境变量 + 缓存重置 + registry 清空）。
+    """
+    import tempfile
+
+    from _pytest.monkeypatch import MonkeyPatch
+
+    params = getattr(func, "pytestmark", [])
+    argnames: list[str] = []
+    argvalues: list[tuple] = [()]
+    ids: list[str] = [""]
+    for mark in params:
+        if mark.name == "parametrize":
+            # argnames 可能是 "a,b,c" 字符串，也可能是 ("a","b") 序列 ——
+            # 直接 list() 一个字符串会把它拆成单个字符（'l','a','b'...），
+            # 症状是 `got an unexpected keyword argument 'l'`。
+            raw_names = mark.args[0]
+            if isinstance(raw_names, str):
+                argnames = [name.strip() for name in raw_names.split(",") if name.strip()]
+            else:
+                argnames = [str(name) for name in raw_names]
+            argvalues = list(mark.args[1])
+            if len(mark.args) == 3:
+                ids = list(mark.args[2])
+            break
+    if not argvalues:
+        argvalues = [()]
+        ids = [""]
+
+    recorded: dict[str, int] = {}
+    for index, values in enumerate(argvalues):
+        if not isinstance(values, tuple):
+            values = (values,)
+        # pytest 允许「一个参数收一个元组」的写法：`parametrize("pair", [("a", 1)])`
+        # 时 argvalues 里是 `(("a", 1),)` —— 这种情况才需要拆一层。
+        # 判据看**数量是否对得上**，不要无条件拆，否则 3 参数化会被拆坏。
+        if len(values) == 1 and len(argnames) > 1 and isinstance(values[0], (tuple, list)):
+            values = tuple(values[0])
+        if len(values) != len(argnames):
+            raise AssertionError(
+                f"参数化解析失败：argnames={argnames!r} 与 values={values!r} 数量不一致"
+            )
+        if len(ids) == len(argvalues):
+            param_id = ids[index]
+        else:
+            param_id = "-".join(repr(v) for v in values)
+
+        mp = MonkeyPatch()
+        tmp = Path(tempfile.mkdtemp(prefix="checkdocs_", dir=str(PROJECT_ROOT / ".tmp")))
+        try:
+            mp.setenv("DB_PATH", str(tmp / "db" / "app.db"))
+            mp.setenv("UPLOAD_DIR", str(tmp / "uploads"))
+            mp.setenv("CHARTS_DIR", str(tmp / "charts"))
+            config.reset_settings_cache()
+            reset_history_store_cache()
+            registry.clear()
+            _CAPTURED_STATUS.clear()
+            with _capture_status():
+                func(**dict(zip(argnames, values)))
+            recorded[param_id] = _CAPTURED_STATUS[0] if _CAPTURED_STATUS else -1
+        finally:
+            registry.clear()
+            reset_history_store_cache()
+            config.reset_settings_cache()
+            mp.undo()
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+    return recorded
 
 
 def _items(resp) -> list[dict]:
