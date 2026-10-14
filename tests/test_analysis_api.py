@@ -328,7 +328,11 @@ def test_polling_can_see_the_workflow_progress():
     assert state.started_at is not None, "后台线程真的跑过（开始时间被记下了）"
     assert state.finished_at is not None, "_run_safely 的 finally 一定盖上结束时间"
     assert state.step == "done"
-    assert state.status in TERMINAL_STATUSES or state.step == "done"
+    # 这里原来还有一行 `assert state.status in TERMINAL_STATUSES or state.step == "done"`，
+    # 它是同义反复：上一行已经断言 `step == "done"`，`or` 的右半边必然为真，
+    # 整个断言恒成立，status 是什么都过。看着像在守"走到终态了"，实际一个字符都没守。
+    # D-22 第 2 条：期望值两边相同的探针 = 没有探针。改成直接钉 status。
+    assert state.status in TERMINAL_STATUSES, "后台真的跑完了，状态得是终态"
 
 
 def test_the_route_module_has_no_prefix_of_its_own():
