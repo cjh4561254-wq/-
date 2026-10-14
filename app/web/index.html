@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <!-- 这一行必须留：Windows 上浏览器没有它就会用 GBK 猜编码，页面里的中文全是乱码。 -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 数据分析助手</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="page-head">
+    <h1>AI 数据分析助手</h1>
+    <p class="sub">上传 CSV / Excel → 用自然语言提问 → 真实计算 + 图表 + 可核对的报告</p>
+  </header>
+
+  <main>
+    <!-- ============ A 上传区 ============ -->
+    <section class="card" id="section-upload">
+      <h2><span class="tag">A</span> 上传数据</h2>
+      <div class="row">
+        <input type="file" id="file" accept=".csv,.xlsx">
+        <button id="upload" type="button">上传</button>
+      </div>
+      <!-- 上传失败的提示就地显示在这里，不弹全局错误（§9.2.1） -->
+      <p id="upload-state" class="state" role="status"></p>
+    </section>
+
+    <!-- ============ B 数据概览区 ============ -->
+    <section class="card" id="section-overview">
+      <h2><span class="tag">B</span> 数据概览</h2>
+      <p class="row">
+        <span id="dataset-summary" class="state">还没有数据</span>
+        <span id="llm-badge" class="badge badge-grey">正在检查大模型配置…</span>
+      </p>
+      <div class="two-col">
+        <div>
+          <h3>前 5 行预览</h3>
+          <div class="table-wrap"><table id="preview"><tbody><tr><td class="muted">上传后显示</td></tr></tbody></table></div>
+        </div>
+        <div>
+          <h3>列名</h3>
+          <ul id="columns" class="plain"><li class="muted">上传后显示</li></ul>
+          <h3>缺失值最多的 3 列</h3>
+          <ul id="missing-top3" class="plain"><li class="muted">上传后显示</li></ul>
+          <ul id="profile-warnings" class="plain warn-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ C 提问区 ============ -->
+    <section class="card" id="section-question">
+      <h2><span class="tag">C</span> 提问</h2>
+      <textarea id="question" rows="3" placeholder="例：各地区的销售额汇总"></textarea>
+      <div class="row">
+        <button class="example" type="button" data-question="各地区的销售额汇总">各地区的销售额汇总</button>
+        <button class="example" type="button" data-question="销售额前 5 的商品">销售额前 5 的商品</button>
+        <button class="example" type="button" data-question="哪些列有缺失值">哪些列有缺失值</button>
+      </div>
+      <div class="row">
+        <button id="ask" type="button" class="primary">开始分析</button>
+        <span id="ask-state" class="state" role="status"></span>
+      </div>
+    </section>
+
+    <!-- ============ D 状态区 ============ -->
+    <section class="card" id="section-status">
+      <h2><span class="tag">D</span> 分析进度</h2>
+      <ol id="steps" class="steps"></ol>
+      <p class="row">
+        <span id="elapsed" class="state">—</span>
+        <span id="workflow-state" class="state"></span>
+      </p>
+      <ul id="task-list" class="plain"></ul>
+      <!-- 工作流失败 / 超时的错误框：按 error.code 显示，绝不按 HTTP 状态码判断 -->
+      <div id="workflow-error" class="error-box" hidden></div>
+    </section>
+
+    <!-- ============ E 图表区 ============ -->
+    <section class="card" id="section-charts">
+      <h2><span class="tag">E</span> 图表</h2>
+      <!-- img 的 src 直接指向后端接口 8 的 URL，不下载、不转 base64 -->
+      <div id="charts" class="charts"><p class="muted">分析完成后显示</p></div>
+    </section>
+
+    <!-- ============ F 报告区 ============ -->
+    <section class="card" id="section-report">
+      <h2><span class="tag">F</span> 分析报告</h2>
+      <div id="report"><p class="muted">分析完成后显示</p></div>
+    </section>
+  </main>
+
+  <footer class="page-foot">
+    <a href="/docs">接口文档 /docs</a>
+    <span class="sep">·</span>
+    <a href="/api/health">健康检查 /api/health</a>
+    <span class="sep">·</span>
+    <span>原始文件只存在服务端内存与上传目录，不通过静态资源对外暴露</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

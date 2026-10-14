@@ -90,11 +90,18 @@ def test_health_matches_config_regardless_of_env():
 
 
 def test_root_hint():
-    """根路径给出文档入口，方便手动确认服务状态。"""
-    body = client.get("/").json()
-    assert body["ok"] is True
-    assert body["data"]["docs"] == "/docs"
-    assert body["data"]["health"] == "/api/health"
+    """根路径返回前端页面，并且页脚还留着原来的两个入口。
+
+    契约变更（task-25）：`/` 原来返回一段 JSON 提示，现在返回 `app/web/index.html`。
+    这条测试保留了它原本的意图 —— "根路径要能一眼确认服务状态、并给出文档入口" ——
+    只是入口从 JSON 字段变成了页面页脚里的两个链接。
+    页面本身的细节（六个区块的 id、charset、静态资源）由 tests/test_frontend.py 负责。
+    """
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "/docs" in resp.text
+    assert "/api/health" in resp.text
 
 
 # ---------------- 配置层 ----------------
@@ -172,7 +179,11 @@ def test_settings_cache_can_actually_be_reset(monkeypatch):
         # ② 关键断言：接口里那次 config.get_settings() 必须是**现取**的。
         #    旧实现下接口返回的是 import 时刻的旧对象，这里会红。
         assert client.get("/api/health").json()["data"]["app_name"] == "renamed-by-test"
-        assert client.get("/").json()["data"]["app"] == "renamed-by-test"
+        # 原来这里还有一条 `client.get("/").json()["data"]["app"]` 的同款断言。
+        # task-25 把 `/` 改成返回前端页面（不再是 JSON），这条断言没有了立足点；
+        # 它本来就是"同一个值的第二个观测面"，而真正能区分新旧实现的是上面这条
+        # 穿过 HTTP 接口的断言 —— 删掉它不会降低这条测试的鉴别力。
+        # （根路径的新契约由 test_root_hint 与 tests/test_frontend.py 覆盖。）
     finally:
         # 清缓存让后续测试重新读取 monkeypatch（已还原）的环境变量。
         # 这里不需要手动还原环境变量：monkeypatch 在本测试结束后自动还原。

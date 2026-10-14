@@ -13,7 +13,8 @@ import traceback
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import config
@@ -65,6 +66,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------- 前端静态资源 ----------------
+# 页面和资源都在 app/web/ 下。目录用 PROJECT_ROOT 算，不看启动时的 cwd ——
+# 从任何目录起 uvicorn 都能找到页面（与 app/config.py 的 upload_path 同一套做法）。
+#
+# **只挂 app/web，data/ 绝不挂成静态资源。**
+# data/uploads 里是用户上传的原始文件，挂上去就等于把它们变成公开 URL；
+# data/samples 里的示例数据同理。图表一律走接口 8（/api/workflows/{id}/charts/{file}），
+# 这条纪律在 docs/ARCHITECTURE.md §9.3 里写死了，tests/test_frontend.py 有断言盯着。
+WEB_DIR = config.PROJECT_ROOT / "app" / "web"
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 # ---------------- 统一错误响应 ----------------
 # FastAPI 默认的错误格式是 {"detail": ...}，和我们成功的 {"ok":true,"data":...}
@@ -204,17 +216,17 @@ app.include_router(analysis_router, prefix="/api")
 app.include_router(workflows_router, prefix="/api")
 
 
-@app.get("/", tags=["meta"], summary="根路径")
-def root() -> dict:
-    """给人看的入口提示，方便一眼确认服务起来了。"""
-    settings = config.get_settings()
-    return {
-        "ok": True,
-        "data": {
-            "app": settings.app_name,
-            "version": settings.app_version,
-            "docs": "/docs",
-            "health": "/api/health",
-        },
-        "error": None,
-    }
+@app.get("/", tags=["meta"], summary="分析页面")
+def root() -> FileResponse:
+    """首页：返回前端单页 `app/web/index.html`。
+
+    为什么不再返回一段 JSON 提示：
+        这个项目的入口本来就是"上传数据 → 提问 → 看报告"这一个页面，
+        返回 JSON 还得让人自己去拼地址。原来 JSON 里的几个入口
+        （`/docs`、`/api/health`）现在放在页面页脚里，地址一个都没少。
+
+    为什么用 FileResponse 而不是 StaticFiles(html=True) 挂根路径：
+        挂根路径会把整个 app/web/ 变成"任何文件都能按路径取"的静态站，
+        以后往里放任何东西都会自动对公网可见。这里只放出明确的一个文件。
+    """
+    return FileResponse(WEB_DIR / "index.html", media_type="text/html")
