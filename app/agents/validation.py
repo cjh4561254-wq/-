@@ -1,18 +1,28 @@
-"""报告生成（D4：**纯模板**，零 LLM）。
+"""报告生成与数字溯源。
 
-这个文件在 D4 只实现一半：`build_report(state) -> FinalReport` 用模板把工具算好的
-数字拼成中文段落。D5 再加 `validate(state)`（数字溯源，抓编造）与"让模型重写一遍"
-的路径。
+D4 只实现了 `build_report(state, validation=None)`（模板拼装，零 LLM）；
+D5 加上 `validate(state) -> ValidationResult`（数字溯源，抓编造）和"模型重写
+报告正文"的路径。
 
 ## 为什么模板报告不是"临时凑数"
 
 架构文档 §5.4 第 3 条把它定成**失败收尾的一部分**：模型不可用时报告必须还能出来。
-理由很实际 —— 第 4 天演示时 API Key 可能还没配好，如果没配就没有报告，
+理由很实际 —— 演示时 API Key 可能还没配好，如果没配就没有报告，
 那"完整链路"这件事当天就演示不了。所以模板路径是**产品功能**，不是降级补丁。
 
-由此推出本文件最重要的一条：`llm_used=False` 时，`summary` 的**第一段逐字**写
-「本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总」。
-不能含糊成"AI 分析结果" —— 用户有权知道这段话是人写的模板还是模型写的。
+## `llm_used` 的口径（D5 修订，原先是硬编码 False）
+
+这个字段是"这次到底有没有用模型"的**诚实标记**（`app/schemas_workflow.py:210`），
+所以它必须按 `state.plan.source` 推导，不能写死：
+
+    - `rule_fallback` → False（模型没参与，或调失败退回了规则）
+    - `llm`          → True（这轮的计划是模型给的）
+
+配套地，`summary` 首段也跟着换：没模型 → 逐字的 TEMPLATE_NOTICE；
+模型参与了规划但正文仍是模板 → 逐字的 LLM_PLANNED_NOTICE。
+**两者都是常量**，因为这两句话要被测试逐字断言（验收标准 ① ② 都钉了它们）。
+D4 时这里写死 `False`，导致真 key 规划成功后报告说"未使用大模型"——
+数字全对，但"哪一步用了模型"这句陈述是假的，这恰是验收标准 ② 要抓的东西。
 
 ## 两条硬约束
 
@@ -28,7 +38,12 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from app.schemas_workflow import FinalReport, ReportSection, WorkflowState
+from app.schemas_workflow import (
+    FinalReport,
+    ReportSection,
+    ValidationResult,
+    WorkflowState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +51,32 @@ logger = logging.getLogger(__name__)
 # 拼字符串意味着有一天有人会顺手改两个字，而这句话是要被测试断言的。
 TEMPLATE_NOTICE = "本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总"
 
+# 模型参与了规划、但正文仍是模板时用的诚实标记。**不能省**：
+# D4 实测过，真 key 规划成功后报告首段若仍写"未使用大模型"，用户会以为这次
+# 全程没用模型（验收标准 ② 要求"写明哪一步用了模型、哪一步没用"）。
+LLM_PLANNED_NOTICE = (
+    "本次由大模型参与规划（选择了分析工具与参数），"
+    "但报告正文是模板自动汇总的，以下结论仍为工具结果的直接汇总"
+)
+
 # 表格最多复制多少行。20 行足够在网页上读完，再多就变成"把工具输出原样倒出来"。
 _MAX_TABLE_ROWS = 20
 
 
-def build_report(state: WorkflowState) -> FinalReport:
+def build_report(
+    state: WorkflowState, validation: ValidationResult | None = None
+) -> FinalReport:
     """把 `state.results` 拼成一份 `FinalReport`。**不抛异常。**
 
     它**只读** `state`（不改任何字段）：改状态是 Orchestrator 的事（§3 第 1 条）。
+
+    `validation` 是 D5 的重写路径参数：第一次写报告时还没有校验结果
+    （先有报告才谈得上校验报告里的数字），所以默认 `None`；
+    校验发现问题后由 Orchestrator 带着 `ValidationResult` 再调一次，
+    这时 `summary` 里要写清"哪些数字被复核过"。
     """
     try:
-        return _build(state)
+        return _build(state, validation)
     except Exception:
         # 真到了这里说明模板代码自己有 bug（比如某个字段是意料外的类型）。
         # 兜底不是"掩盖问题"：日志里有完整堆栈，而用户至少还能看到一句
@@ -56,7 +86,9 @@ def build_report(state: WorkflowState) -> FinalReport:
         return _minimal_report(state)
 
 
-def _build(state: WorkflowState) -> FinalReport:
+def _build(
+    state: WorkflowState, validation: ValidationResult | None = None
+) -> FinalReport:
     """正常路径：每个成功的任务一段，外加数据质量说明。"""
     sections: list[ReportSection] = []
     citations: list[str] = []
@@ -92,8 +124,28 @@ def _build(state: WorkflowState) -> FinalReport:
         data_quality_notes=_quality_notes(state),
         citations=citations,
         generated_at=datetime.now(timezone.utc),
-        llm_used=False,  # D4 只有模板路径。这个字段是给前端显示"规则模式"用的
+        llm_used=_llm_used(state),
     )
+
+
+def _llm_used(state: WorkflowState) -> bool:
+    """**这次到底有没有用模型** —— `FinalReport.llm_used` 的唯一来源。
+
+    这里曾经硬编码 `False`，理由是"D4 只有模板路径"。但那句话本身变成了假陈述：
+    真 key 接入后模型确实参与了**规划**（`plan.source == "llm"`），
+    而报告首段、接口 7 的 `llm_used`、前端横幅三处都会显示"未使用大模型"。
+    数字一个没错，错的是"哪一步用了模型"这句陈述 —— 而 `llm_used` 在
+    `app/schemas_workflow.py:210` 的 docstring 里被定义为"这次到底有没有用模型"的
+    **诚实标记**，两头必须对上。
+
+    口径（只认 `plan.source`，不猜）：
+    - `rule_fallback` → False：模型没参与（要么没配，要么调失败退回了规则）。
+    - `llm` → True：这轮的计划是模型给的。
+    - 计划还没生成 → False：走到这里说明比规划更早的地方就失败了。
+    """
+    if state.plan is None:
+        return False
+    return state.plan.source == "llm"
 
 
 def _latest_results(state: WorkflowState) -> list:
@@ -194,22 +246,32 @@ def _summarize_describe(data: dict[str, Any]) -> str:
 
 
 def _summarize_correlation(data: dict[str, Any]) -> str:
+    """挑"绝对值最大的一对"来说，不是挑第一个。
+
+    `app/tools/compare.py:76-85` 的 `pairs` 是**按列序**构造的（上三角遍历），
+    没有任何排序 —— 所以 `pairs[0]` 只是"第一对列"，跟相关性强不强没有关系。
+    直接说 `pairs[0]` 会把"最弱的一对"包装成"最强的一对"：
+    sales.csv 上 `pairs[0]` 是 销量/单价（r=-0.0457），而真正最强的是
+    销售额/利润（r=0.9872）。**这句话的数据是真的，但"最强"这个判断是假的。**
+
+    排序也不归报告做（§3.5"不做计算"）—— 这里做的只是"挑一个已有的元素"，
+    比较的是工具已经算好的 `r`，不产生任何新的数字。
+    """
     pairs = data.get("pairs")
     if not isinstance(pairs, list) or not pairs:
         return "没有算出可用的相关系数（可能数值列不足 2 列）。"
 
-    # 工具已经按相关系数绝对值从大到小排好了（见 app/tools/compare.py），
-    # 这里直接取第一条即可 —— 排序是工具的事，报告不重排。
-    top = pairs[0]
-    if not isinstance(top, dict):
-        return "相关系数结果的结构不是预期形状。"
+    valid = [p for p in pairs if isinstance(p, dict) and p.get("r") is not None]
+    if not valid:
+        return "没有算出可用的相关系数（所有列对都缺一个实数相关系数）。"
+
+    # `r` 可能是负数，所以按绝对值取最大；并列时取先出现的那一对（max 的稳定性）。
+    top = max(valid, key=lambda item: abs(_as_float(item.get("r"))))
 
     r = top.get("r")
-    if r is None:
-        return f"{top.get('x')} 与 {top.get('y')} 之间算不出相关系数（可能是某一列没有波动）。"
     return (
         f"相关性最强的一对是 {top.get('x')} 与 {top.get('y')}，"
-        f"相关系数 {_num(r)}（共比较了 {len(pairs)} 对）。"
+        f"相关系数 {_num(r)}（共比较了 {len(valid)} 对）。"
     )
 
 
@@ -253,12 +315,17 @@ def _summarize_rows(data: dict[str, Any]) -> str:
 
 
 def _summary(state: WorkflowState, citations: list[str]) -> str:
-    """总述：第一段是**逐字**的诚实标记，第二段是这次跑成了什么。"""
+    """总述：第一段是**逐字**的诚实标记，第二段是这次跑成了什么。
+
+    第一段用哪句取决于"模型到底参与了哪一步"（`_llm_used` 的口径）：
+    全程没模型 → TEMPLATE_NOTICE；模型参与了规划 → LLM_PLANNED_NOTICE。
+    两句话都是常量，因为**这句话是要被测试逐字断言的**（验收标准 ① ② 都钉了它）。
+    """
     tasks = state.plan.tasks if state.plan else []
     failed = [task for task in tasks if task.status.value == "FAILED"]
     skipped = [task for task in tasks if task.status.value == "SKIPPED"]
 
-    lines = [TEMPLATE_NOTICE]
+    lines = [LLM_PLANNED_NOTICE if _llm_used(state) else TEMPLATE_NOTICE]
     lines.append(
         f"针对问题「{state.question}」，系统一共规划了 {len(tasks)} 个分析任务，"
         f"成功 {len(citations)} 个。"
@@ -344,10 +411,11 @@ def _minimal_report(state: WorkflowState) -> FinalReport:
     它存在的意义只有一个：`build_report` 的契约是"绝不抛异常"。返回 None 会让
     Orchestrator 以为"报告没生成"，而实际上我们只是拼装时出了 bug —— 两者要分开。
     """
+    notice = LLM_PLANNED_NOTICE if _llm_used(state) else TEMPLATE_NOTICE
     return FinalReport(
         report_id=uuid4().hex[:8],
         title=f"分析报告：{_clip(state.question, 60)}",
-        summary=TEMPLATE_NOTICE + "\n\n生成报告时遇到问题，只保留了基本说明。",
+        summary=notice + "\n\n生成报告时遇到问题，只保留了基本说明。",
         sections=[
             ReportSection(
                 heading="报告生成遇到问题",
@@ -359,8 +427,20 @@ def _minimal_report(state: WorkflowState) -> FinalReport:
         data_quality_notes=[],
         citations=[],
         generated_at=datetime.now(timezone.utc),
-        llm_used=False,
+        llm_used=_llm_used(state),
     )
+
+
+def _as_float(value: Any) -> float:
+    """把工具结果里的数字读成 float；读不了按 0 处理（只用于**排序**，不进报告）。
+
+    这里出现 float 转换会不会违反"报告不做计算"？不会：转换本身不产生新数字，
+    报告里出现的 `r` 仍然是 `top.get("r")` 的原值（见 `_num` 的格式化）。
+    `_as_float` 唯一的用途是给 `abs()` 一个可比较的量 —— 模型不参与这个判断。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
 
 
 def _num(value: Any) -> str:
