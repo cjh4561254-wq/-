@@ -230,6 +230,8 @@ ai-data-analyst-agent/
 │     └─ sales.csv                    (已存在, c15aa92) 唯一演示数据（2168 行 × 9 列，中文列名，故意含缺失值/重复行/异常值）；行尾由 .gitattributes 钉成 LF（见 D-15）
 ```
 
+**根目录那个 `.env.example` 的定位**：它是**环境变量清单**，不是模板——应用既不读它、也不读 `.env`，配置来源只有进程的环境变量（见 §4.0.1 与 `docs/DECISIONS.md` D-19）。所以改它不会改变运行行为，要改配置请设系统环境变量（`README.md` 的「配置」一节写了怎么设）。
+
 ### 2.1 依赖方向（只允许箭头指向的方向）
 
 ```
@@ -408,7 +410,21 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 ### 4.0.1 配置项总表（`app/config.py`，**已有字段照抄，不要重命名**）
 
+**配置来源只有一个：进程的环境变量**（Windows 上就是「系统属性 → 环境变量」里那些）。**不读 `.env`**：`app/config.py:61-70` 的 `model_config` 里故意没有 `env_file`（想临时读某个 dotenv 文件仍然可以显式传 `Settings(_env_file=...)`，实测可用）。背景：本机环境变量里配的是 DeepSeek 官方名 `DEEPSEEK_*`，而应用原先只认 `LLM_*`，于是"机器上明明配了 key，应用却报没配置"。决策见 `docs/DECISIONS.md` **D-19**。
+
+**三个大模型字段各认两个名字，`LLM_*` 优先、`DEEPSEEK_*` 兜底**（常量在 `app/config.py:46-48`，并集 `LLM_ENV_VAR_NAMES` 在 `:51-55`）：
+
+| 字段 | 认的名字（**前面的优先**，`AliasChoices`） | 默认值 |
+|---|---|---|
+| `llm_base_url` | `LLM_BASE_URL` / `DEEPSEEK_BASE_URL` | `""`（空 = 明确不接模型） |
+| `llm_model` | `LLM_MODEL` / `DEEPSEEK_MODEL` | `"deepseek-flash"` |
+| `llm_api_key` | `LLM_API_KEY` / `DEEPSEEK_API_KEY` | `""` |
+
+**顺序不能反**：反了的话本机那套 `DEEPSEEK_*` 会悄悄盖掉显式设置的 `LLM_*`，而"我明明设了 `LLM_MODEL` 却不生效"是最难查的一类配置问题（`app/config.py:84-86` 有同样的注释）。根 `conftest.py:230-250` 的 autouse 夹具 `_isolate_llm_env` 在每个用例开始前清空这六个名字，清的就是 `LLM_ENV_VAR_NAMES` 这一份清单——否则"未配置"类用例在**有 key 的机器上必红**，而用户的机器就是有 key 的那台。
+
 为什么给一张表：`Settings` 里已经有 15 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
+
+**字段名 → 环境变量名**：没有别名的字段，环境变量名就是**字段名的大写形式**——`model_config` 里 `case_sensitive=False`、`env_prefix=""`（实测 `APP_NAME` / `MAX_ROWS` / `UPLOAD_DIR` 分别改到 `app_name` / `max_rows` / `upload_dir`），所以下面表格最后一列里的名字，就是能拿去 `setx` 的名字。只有三个大模型字段例外：它们用了 `AliasChoices`，名字写死在上面那张小表里。还要分清两种错法的响法：**名字写错会静默失效**（默认值一直在起作用，查不出来），**值写错立刻报错**（`MAX_ROWS=not-an-int` 直接抛 `ValidationError`，实测）。
 
 | 字段 | 类型 / 约束 | 默认值 | 对应环境变量 | 用途 | 状态 |
 |---|---|---|---|---|---|
@@ -419,9 +435,9 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `max_rows` | `int`，`gt=0, le=5_000_000` | `200_000` | `MAX_ROWS` | 解析后**行数**上限（第 10 节第 2b 条） | **v1.1 新增** |
 | `max_columns` | `int`，`gt=0, le=2_000` | `200` | `MAX_COLUMNS` | 解析后**列数**上限（同上） | **v1.1 新增** |
 | `temp_dir` | `str`，`min_length=1` | `".tmp"` | `TEMP_DIR` | 临时文件目录（相对项目根）；用 `settings.temp_path` 取 `Path`。**不是给业务代码读的**：`app/main.py` 的 lifespan 用 `app/runtime.py` 的 `runtime_environment()` 把 `TEMP`/`TMP`/`TMPDIR` 指到这里，Starlette 处理 >1 MB 上传时的 spool 文件就落在里面；目录不可写会让**服务启动失败**（而不是悄悄换个地方）。原因见 `docs/DECISIONS.md` D-07 | **v1.1 新增** |
-| `llm_base_url` | `str` | `""` | `LLM_BASE_URL` | 模型服务地址（DeepSeek 等 OpenAI 兼容端点） | 已存在 |
-| `llm_model` | `str` | `""` | `LLM_MODEL` | 模型名 | 已存在 |
-| `llm_api_key` | `str`，`repr=False` | `""` | `LLM_API_KEY` | 密钥；**任何日志/响应里都不许出现** | 已存在 |
+| `llm_base_url` | `str` | `""` | `LLM_BASE_URL` / `DEEPSEEK_BASE_URL`（前者优先） | 模型服务地址（DeepSeek 等 OpenAI 兼容端点） | 已存在（v1.2 起认两名） |
+| `llm_model` | `str` | `"deepseek-flash"` | `LLM_MODEL` / `DEEPSEEK_MODEL`（前者优先） | 模型名；**留空就是 `deepseek-flash`**（本机没配模型名，见 §14.7） | 已存在（v1.2 起认两名 + 有默认值） |
+| `llm_api_key` | `str`，`repr=False` | `""` | `LLM_API_KEY` / `DEEPSEEK_API_KEY`（前者优先） | 密钥；**任何日志/响应里都不许出现** | 已存在（v1.2 起认两名） |
 | `llm_timeout_seconds` | `int`，`gt=0, le=300` | `60` | `LLM_TIMEOUT_SECONDS` | 单次模型调用超时 | 已存在 |
 | `llm_max_retries` | `int`，`ge=0, le=5` | `2` | `LLM_MAX_RETRIES` | 模型调用重试上限 | 已存在 |
 | `charts_dir` | `str`，`min_length=1` | `"data/charts"` | `CHARTS_DIR` | 生成的 PNG 落地目录（相对项目根）；用 `settings.charts_path` 取 `Path`。接口 8 按文件名从这里取图 | **D4 冻结时新增** |
@@ -429,7 +445,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `tool_call_limit` | `int`，`ge=1, le=200` | `20` | `TOOL_CALL_LIMIT` | 一条工作流允许的模型工具调用总数；防"模型重试 × 任务重试"组合成死循环，也顺带防住无限花钱 | **D4 冻结时新增** |
 | `db_path` | `str` | — | `DB_PATH` | SQLite 历史归档路径（决策 3：只做归档写入，内存态仍是唯一事实来源） | **D6 追加**（尚未在 `config.py` 里） |
 
-四个**计算属性**（不是配置项，别去 `.env` 里找）：`settings.upload_path`（`Path` 形式的上传目录，`main.py` 的 lifespan 已用它 `mkdir`）、`settings.charts_path`（同上，图表目录）、`settings.max_upload_bytes`（字节数）、`settings.llm_configured`（`llm_base_url` / `llm_model` / `llm_api_key` **三项都非空**才为 `True`，**兜底模式的判定依据**）。
+五个**计算属性**（不是配置项，环境变量里没有它们，别去设）：`settings.upload_path`（`Path` 形式的上传目录，`main.py` 的 lifespan 已用它 `mkdir`）、`settings.charts_path`（同上，图表目录）、`settings.temp_path`（同上，临时目录）、`settings.max_upload_bytes`（字节数）、`settings.llm_configured`（`llm_base_url` / `llm_model` / `llm_api_key` **三项都非空**才为 `True`，**兜底模式的判定依据**，也是 `GET /api/health` 里 `llm_configured` 的来源）。
 
 ### 4.0.2 关键决定：`pd.DataFrame` 不放进任何 Pydantic 模型
 
@@ -1324,7 +1340,7 @@ async function pollWorkflow(workflowId) {
 | 2b | **行数与列数两道闸**（v1.1 追加） | **字节数上限挡不住"很小但很宽/很长"的文件**：200 列 × 20 万行的 CSV 可能只有 3 MB，却能把内存拖死（每列一个 object/float64 数组 + 画像逐列统计）。所以 `app/config.py` 已有 `max_rows`（默认 **200000**，`Field(gt=0, le=5_000_000)`）与 `max_columns`（默认 **200**，`Field(gt=0, le=2_000)`），`.env.example` 有 `MAX_ROWS` / `MAX_COLUMNS`。**判在哪一步**：读文件时无法知道行数（CSV 得先解析），所以先用 `pd.read_csv(..., nrows=settings.max_rows + 1)` / `read_excel(...)` 读**前 N+1 行**——读到第 N+1 行说明超限，立刻抛 `AppError(ErrorCode.BAD_REQUEST, "行数超过上限 200000")`；列数在拿到 DataFrame 后立刻判 `df.shape[1] > settings.max_columns`。两个上限都用 `BAD_REQUEST`（400）而不是 413：**413 的语义是"请求体太大"，而这里限制的是解析后的形状**，报文本身可能只有 3 MB | `loader.py`（读时判行、读完判列）|
 | 3 | 路径穿越防护 | ① 落盘名一律用 `{uuid4().hex}.{ext}`，**用户文件名只写进数据库/内存字段，从不参与拼路径**；② 读取时再做一次确认：`resolved = target.resolve(); assert resolved.parent == upload_path.resolve()`（用 `Path.resolve()` 消掉 `..` 之后比较父目录）；③ 文件名黑名单：含 `..`、`/`、`\`、`:`、`\0` 直接拒绝 | `routes_datasets.py`、`data/store.py` |
 | 4 | 安全文件命名 | 图表文件名只由 `chart_id`（12 位 hex）决定；`ChartResult.filename` 用正则 `^[0-9a-f]{12}\.png$` 校验后才允许读；工作流目录名只由 `workflow_id`（32 位 hex）决定 | `routes_workflows.py`、`agents/charts.py` |
-| 5 | 密钥管理 | 密钥只从 `.env` 读（`pydantic-settings`），`.env` 已在 `.gitignore`；`Settings.llm_api_key` 已带 `repr=False`，任何 `print(settings)` 都不会带出原文；**任何 API 响应与日志里都不允许出现密钥**（测试用 `assert "sk-" not in resp.text` 之类的方式兜底，不要只靠人工检查） | `config.py`（已做）+ QA 测试 |
+| 5 | 密钥管理 | 密钥只从**进程环境变量**读（`app/config.py`；**不读 `.env`**，见 §4.0.1 与 D-19）；`.env` 仍在 `.gitignore` 里，但那是**防误提交**（谁本地写了一个），不是应用要读它；`Settings.llm_api_key` 已带 `repr=False`，任何 `print(settings)` 都不会带出原文；**任何 API 响应与日志里都不允许出现密钥**（测试用 `assert "sk-" not in resp.text` 之类的方式兜底，不要只靠人工检查） | `config.py`（已做）+ QA 测试 |
 | 6 | 模型调用超时与重试上限 | `llm_timeout_seconds`（默认 60，上限 300）+ `llm_max_retries`（默认 2，上限 5）已经写在 Settings 里，**必须真的传进 openai 客户端**：`OpenAI(base_url=..., api_key=..., timeout=settings.llm_timeout_seconds, max_retries=settings.llm_max_retries)`。另外在 orchestrator 层再限一次总时长（`max_workflow_seconds=180`） | `llm/client.py` |
 | 7 | 禁止 eval / exec / 动态导入 | 全项目禁止 `eval(`、`exec(`、`compile(`、`__import__(`、`getattr(__builtins__, ...)`；工具调用只走显式白名单注册表。**测试里加一条源码检查（B-3 修订：用 `ast` 而不是字符串搜索）**，见下方代码。**为什么不用"读文本找 `eval(` 子串"**：那样注释、docstring、以及 `test_security.py` 自己都会命中（测试里必须写出 `eval(` 这个字符串），要么误报要么被迫写"注释里出现不算"这种无法机检的规则；用 AST 只认**真的被调用**的节点 | `tests/test_security.py` |
 
@@ -1819,6 +1835,35 @@ B. app/ 下未出现在树里的 .py: 无
 
 **本轮明确没动的部分**：`app/llm/`（整包）、`app/agents/orchestrator.py`、`app/core/background.py`、`app/api/routes_analysis.py`、`app/agents/{charts,validation}.py`、`app/api/routes_workflows.py`、`app/web/`、以及 `tests/` 里那 5 个 D4–D6 计划项 —— 契约已定，但实现尚未落地。`app/agents/planner.py` 只加 `plan()` 的**签名契约**，函数本身也还没写。
 
+### 14.8 配置来源改为系统环境变量（D-19）后的同步记录
+
+**基线**：`d4fd727`（= `db95df3` 改配置层 + `d4fd727` 钉测试子进程编码；全量实测 **490 passed**）。触发原因是一句用户指令：「别读取.env了，我本地电脑的环境配置里面有deep seek的key」。
+
+**代码侧做了什么**（Lead 落地，本节只记录事实，不改代码）：`app/config.py:61-70` 的 `model_config` 删掉 `env_file`（**不读 `.env`**）；三个大模型字段改用 `AliasChoices` 各认两个名字（`LLM_*` 优先 / `DEEPSEEK_*` 兜底，常量在 `:46-48`）；`llm_model` 默认值改成 `"deepseek-flash"`；根 `conftest.py:230-250` 新增 autouse 夹具 `_isolate_llm_env`（每个用例前清空那六个名字）。决策编号：**D-19**（配置来源改为系统环境变量并认 `DEEPSEEK_*` 三名）、**D-20**（测试不许依赖外壳的编码设置）。
+
+**实测的 6 条行为**（我跑的探针 `.tmp/probe_config_source.py`，不是读代码猜的）：
+
+| # | 输入 | 实测结果 |
+|---|---|---|
+| 1 | 六个名字全清 | `llm_model == "deepseek-flash"`、`llm_configured is False` |
+| 2 | 同时设 `LLM_MODEL` 与 `DEEPSEEK_MODEL` | 取到 `LLM_MODEL` 的值（**`LLM_*` 赢**） |
+| 3 | 只设 `DEEPSEEK_MODEL` | 取到它的值（兜底生效） |
+| 4 | 只设 `DEEPSEEK_BASE_URL` + `DEEPSEEK_API_KEY` | `llm_configured is True` |
+| 5 | cwd 里放一个写着 `LLM_MODEL=FROM_DOTENV_FILE` 的 `.env`，直接 `Settings()` | 仍是默认值 —— **确实不读 `.env`**（`Settings.model_config["env_file"] is None`） |
+| 6 | `Settings(_env_file=<那个文件>)` 显式传 | 读到 `FROM_DOTENV_FILE` —— 显式逃生门仍然可用 |
+
+**"环境变量设完不生效"的实测**（写进 README 之前先验过）：`setx` 之后立刻用 `[Environment]::GetEnvironmentVariable(..., "User")` 能读回新值（注册表层已写入），但从**已经在运行的进程**里再启动子进程，拿到的仍是旧环境块 —— 所以"设完必须新开终端、正在跑的服务要重启"是有实测支撑的，不是套话。探针用的是自造变量名（`AIDA_ENV_PROBE`），写完立刻删除；机器级 `DEEPSEEK_BASE_URL` / `DEEPSEEK_API_KEY` 只读"有没有"，值一律不打印、不进文档。
+
+**本轮改的三个文件**（写入范围仅这三个）：
+
+| 文件 | 改了什么 |
+|---|---|
+| `README.md` | 「配置」一节整段重写：来源 = 进程环境变量、不读 `.env`；Windows 设变量的图形界面路径与 `setx` 两种写法（`/M` = 系统级，需管理员）；**设完要新开终端**；六个名字与优先级表；默认模型 `deepseek-flash`；自检两条（`[bool]$env:DEEPSEEK_API_KEY`、`GET /api/health` 的 `llm_configured`）。测试一节把"三种 `.env` 环境"表换成"夹具清空六个名字"的说明（D-19/D-20）；目录树 `config.py` / `.env.example` 两行注释同步；安全约定第 1 条改为"只从环境变量读"；「设完必须新开终端」那段写明验证用的是**自造的临时变量名**（不碰真实密钥，`/M` 的语义来自 `setx /?`） |
+| `.env.example` | 从"模板"改写为**环境变量清单**：开头写明"应用不读它、也不读 `.env`"、要生效该怎么设；三个大模型键补别名说明（`LLM_*` 优先）。**无任何真实值**；示例命令一律用 `<你的密钥>` 占位（全文 `sk-` 出现 **0** 次） |
+| `docs/ARCHITECTURE.md` | §4.0.1 增"配置来源"段 + 六个名字对照表 + 夹具说明；表中三个大模型字段的"对应环境变量"列改为两名（前者优先）、`llm_model` 默认值 `""` → `"deepseek-flash"`；计算属性 4 → **5** 个（补 `temp_path`）；§10 第 5 条密钥来源；§2 追加 `.env.example` 定位说明；附录 B 的 `config.py` 行 12 → **15** 个字段；§4.0.1 补"**字段名 → 环境变量名 = 大写**"的映射规则（`case_sensitive=False`、`env_prefix=""`，实测 `APP_NAME`/`MAX_ROWS`/`UPLOAD_DIR`），并区分"名字写错静默失效 / 值写错立刻抛 `ValidationError`"；本节 |
+
+**剩下的 `.env` 提法都有明确指向，不是漏改**：`os.environ` 与 `python-dotenv` 字面上含 `.env` 子串但与 dotenv 文件无关；§10 第 2b 条里"`.env.example` 有 `MAX_ROWS`/`MAX_COLUMNS`"仍成立（清单里有这两个键）；§14.2 与 §14.7 的行是**历史记录**，保留当时的说法。按 `grep -n "\.env"` 复查时，先看本节这一句，再逐处判断。
+
 ---
 
 ## 附录 A：术语速查（给基础 Python 水平读者）
@@ -1840,7 +1885,7 @@ B. app/ 下未出现在树里的 .py: 无
 | 已存在文件 | 本文档的处理方式 |
 |---|---|
 | `app/schemas.py` | **不改**已有 `ApiResponse`/`ApiError`/`ErrorCode`；`ErrorCode` 现在共 **8 个码**（`BAD_REQUEST`/`NOT_FOUND`/`METHOD_NOT_ALLOWED`/`FILE_TOO_LARGE`/`UNSUPPORTED_FILE`/`SERVICE_UNAVAILABLE`/`WORKFLOW_TIMEOUT`/`INTERNAL_ERROR`，与 §7.0 表逐行对应）。后三个是 `fe155af` 追加的（追加不算破坏） |
-| `app/config.py` | **不改**已有字段；已在的 **12 个**以 **§4.0.1 的配置项总表**为准（`app_name`/`app_version`/`upload_dir`/`temp_dir`/`max_upload_mb`/`max_rows`/`max_columns`/`llm_base_url`/`llm_model`/`llm_api_key`/`llm_timeout_seconds`/`llm_max_retries`）。D3 追加 `charts_dir`、`max_workflow_seconds`、`db_path`（若 D6 做 SQLite） |
+| `app/config.py` | **不改**已有字段；已在的 **15 个**以 **§4.0.1 的配置项总表**为准（`app_name`/`app_version`/`upload_dir`/`temp_dir`/`max_upload_mb`/`max_rows`/`max_columns`/`llm_base_url`/`llm_model`/`llm_api_key`/`llm_timeout_seconds`/`llm_max_retries`/`charts_dir`/`max_workflow_seconds`/`tool_call_limit`）。配置来源 = **进程环境变量，不读 `.env`**；三个大模型字段自 `db95df3` 起各认两个名字（`LLM_*` 优先、`DEEPSEEK_*` 兜底），`llm_model` 默认 `"deepseek-flash"` —— 见 D-19 与 §14.8。若 D6 做 SQLite 再追加 `db_path` |
 | `app/main.py` | D6 追加静态文件挂载与首页路由；CORS 白名单保持不动。**已存在的 4 个异常处理器不要动**（`AppError` / `StarletteHTTPException` / `RequestValidationError` / 兜底 `Exception`，见 §7） |
 | `app/runtime.py` | **已改过（`24aeac1`）**：除 `STARTED_AT` / `uptime_seconds()` 外新增 `runtime_environment(settings)`，由 `main.py` 的 lifespan 包住 `yield`。文档不重复它的实现，原因见 `docs/DECISIONS.md` D-07 |
 | `app/errors.py` | **已存在（`fe155af`）**，本文档 §7.3 的两个代码块要与它逐行一致；`AppError.status_code` 目前没有调用点，**留着别删**（将来"模型不可用"想返回 503 时从调用点传，不要往枚举里塞新码） |

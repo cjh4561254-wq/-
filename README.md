@@ -65,21 +65,64 @@ python -m pip install -r requirements.lock.txt
 
 ## 配置
 
+**配置来源只有一个：进程的环境变量**（Windows 上就是「系统属性 → 环境变量」里那些）。
+应用**不读 `.env` 文件**：`app/config.py` 的 `model_config` 里故意没有 `env_file`。
+所以网上常见的"复制 `.env.example` 为 `.env` 再填值"这条在本项目**已经无效** ——
+`.env.example` 现在只当"有哪些键"的清单用，改它不会影响运行。
+
+### 怎么设（Windows 11）
+
+图形界面：`Win + R` → 输入 `sysdm.cpl` → 「高级」→「环境变量」→ 新建。
+「用户变量」只影响你自己、**不需要管理员**；「系统变量」影响整台机器、**需要管理员**。
+选错作用域不会报错，只会"看起来设了却不生效"；另外这里点完「确定」也**不会**改变
+已经开着的终端（原因和下面命令行那段一样，见那条实测结论）。
+
+命令行等价写法（用户级）：
+
 ```powershell
-Copy-Item .env.example .env
+setx LLM_API_KEY "sk-你的密钥"
 ```
 
-`.env` 已被 `.gitignore` 忽略，**不会提交到 git**。
-大模型相关的三个变量现在可以留空，第 4 天才需要填：
+系统级（要管理员 PowerShell；`/M` 表示写到 HKEY_LOCAL_MACHINE，语义实测自 `setx /?`）：
 
-| 变量 | 含义 | 示例 |
+```powershell
+setx DEEPSEEK_API_KEY "sk-你的密钥" /M
+```
+
+> **设完必须新开一个终端**；已经在跑的服务要**重启**。这条是实测的（用的是自造的
+> 临时变量名，避免碰真实密钥；上面 `setx` 那条命令的写法也照这个验过）：`setx` 之后
+> `[Environment]::GetEnvironmentVariable("<变量名>", "User")` 立刻能读回新值
+> （注册表层已写入），而**启动在 `setx` 之前的进程**里 `$env:<变量名>` 仍然是空的 ——
+> 原因：环境变量是进程启动时复制的一份，不是每次读都去查注册表。
+
+设完自检（在**新开的** PowerShell 里）：
+
+```powershell
+[bool]$env:DEEPSEEK_API_KEY        # True 表示这个终端能看到
+```
+
+### 应用认哪些名字（六个，`LLM_*` 优先）
+
+| 字段 | 认的环境变量名（**前面的优先**） | 默认值 |
 |---|---|---|
-| `LLM_BASE_URL` | 兼容 OpenAI 协议的接口地址 | `https://api.deepseek.com/v1` |
-| `LLM_MODEL` | 模型名 | `deepseek-chat` |
-| `LLM_API_KEY` | 密钥，**只放在 `.env` 里** | `sk-...` |
+| `llm_base_url` | `LLM_BASE_URL` / `DEEPSEEK_BASE_URL` | `""`（空 = 明确不接模型） |
+| `llm_model` | `LLM_MODEL` / `DEEPSEEK_MODEL` | `deepseek-flash` |
+| `llm_api_key` | `LLM_API_KEY` / `DEEPSEEK_API_KEY` | `""` |
 
-安全上做了三件事：密钥只从环境变量 / `.env` 读取；`Settings.llm_api_key`
-设置了 `repr=False`，打印配置不会带出密钥原文；`.gitignore` 排除 `.env`。
+- **两个名字都给时 `LLM_*` 赢**。顺序写死在 `app/config.py` 里（`AliasChoices`），不能反：
+  反了的话本机那套 `DEEPSEEK_*` 会悄悄盖掉你显式设置的 `LLM_*`，
+  而"我明明设了 `LLM_MODEL` 却不生效"是最难查的一类配置问题。
+- 模型名有默认值 `deepseek-flash`（实测 `GET https://api.deepseek.com/models` 返回
+  `deepseek-flash` 与 `deepseek-v4-pro`）。本机环境只给了 base_url 与 key、没给模型名，
+  所以留空也能用；要换模型就设 `LLM_MODEL`。
+- 三项都非空时 `settings.llm_configured` 才是 `True`，`GET /api/health` 返回的
+  `llm_configured` 就是它 —— 这是"配置到底生效没有"最快的自检。
+  第 4 天才真正需要密钥；现在不设也能跑（走兜底模式）。
+
+安全上做了三件事：密钥只从**环境变量**读取（应用不读 `.env`，原因见
+[docs/DECISIONS.md](docs/DECISIONS.md) D-19）；`Settings.llm_api_key` 设置了
+`repr=False`，打印配置不会带出密钥原文；`.gitignore` 仍然排除 `.env` ——
+这一条不是"应用要读它"，而是防止谁本地写了一个 `.env` 之后误提交。
 
 ## 启动
 
@@ -114,19 +157,20 @@ python -m pytest
 代码改了而注释没改，注释会一直骗人。
 
 > 收集阶段会 import 整个 `app` 包，所以以后往 `app` 里加模块时，
-> **不要在模块顶层做有副作用的事**（建目录、读 .env、发网络请求）——
+> **不要在模块顶层做有副作用的事**（建目录、读配置文件、发网络请求）——
 > 那会在"收集测试"时就发生。
 > 目前唯一的例外是 `app/config.py` 里设置 `MPLCONFIGDIR`：matplotlib 在 import
 > 时就决定配置目录，等不到服务启动，所以它必须留在那里（临时目录**不**在那里设置，
 > 改由启动时显式设置，原因见 `docs/DECISIONS.md` D-07）。
 
-测试特意做到"三种环境下都通过"，因为第 4 天你填上真实密钥后测试不该变红：
-
-| 场景 | 用途 |
-|---|---|
-| `.env` 为空 | 默认开发状态 |
-| `.env` 已填 `LLM_*` | 第 4 天之后的真实状态 |
-| `.env` 文件根本不存在 | 别人刚 clone 下来时 |
+测试**不依赖你 shell 里的环境变量**：根目录 `conftest.py` 有一个 autouse 夹具
+（`_isolate_llm_env`），每个用例开始前把那六个名字清空。原因是本机**真的**在
+系统环境变量里配了 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` —— 不清的话，
+"未配置"这个前提在这台机器上根本不成立，测试就会在没 key 的机器上绿、
+在有 key 的机器上红（而后者才是你的机器）。夹具清的是
+`app.config.LLM_ENV_VAR_NAMES` 这一份清单，不另外抄一份，免得两边漂移。
+决策记录见 [docs/DECISIONS.md](docs/DECISIONS.md) D-19（配置来源改为系统环境变量）
+与 D-20（测试不许依赖外壳的编码设置）。
 
 ## 目录结构
 
@@ -135,7 +179,7 @@ ai-data-analyst-agent/
 ├─ app/
 │  ├─ __init__.py
 │  ├─ main.py                  # FastAPI 实例、CORS、启动钩子、统一错误处理
-│  ├─ config.py                # Settings：把 .env 读成有类型的配置对象
+│  ├─ config.py                # Settings：把系统环境变量读成有类型的配置对象（不读 .env，D-19）
 │  ├─ runtime.py               # 进程状态 + 启动时的运行环境（临时目录）
 │  ├─ errors.py                # AppError、错误码到 HTTP 状态码的映射、路径脱敏
 │  ├─ schemas.py               # ApiResponse 统一响应外壳、ApiError、错误码
@@ -158,7 +202,7 @@ ai-data-analyst-agent/
 │  ├─ ARCHITECTURE.md          # 架构设计（含目录树、接口、校验、安全清单）
 │  ├─ STAGE2_ACCEPTANCE.md     # 第二阶段的验收说明（交付物、怎么自己跑一遍）
 │  └─ DECISIONS.md             # 决策记录：每条都写了"为什么"
-├─ .env.example                # 配置模板（只有占位符，无真实密钥）
+├─ .env.example                # 环境变量清单（应用不读它；只有键名与占位值，无真实密钥）
 ├─ .gitattributes              # 行尾策略：示例 CSV 钉成 LF，保证克隆后字节一致
 ├─ .gitignore
 ├─ pytest.ini
@@ -286,9 +330,10 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets
 
 ## 安全约定
 
-- API Key 只从环境变量 / `.env` 读取，仓库内不存任何真实密钥。
+- API Key 只从**进程环境变量**读取（应用不读 `.env`，见 D-19），仓库内不存任何真实密钥。
 - `Settings.llm_api_key` 设置了 `repr=False`，打印配置不会带出密钥原文。
 - `.gitignore` 排除 `.env`、`.venv`、`data/uploads/*`、`.tmp/`、matplotlib 缓存。
+  其中 `.env` 这条是**防止误提交**（谁本地写了一个），不是应用要读它。
 - CORS 只允许本机来源，不使用通配符 `*`。
 - 上传只按**扩展名白名单 + 真的能解析成功**两道关判断，不信客户端报的 `Content-Type`。
 - 落盘名固定是 `{dataset_id}.{ext}`（32 位十六进制 id），用户原始文件名一个字符都不参与路径；
