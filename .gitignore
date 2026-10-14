@@ -19,7 +19,12 @@ env/
 # ---- 运行时产生的数据（体积大且可重新生成）----
 data/uploads/*
 !data/uploads/.gitkeep
-data/db/*.db
+# 归档库（D6 追加）。这一条原先是 `data/db/*.db`，不够：sqlite 在写事务期间会
+# 生成 `app.db-journal`（将来若开 WAL 还会有 `-wal` / `-shm`），只挡 `*.db` 的话
+# 它们会露在 git status 里。改成与下面 charts 同款的「忽略内容、保留目录位」写法 ——
+# 目录位必须保留，因为归档库要往里写文件，目录不存在时 sqlite 会直接报错。
+data/db/*
+!data/db/.gitkeep
 # 图表也是同一类：`charts.render_chart()` 每次出图都会往 data/charts/<workflow_id>/
 # 里写一个 PNG，跑一次全量测试就是一百多个文件。它们是**可重新生成的产物**，
 # 不是源码 —— 但也不能"整个目录删掉"，接口 8 要按 URL 直接返回文件，

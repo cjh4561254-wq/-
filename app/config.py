@@ -106,6 +106,19 @@ class Settings(BaseSettings):
     # 一条工作流里所有工具调用次数的总上限。防"模型重试 + 任务重试"组合成死循环。
     tool_call_limit: int = Field(default=20, ge=1, le=200)
 
+    # 历史归档库（D6 追加）。**空字符串 = 明确关闭归档**：工作流照常跑，只是不落库，
+    # 所以这个字段**故意不加** min_length（与 temp_dir / charts_dir 那几个不同）。
+    #
+    # 选址是 `data/db/app.db`，而不是 `docs/ARCHITECTURE.md` 第 14 节决策 3 附近写的
+    # `data/app.db` —— 那是设计阶段随手起的名字。落地时按**仓库已有的 ignore 规则**
+    # 选址：`.gitignore` 早就挡了 `data/db/*`（sqlite 写事务期间还会生成
+    # `app.db-journal`，只挡 `*.db` 是挡不住它的），而 `data/app.db` 得再往
+    # .gitignore 里加一条新规则。少一条规则就少一处将来会忘的地方。
+    #
+    # 环境变量名就是一个：`DB_PATH`（不需要 AliasChoices —— 那是给 LLM 三项
+    # "历史名字 + 新名字"用的，归档库没有历史包袱）。
+    db_path: str = "data/db/app.db"
+
     @property
     def upload_path(self) -> Path:
         """上传目录的绝对路径。"""
@@ -131,6 +144,18 @@ class Settings(BaseSettings):
         （例如 Starlette 处理大上传时的 spool 文件）。原因见 D-07。
         """
         p = Path(self.temp_dir)
+        return p if p.is_absolute() else PROJECT_ROOT / p
+
+    @property
+    def db_file(self) -> Path:
+        """归档库文件的绝对路径（`db_path` 是配置字符串，这个是可直接用的 Path）。
+
+        注意**空字符串**这种情形：`Path("")` 是 `.`，于是这里会返回**项目根目录**。
+        别拿这个结果直接去 `sqlite3.connect()` —— 调用方要先判断归档是否开启；
+        便捷入口 `app.data.history.get_history_store()` 已经把这一层处理掉了
+        （`db_path` 为空时它返回 `None`）。
+        """
+        p = Path(self.db_path)
         return p if p.is_absolute() else PROJECT_ROOT / p
 
     @property
