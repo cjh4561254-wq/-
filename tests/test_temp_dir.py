@@ -75,6 +75,13 @@ def _run_in_clean_process(code: str, cwd: Path) -> list[str]:
     # 搜索路径。这一步是"为了让它能 import"，不是"为了让测试通过"：真实入口
     # （`python -m uvicorn app.main:app`）也是从项目根启动的。
     env["PYTHONPATH"] = str(PROJECT_ROOT)
+    # 子进程的 stdout 是管道，此时 Python 用**区域编码**（本机 cp936）写字节，
+    # 而下面按 utf-8 解码 —— 只要路径里出现非 ASCII 字符（本仓库路径含「个人项目」），
+    # 输出就会被替换成 U+FFFD，用例随"外壳有没有开 UTF-8 模式"时绿时红。
+    # 这是本文件原先就有的环境耦合（实测：外壳里 `PYTHONUTF8=1` → 3 条全绿；
+    # 不带时精确相等那条红），跟"应用有没有把临时目录钉进项目内"毫无关系。
+    # 钉住子进程自己的 IO 编码，两边就对齐了，也不再依赖外壳配置。
+    env["PYTHONIOENCODING"] = "utf-8"
     # 不 import app 的那条也用同一个解释器，避免"测的是全局 Python"这种误会。
     completed = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(code)],
