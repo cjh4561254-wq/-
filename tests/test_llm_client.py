@@ -24,6 +24,8 @@
   否则这些用例会真的拿用户的密钥发请求，或者"未配置"断言在用户机器上直接变红。
 - **不依赖 SDK 自己的重试**：夹具构造客户端时把 SDK 的 `max_retries` 钉成 0，
   这样"请求了几次"完全由 `chat()` 里那个循环决定，数出来的次数才有意义。
+  （`chat()` 现在也传 0 —— 夹具这行是**独立**的，不是它的复述：
+  它保证"次数"这个被测量不被 SDK 污染，而 `chat()` 传什么是另一条断言的事。）
 """
 
 import json
@@ -92,8 +94,13 @@ def _install_transport(monkeypatch, handler) -> dict[str, Any]:
 
     返回它收到的构造参数，供断言"配置真的传进去了"。
 
-    注意 `max_retries=0`：这是**故意**覆盖掉我们传进去的那个值 —— SDK 自己也会重试，
-    两层叠起来就数不清"到底是谁重试的"。这里让 SDK 闭嘴，请求次数才等于我们循环的次数。
+    注意 `max_retries=0`：这里**故意**覆盖掉 `chat()` 传进来的那个值 ——
+    因为本文件要单独规训两件事，"请求了几次"必须只由**我们那个循环**决定，
+    否则数出来的次数分不清是谁重试的。
+    `chat()` 到底传了什么，由 `seen` 单独断言
+    （见 `test_timeout_is_passed_and_the_sdk_retries_are_pinned_to_zero`）；
+    `chat()` 传 0 之后 SDK 的行为**不由本文件证明**，这一点在
+    `test_total_requests_are_not_multiplied_by_the_sdk` 的 docstring 里写明了。
     """
     seen: dict[str, Any] = {}
 
@@ -474,6 +481,44 @@ def test_retry_count_comes_from_settings(monkeypatch):
     assert len(bodies) == 1
     assert slept == []
     assert excinfo.value.attempts == 1
+
+
+def test_total_requests_are_not_multiplied_by_the_sdk(monkeypatch):
+    """`llm_max_retries = 1` → 连续 503 时**总请求数恰好 2 次**（我们这一层的次数）。
+
+    答案是 **2**：1 次首发 + 1 次重试。
+
+    ⚠️ 但要说清楚**它测不出什么**，否则会被当成"叠乘已被证明不存在"：
+
+    - `N=1` 时叠乘值 `(1+1)²` 恰好也等于 2，所以**这条用例单独测不出叠乘**。
+      （`4` 那个数字只在 `N=2` 时出现；这里刻意用 1 是因为它顺带钉住了
+      "次数 = llm_max_retries + 1"这条配置语义。）
+    - 本文件里 SDK 的重试被夹具钉成 0（见 `_install_transport`），因此这条证明的是
+      「**我们这一层**的次数」，而"SDK 拿到 0 之后确实不再自己重试"是 SDK 语义，
+      本项目没有实测。
+
+    真正防住叠乘的是上面三条断言 `SDK 收到 0` 的用例：把 `max_retries` 改回配置值
+    实测 **3 failed**。更彻底的对照实测：把 `chat()` 传的值与夹具的值**同时**还原成
+    叠乘，`tests/test_llm_client.py` 有 **8 failed / 21 passed**
+    （`test_retryable_status_is_retried_once_then_succeeds[429/500/503]`、
+    `test_retry_backoff_grows_with_each_attempt` 等连基线行为都变了）。
+    """
+    monkeypatch.setenv("LLM_MAX_RETRIES", "1")
+    config.reset_settings_cache()
+
+    bodies: list[dict[str, Any]] = []
+    slept = _freeze_sleep(monkeypatch)
+    _install_transport(
+        monkeypatch,
+        lambda request: (bodies.append(_body(request)), httpx.Response(503, json={"error": {}}))[1],
+    )
+
+    with pytest.raises(LLMCallError) as excinfo:
+        chat([{"role": "user", "content": "你好"}])
+
+    assert len(bodies) == 2, f"总请求数应是 1+1=2，实测 {len(bodies)}"
+    assert slept == [1.5]
+    assert excinfo.value.attempts == 2
 
 
 @pytest.mark.parametrize("status", [400, 401, 402, 422])
