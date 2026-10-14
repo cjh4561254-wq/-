@@ -598,6 +598,16 @@ function renderReport(data) {
   const report = data.report || {};
   renderValidation(box, data.validation);
 
+  if (report.title === undefined) {
+    // 归档里的报告解析不出来（后端降级成 None，详见 docs/HISTORY_ROBUSTNESS.md）。
+    // 记录本身、状态、时间都还在，所以这里不能整块清空，只说明"报告部分没了"。
+    box.appendChild(text("h3", "分析报告", "report-title"));
+    box.appendChild(
+      text("p", "这份归档的报告已无法解析（多半是报告格式升级前存下的），其余信息仍然可用。", "muted")
+    );
+    return;
+  }
+
   box.appendChild(text("h3", report.title || "分析报告", "report-title"));
 
   const meta = [];

@@ -42,12 +42,14 @@
 有一条测试专门钉这个（`GET /api/workflows/history` 必须是 200 而不是 404）。
 """
 
+import logging
 import re
 from datetime import datetime, timezone
+from enum import Enum
 
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app import config
 from app.core import registry
@@ -66,6 +68,8 @@ from app.schemas_workflow import (
 )
 
 router = APIRouter(tags=["workflows"])
+
+logger = logging.getLogger(__name__)
 
 # workflow_id 的合法形态：uuid4().hex，32 位小写十六进制（与 app/data/store.py 同款）。
 _WORKFLOW_ID_PATTERN = re.compile(r"\A[0-9a-f]{32}\Z")
@@ -100,22 +104,28 @@ class ReportData(BaseModel):
 class HistoryItem(BaseModel):
     """历史列表与详情共用的一条记录。**字段只来自归档库**，不掺内存态。
 
-    `status` 用 `WorkflowStatus` 而不是裸字符串：库里存的是 `state.status.value`，
-    接口层把它转回枚举，这样前端拿到的取值域与接口 6 完全一致
-    （同一个前端函数要能画两种来源的状态）。
+    `status` 用 `WorkflowStatus | str`：合法值仍按枚举校验、序列化出来与接口 6
+    完全一致（同一个前端函数要能画两种来源的状态）；**认不出来的老值也算合法**，
+    原样透出。类型只有写成 `A | str` 才会真的接受裸字符串 —— 只改构造侧的硬转
+    （`_coerce_enum`）而不放开这里的字段类型，降级出来的字符串仍会被 pydantic
+    拒收、继续 500，用户可见行为一个字都不变。
 
-    `error_code` 用 `ErrorCode`：前端要按 `WORKFLOW_TIMEOUT` 这类码分流，
-    码的取值域必须与接口 6 的 `error.code` 同源。
+    `error_code` 同理：前端要按 `WORKFLOW_TIMEOUT` 这类码分流，码的取值域必须与
+    接口 6 的 `error.code` 同源，但无法识别的历史码要能原样透出。
+
+    `| str` 是契约的**有意放宽**，不是将就：历史库是跨版本持久化的，枚举改名或
+    删值后老数据必然留下当前代码不认识的值，接口的第一职责是别让一条坏行把整页
+    打成 500。取证与影响面见 `docs/HISTORY_ROBUSTNESS.md`。
     """
 
     workflow_id: str
     question: str
-    status: WorkflowStatus
+    status: WorkflowStatus | str
     created_at: datetime
     finished_at: datetime | None = None
     has_report: bool = False
     llm_used: bool = False
-    error_code: ErrorCode | None = None
+    error_code: ErrorCode | str | None = None
 
 
 class HistoryListData(BaseModel):
@@ -142,21 +152,68 @@ class HistoryDetailData(BaseModel):
     report: FinalReport | None = None
 
 
+def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:
+    """字符串 → 枚举，**认不出来就原样保留字符串**（降级，不抛异常）。
+
+    为什么不能直接 `WorkflowStatus(record.status)`：库里存的是 TEXT，跨版本升级
+    （枚举改名/删值）后老数据会留下当前代码不认识的值，硬转抛 `ValueError` 会被
+    兜底 handler 翻成 **500 且 `data=null`** —— 一条坏行让同页所有合法记录都拿不
+    回来。降级后响应里能看到原样字符串，前端据此显示"无法识别"而不是白屏。
+
+    只在字符串这种**历史文本**上使用；值来自内部常量时不要用。
+    取证与影响面见 `docs/HISTORY_ROBUSTNESS.md`。
+    """
+    try:
+        return enum_cls(raw)
+    except ValueError:
+        return raw  # type: ignore[return-value]
+
+
+def _parse_report(raw: str) -> FinalReport | None:
+    """归档的 `report_text` → `FinalReport`，**坏数据不抛异常、降级成 `None`**。
+
+    这是第三处同类降级（前两处是 `status` / `error_code`，见 `_coerce_enum`）：
+    归档的 `report_text` 是**跨版本持久化**的 JSON，报告的 schema 一旦增删必填
+    字段，老数据就再也解析不出来。原写法直接 `FinalReport.model_validate_json`
+    抛 `ValidationError`，被兜底 handler 翻成 **500** —— 那条记录**永远打不开详情**
+    （列表接口不受影响，所以用户看到"能列出、点进去就报错"）。
+
+    降级成 `None`：记录本身、`status`、`error_code`、时间等字段照常返回，前端把
+    报告区显示成"这份归档的报告已无法解析"。**不吞错**：原始异常写日志，便于排查。
+
+    注意这是**有意为之的不对称** —— `status` 降级成字符串后用户还能看到值本身，
+    而 `FinalReport` 是一棵嵌套结构，降级成 `None` 是唯一不给前端喂半截数据的选项。
+    取证见 `docs/HISTORY_ROBUSTNESS.md`。
+    """
+    try:
+        return FinalReport.model_validate_json(raw)
+    except ValidationError:
+        logger.warning("归档报告无法解析（保留记录、报告置空）", exc_info=True)
+        return None
+
+
 def _item_from_record(record: HistoryRecord) -> HistoryItem:
     """库里的 `HistoryRecord` → 接口模型。
 
     两个字符串字段（`status` / `error_code`）在这里转回枚举：库里存的是字符串
     （TEXT 列，方便人手查库），接口对外给的是契约里的枚举取值。
+
+    转不动时**降级成原样字符串**（见 `_coerce_enum`），留给用户看，不许 500。
+    `error_code` 为 NULL（绝大多数记录）直接短路，不进转换。
     """
     return HistoryItem(
         workflow_id=record.workflow_id,
         question=record.question,
-        status=WorkflowStatus(record.status),
+        status=_coerce_enum(WorkflowStatus, record.status),
         created_at=record.created_at,
         finished_at=record.finished_at,
         has_report=record.has_report,
         llm_used=record.llm_used,
-        error_code=ErrorCode(record.error_code) if record.error_code is not None else None,
+        error_code=(
+            _coerce_enum(ErrorCode, record.error_code)
+            if record.error_code is not None
+            else None
+        ),
     )
 
 
@@ -234,7 +291,7 @@ def get_history_detail(workflow_id: str) -> ApiResponse[HistoryDetailData]:
         )
 
     report = (
-        FinalReport.model_validate_json(record.report_text)
+        _parse_report(record.report_text)
         if record.report_text is not None
         else None
     )
