@@ -995,7 +995,7 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 |---|---|---|
 | 请求成功（同步完成） | 200 | — |
 | 请求已受理、后台执行（`POST /api/analysis`） | **202** | — |
-| 参数格式/类型不对（`RequestValidationError`） | 422 | `BAD_REQUEST` |
+| 请求体字段不合法（`RequestValidationError`：问题为空/过长、`max_steps` 越界、缺字段、类型不对） | **422** | `BAD_REQUEST` |
 | 业务参数非法（D4 起只剩上传接口的文件解析失败走这条） | 400 | `BAD_REQUEST` |
 | 资源不存在（路径、`dataset_id`、`workflow_id`） | 404 | `NOT_FOUND` |
 | 方法不对 | 405 | `METHOD_NOT_ALLOWED` |
@@ -1010,7 +1010,7 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 - **413 / 415 是 HTTP 本来就有的语义**：413 Payload Too Large、415 Unsupported Media Type。"用户传了一个 70 MB 的文件被拒绝"用 200 回答等于向 HTTP 层撒谎 —— 打开 F12 看到一片 200，排查时必须点开每个响应体才知道发生了什么；413 一眼就知道。
 - **`WORKFLOW_TIMEOUT` 走 200**：请求本身完全成功（202 已受理、轮询到了终态），"超时"是**这次分析的结果**，不是请求失败；它属于业务语义，所以放 `error.code`。
 - **503 的含义是"服务现在做不了、以后可能行"**。第一版只有一处：模型未配置、连规则兜底也用不了，所以 `POST /api/analysis` 无法受理。**v1.1 更新：这里改用专用错误码 `SERVICE_UNAVAILABLE`**（`raise AppError(ErrorCode.SERVICE_UNAVAILABLE, ...)`，状态码由 `ERROR_STATUS` 查表得到 503），不再借用 `BAD_REQUEST` —— 借用的后果是前端按 `code` 分流时会提示"请检查你的输入"，把"我们的依赖挂了"说成"你的请求写错了"。前端此时显示 `message`（"服务暂时不可用，请稍后重试"）+ "重试"按钮即可。
-  **D4 实测补充：这个唯一场景在 D4 之后不可达了。** D4 的 `planner.plan()` 是签名级保证不抛异常的（任何失败都退回 `plan_with_rules()`），而规则兜底只依赖 `DatasetProfile`、不依赖任何外部服务，所以"无法兜底"这个前提不成立 —— 未配模型时接口返回 **202**、工作流随后 `SUCCESS`（D4 验收标准 ①）。**码保留、表不动**，它仍然表达一个真实的语义（D5/D6 若出现"连兜底也用不了"，例如数据集在内存里丢了，就用它）。详见 §7.0 接口表下方的注 ②。
+  **D4 实测补充：这个唯一场景在 D4 之后不可达了。** D4 的 `planner.plan()` 是签名级保证不抛异常的（任何失败都退回 `plan_with_rules()`），而规则兜底只依赖 `DatasetProfile`、不依赖任何外部服务，所以"无法兜底"这个前提不成立 —— 未配模型时接口返回 **202**、工作流随后 `SUCCESS`（D4 验收标准 ①）。**码保留、表不动**：它仍然表达一个真实的语义 —— D5 之后"连兜底也用不了"的候选场景已经出现两个（数据集在进程内存里丢了、报告生成也失败了），到那时直接用它，不必再改表。详见 §7.0 接口表下方的注 ②。
 
 **落到代码的约束（禁止绕过统一外壳）**：
 1. 所有错误响应体形状**永远**是 `{"ok":false,"data":null,"error":{"code","message","detail"}}`，只有 HTTP 状态码不同。
@@ -1024,7 +1024,7 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 | 2 | 上传数据集 | `POST /api/datasets/upload` | `multipart/form-data`，字段名 `file` | **200** + `DatasetSummary{dataset_id,original_filename,row_count,column_count,created_at,has_profile}` | **415** `UNSUPPORTED_FILE`（扩展名不在白名单/文件伪装）、**413** `FILE_TOO_LARGE`（> `max_upload_bytes`）、**400** `BAD_REQUEST`（空文件/坏编码/只有表头/超过行数列数上限） |
 | 3 | 查询数据集 | `GET /api/datasets/{dataset_id}` | 无 | **200** + `Dataset`（含 `columns`、`dtypes`、`preview_rows`） | **404** `NOT_FOUND` |
 | 4 | 生成/读取画像 | `GET /api/datasets/{dataset_id}/profile` | 无 | **200** + `DatasetProfile`；首次调用时**同步**生成（≤2 秒）并缓存进 `DatasetSummary.has_profile` | **404** `NOT_FOUND`、**500** `INTERNAL_ERROR` |
-| 5 | 提交分析 | `POST /api/analysis` | `QuestionRequest{dataset_id,question,max_steps?}` | **202** + `{workflow_id,status:"PENDING",dataset_id,created_at}`，**立即返回，不等分析** | **404** `NOT_FOUND`（数据集不存在）、**422** `BAD_REQUEST`（问题为空/过长/`max_steps` 越界 —— 由 `QuestionRequest` 的字段约束在进函数前拦下，见下方注 ①）。**503 在 D4 已不可达**，见下方注 ② |
+| 5 | 提交分析 | `POST /api/analysis` | `QuestionRequest{dataset_id,question,max_steps?}` | **202** + `{workflow_id,status:"PENDING",dataset_id,created_at}`，**立即返回，不等分析** | **404** `NOT_FOUND`（数据集不存在）、**422** `BAD_REQUEST`（问题为空/过长、`max_steps` 越界、缺字段 —— 由 `QuestionRequest` 的字段约束在进函数前拦下，见下方注 ①）。**503 在 D4 已不可达**，见下方注 ② |
 | 6 | 查询工作流状态 | `GET /api/workflows/{workflow_id}` | 无 | **200** + `{workflow_id,status,step,step_index,total_steps,question,dataset_id,tasks:[{task_id,description,status,error}],charts:[ChartResult],error,created_at,finished_at,has_report}` —— **不含 `report`**（报告可能很大，单独接口取） | **404** `NOT_FOUND`、**200** `WORKFLOW_TIMEOUT`（轮询时判定超时并落 `FAILED`，此时 `error.code=WORKFLOW_TIMEOUT`）、**500** `INTERNAL_ERROR`。注意：**工作流自身 `FAILED`（含超时）仍然是 HTTP 200** —— 查询请求成功了，失败的是被查询的工作流 |
 | 7 | 获取报告 | `GET /api/workflows/{workflow_id}/report` | 无 | **200** + `{report:FinalReport, validation:ValidationResult, results:[ToolResult], llm_used:bool}` | **404** `NOT_FOUND`（没有这个工作流）；报告还没生成 → **400** `BAD_REQUEST`（`message="报告尚未生成"`，`detail` 带当前 `status`） |
 | 8 | 获取图表 | `GET /api/workflows/{workflow_id}/charts/{filename}` | 无 | **200** + PNG 二进制（`Content-Type: image/png`） | **404** `NOT_FOUND`（文件不存在）、**400** `BAD_REQUEST`（文件名含 `/`、`\`、`..` 或不是 12 位 hex + `.png` —— 这是"非法输入"，不是"资源不存在"，所以是 400 不是 404） |
@@ -1033,7 +1033,7 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 
 **注 ①（D4 实测修正）：接口 5 的"400 问题为空/过长"实际上到不了。** 原始设计写的是 400，但 `QuestionRequest.question` 上有 `min_length=2, max_length=500`、`max_steps` 上有 `ge=1, le=8`，Pydantic 在**进入函数体之前**就抛 `RequestValidationError`，被 `app/main.py` 的 handler 翻成 **422 + `BAD_REQUEST`**。实测七种输入（1 字符 / 空串 / 501 字符 / `max_steps=0` / `max_steps=99` / 缺字段 / 不存在的 `dataset_id`）里，前六种全是 422，只有"数据集不存在"是 404。**这不是 bug，是更早拦下**：400 那条分支在当前模型约束下是死代码，所以文档照实测改。**保留 400 这个码**（§7.0 表里它仍由上传接口的文件解析失败在用）。
 
-**注 ②（D4 实测修正）：接口 5 的 503 在 D4 起不可达。** 原始条件是"模型未配置**且无法兜底**"，而 D4 的 `planner.plan()` 是**签名级保证不抛异常**的（内部 `except Exception` 兜到规则兜底），所以"无法兜底"这个前提在 D4 不可能成立 —— 实测未配模型时 `POST /api/analysis` 返回 **202**，工作流随后 `SUCCESS`、`report.llm_used=false`（正是 D4 验收标准 ①）。**503 这个码本身保留**（§7.3 的表不动），因为 D5/D6 若引入"连规则兜底也用不了"的场景（例如数据集在内存里丢了）它就是现成的语义。**当前结论：D4 的接口 5 只有 404 与 422 两种错误。**
+**注 ②（D4 实测修正）：接口 5 的 503 在 D4 起不可达。** 原始条件是"模型未配置**且无法兜底**"，而 D4 的 `planner.plan()` 是**签名级保证不抛异常**的（内部 `except Exception` 兜到规则兜底），而规则兜底只依赖 `DatasetProfile`（内存里的一个对象）、不碰任何外部服务，所以"无法兜底"这个前提在 D4 不可能成立 —— 实测未配模型时 `POST /api/analysis` 返回 **202**，工作流随后 `SUCCESS`、`report.llm_used=false`（正是 D4 验收标准 ①）。**503 这个码本身保留**（§7.3 的表不动）：到 D5，"连兜底也用不了"的候选场景已经出现了两个（数据集在进程内存里丢了 → 接口 404；报告生成也失败 → `_minimal_report` 仍能出一段说明），届时直接用这个现成语义，不必改表。**当前结论：D4/D5 的接口 5 只有 404 与 422 两种错误。**
 
 ### 7.1 我在你给的 8 个接口之外做的两处调整（已于第 14 节拍板通过）
 
