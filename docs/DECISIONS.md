@@ -804,3 +804,193 @@ SDK 某次升级如果收紧了 `model_extra` 的处理，这个字段就会**�
 **状态**：契约已落地并配变异测试（删掉校验 → `1 failed`）。`client.py` 本身 D4 施工中。
 
 ---
+
+## D-19 配置来源改为**系统环境变量**，不再读 `.env`；大模型三名各认两个名字
+
+**背景（用户指令，逐字）**：
+
+> 别读取.env了，我本地电脑的环境配置里面有deep seek的key
+
+**第一步不是改代码，是先证明"不读 `.env` 不会悄悄改行为"**。用
+`.tmp/probe_env_compare.py`（`DotEnvSettingsSource` 解析 `.env`，只比较长度与同/异，
+不打印值）实测：`.env` 里出现的 15 个键，值**全部等于** `Settings` 的默认值。
+所以去掉 `.env` 对当前取值**零影响**，是一次纯粹的减法。这一步不能省 ——
+否则就成了"一边改配置来源、一边悄悄改行为"，两件事混在一起，出问题时分不清是谁干的。
+
+**机器上到底有什么（只看名字与长度，从来看值）**：
+
+| 作用域 | 命中 |
+|---|---|
+| 用户级（HKCU） | 一个都没有 |
+| 机器级（HKLM） | `DEEPSEEK_API_KEY`(35)、`DEEPSEEK_BASE_URL`(24)、`OPENAI_API_KEY`(51)、`OPENAI_BASE_URL`(26)、`GJ_API_KEY`(51)、`QY_API_KEY`(49)、`MINERU_TOKEN` |
+
+**一条容易误判的事实**：当前进程的环境块里，`*_API_KEY` / `*_TOKEN` 这类名字
+**一个都继承不到**（只有 `DEEPSEEK_BASE_URL` 这种非密钥变量在）。所以
+"`$env:DEEPSEEK_API_KEY` 是空的"**不能**推出"机器上没配"。
+要验证真实情况，必须显式从机器作用域取：
+
+```powershell
+[Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY','Machine')
+```
+
+注入之后实测可用：`GET https://api.deepseek.com/models` 返回 `deepseek-flash`
+与 `deepseek-v4-pro` 两个模型 id。
+
+**决定**
+
+1. **`Settings.model_config` 里去掉 `env_file` / `env_file_encoding`**
+   （`app/config.py:61-70`，注释写明"故意没有"）。配置来源只剩一个：进程环境变量。
+   显式 `Settings(_env_file=<path>)` 仍然可用（实测文件里的 `MAX_ROWS=424242` 生效）——
+   那是显式传入，与"悄悄读一个 `.env`"是两回事。
+2. **三个大模型字段各接两个环境变量名**，`AliasChoices(*names)`，**`LLM_*` 在前**：
+
+   | 字段 | 名字（左优先） |
+   |---|---|
+   | `llm_base_url` | `LLM_BASE_URL` / `DEEPSEEK_BASE_URL` |
+   | `llm_model` | `LLM_MODEL` / `DEEPSEEK_MODEL` |
+   | `llm_api_key` | `LLM_API_KEY` / `DEEPSEEK_API_KEY` |
+
+   顺序不能反：反了的话机器上那个 `DEEPSEEK_*` 会**悄悄盖掉**显式设置的 `LLM_*`，
+   而"我明明设了 `LLM_MODEL` 却不生效"是最难查的一类配置问题。
+   三组名字与并集 `LLM_ENV_VAR_NAMES`（`app/config.py:46-55`）**同时被字段声明与
+   测试夹具使用** —— 清单只有一份，抄成两份迟早漏一个，漏掉的那个正好是本机真实存在的名字。
+3. **`llm_model` 默认 `"deepseek-flash"`**（`app/config.py:93`）。依据是上面 `/models`
+   的实测返回值。理由：本机只给了 base_url 和 key，**没有模型名这一项**；留空会让
+   `llm_configured` 永远为 `False` —— 表现就是"配了 key 却不生效"。
+4. `model_config` 加 `validate_by_name=True`（pydantic ≥2.11 的新名字，老写法叫
+   `populate_by_name`）。因为 `validation_alias` 会把**字段名**从取值来源里顶掉，
+   而 `Settings(llm_api_key="x")` 这种按字段名传参在测试里用得很顺手。
+
+**候选形态先探针后落地**：`.tmp/probe_candidate_settings.py` 在真实
+`pydantic 2.13.4 + pydantic-settings 2.15.0` 上跑了 9 条，全 PASS：
+只给 `DEEPSEEK_*` 能配上；不给模型名落到默认值；两套名字都给时 `LLM_*` 赢；
+`DEEPSEEK_MODEL` 能覆盖默认值；按字段名传参仍生效；**不配 `env_file` 就不读 cwd 下的
+`.env`**（哨兵 `MAX_ROWS=424242` 被忽略）；显式 `_env_file=` 仍被读取；
+`repr()` 不含密钥；环境变量名大小写不敏感。
+
+**改完之后立刻暴露的一个真问题**：用户机器上**真的有 key**，于是所有断言
+"未配置"的用例（`Settings().llm_configured is False`、没配模型时必须抛
+`LLMNotConfigured`）会**在没 key 的机器上绿、在有 key 的机器上红** —— 而后者才是用户的机器。
+处理办法不是把测试改成跳过，而是加一个 autouse 夹具
+`conftest.py:230-241 _isolate_llm_env`：每个用例开始前把六个名字全部清空
+（清单直接取自 `config.LLM_ENV_VAR_NAMES`，不另抄一份）。
+**测试不许假设"我这台机器碰巧没配"。**
+
+**取值规则本身要有测试**（`tests/test_config.py`，9 条）：名字清单是**字面量**（不从实现里读，
+改名字就必须同时改测试与文档）；六个名字每个都要真的接上线；只给 `DEEPSEEK_*` 就算配好；
+两套都给时 `LLM_*` 优先；`DEEPSEEK_MODEL` 覆盖默认值；`LLM_API_KEY=""` 能压住兜底名字
+（否则用户想"临时关掉模型"就做不到）；`repr` 不泄密；cwd 下放 `.env` 也不被读。
+
+**一般化**：配置写错**不会报错**，只会静默不生效（接口正常、日志正常、模型一次都没被调用）。
+凡是"名字对不上就等于没配"的地方，都要有一条把**取值规则本身**钉成测试，
+而不是靠"我读了一遍代码觉得对"。
+
+**影响到**：`app/config.py`、`conftest.py`、`app/llm/client.py`（`LLMNotConfigured`
+文案现在同时说明 `LLM_*` 与 `DEEPSEEK_*`）、`tests/test_config.py`（新建）、
+`tests/test_health.py`、`tests/test_llm_client.py`、`README.md` / `.env.example` /
+`docs/ARCHITECTURE.md` §4.0.1（task-21）。
+
+**状态**：代码与测试已落地（提交 `db95df3`），文档同步进行中。
+`.env` 文件本身没有删（那是用户机器上的本地文件），只是**不再被读**。
+
+---
+
+## D-20 测试不许依赖外壳的编码设置（子进程 stdout 的编码）
+
+**背景**：全量测试里 `tests/test_temp_dir.py::test_startup_pins_temp_files_into_the_project`
+红了，报的是路径里的中文变成了替换字符：
+
+```
+E  assert 'D:\\\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\u013f01\\...' == 'D:\\个人项目01\\...'
+```
+
+**归因（实测，不靠推理）**：
+
+| 条件 | 结果 |
+|---|---|
+| 同一份代码，外壳里 `PYTHONUTF8=1` | **3 passed** |
+| 不带 `PYTHONUTF8` | **1 failed** |
+| `git archive HEAD` 导出到仓库外（提交态、不含工作区改动） | **1 failed** |
+
+第三行最关键：提交态也红，说明它**与本次工作区改动无关**，是这条测试**自己的**环境耦合。
+
+**机制**：`tests/test_temp_dir.py:79-88` 的 `_run_in_clean_process()` 用
+`subprocess.run(..., encoding="utf-8", errors="replace")` 解码子进程 stdout；
+而子进程的 stdout 是管道时，Python 用**区域编码**（本机 cp936）写字节。
+本仓库路径含非 ASCII 字符（`个人项目01`），两边编码不一致 → 解出来就是 `\ufffd`。
+纯 ASCII 路径的机器上永远看不到这个失败 —— 所以它是典型的"只在我这儿绿"。
+
+**决定**：在 `_run_in_clean_process()` 里给子进程显式钉住 IO 编码
+（`env["PYTHONIOENCODING"] = "utf-8"`），父进程按 utf-8 解码，两边对齐。
+**不改断言、不改被测行为**。如果反过来把父进程改成按区域编码解码，
+测试就又会变成"跟着外壳走"。
+
+**一条更一般的教训**：这类失败的表征是"**和我这次改的东西完全无关的用例红了**"。
+它很容易被当成 flake 重跑了事。正确的问题是："它上次绿的时候，外壳的环境是什么？"
+—— 也就是 D-16 第 7 条（前提变了、结论没重测）在测试基础设施上的同一张脸。
+
+**同一轮还修掉两条由本轮改动引出的测试缺陷**，两条都值得记，因为它们的失败方式很有代表性：
+
+1. `tests/test_config.py` 里断言 `"env_file" not in Settings.model_config` —— 实测
+   `SettingsConfigDict` **本来就会带一个 `env_file=None` 的默认键**，于是这条断言
+   在什么都没改的情况下就红。判据要写成**键的值**（`model_config.get("env_file") is None`），
+   不是键在不在。一条永远红的用例抓不住任何回归。
+2. `conftest.py` 的夹具在**拆除阶段**调用 `config.reset_settings_cache()`，而
+   `tests/test_planner_rules.py::test_llm_is_configured_reads_settings_at_call_time`
+   会把 `config.get_settings` 换成假对象。夹具拆除发生在 monkeypatch 还原**之前**，
+   于是拆除时拿到的是假对象、没有 `cache_clear` → 用例明明通过了却报 **ERROR**。
+   修法：**在夹具建立时就把真函数的 `cache_clear` 抓在手里**
+   （`clear_settings_cache = config.get_settings.cache_clear`），之后只调用这个引用。
+
+---
+
+## D-21 D4 验收② 只能用**真 key** 证明；Mock 证明的是"代码路径通"，不是"真的调得通"
+
+**背景**：D4 验收标准 ② 是「配上 LLM 后，同一问题返回的 `plan.source == "llm"`」。
+在此之前它一直验不了（D4 期间 `.env` 的 LLM 三项为空）。用户（m05971）说明机器上就有
+DeepSeek key，这条路才通。契约测试与 `MockTransport` 只能证明**代码路径**是通的 ——
+它们连不上任何东西，也证明不了 `reasoning_content` 回传契约在**真 API** 上成立
+（那条契约的失败方式是 400，不是降级，见 D-18）。
+
+**做法**：`.tmp/probe_d4_real_llm.py`，key 从**机器作用域**显式注入子进程
+（`[Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY','Machine')`），
+**只打印长度与前三字符，绝不打印值**。一次运行验两件事：
+
+1. **D-18 的回传契约**：带 `tools` 的第 1 轮 → 第 2 轮必须原样回传
+   `reasoning_content`（连同 `tool_call_id` 与工具结果），否则真 API 返回 400。
+2. **D4 验收②**：用真实 `data/samples/sales.csv` 走完整 HTTP 流程，
+   断言 `plan.source == "llm"`、工具名全在白名单内、报告已生成。
+
+**结果：14 PASS / 0 FAIL**（两次独立运行，两轮请求都**没有** 400）。
+
+| 观测 | 第 1 次运行 | 第 2 次运行 |
+|---|---|---|
+| 第 1 轮 `reasoning_content` 长度 | 374 | 355 |
+| 第 2 轮 `reasoning_content` 长度 | 579 | 0（该轮模型直接作答、无工具调用） |
+| 第 1 轮耗时 | 14.52 s | 2.13 s |
+
+端到端（真实数据 2168 行 × 9 列）：上传 200 → `POST /api/analysis` **202** →
+终态 `SUCCESS` / `step=done` / `error=None` → `plan.source=llm`、
+`tasks=['group_aggregate']`、参数 `{'group_by': ['地区'], 'metric': '销售额', 'agg': 'sum'}`
+→ 工具 `ok/failed = 1/0` → 报告 `llm_used=False`、`sections=1`、每节都带 `cites`，
+首段逐字 `本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总`。
+
+**必须说清楚的分工**：这一轮里**模型只参与了"规划"这一步**（`plan.source=llm`），
+报告仍是模板（`llm_used=False`）。这是 D4/D5 的边界，**不是缺陷** ——
+D5 才把"解释"也交给模型。把这两件事混在一句话里说（"跑通了真实大模型"），
+读者会以为报告也是模型写的。
+
+**两条容易误读的地方（自己先踩过）**：
+
+- 探针用 `TestClient`，而 `TestClient` 会在响应返回**之前**把 `BackgroundTasks`
+  同步跑完，所以"`POST /api/analysis` 耗时 1.85 s"**不能**当成"接口在等分析"的证据
+  （与 D-16 第 2 条同族）。要验"接口不阻塞"，只能走真实 uvicorn。
+- `llm_configured=True` 之后，"未配置时应如何"的测试必须由夹具先把六个变量名清空，
+  否则在**用户这台机器上必红**（见 D-19）。
+
+**一般化**：凡是"外部契约以**报错**（而不是降级）方式失败"的地方，Mock 测试是不充分的 ——
+要留一条**真调用**的验收路径，并且明确写出它证明了什么、没证明什么。
+
+**状态**：D4 验收② 已用真 key 实测通过；探针在 `.tmp/`（不进仓库）。
+
+---
