@@ -234,18 +234,43 @@ def test_report_table_is_capped_at_twenty_rows(basket, monkeypatch):
     assert section.table == [{"i": index} for index in range(20)]
 
 
-def test_workflow_keeps_charts_empty_in_d4(basket):
-    """D4 不出图：`state.charts` 必须是空列表，而不是"半个图表对象"。
+def test_workflow_renders_charts_on_the_rule_path(basket):
+    """D5：规则路径（未配大模型）也必须出图，`state.charts` 非空且图真在磁盘上。
 
-    架构文档 §8.2.2 明确：出图失败时**不要登记半个对象**。D5 才会有
-    `charts.render_chart()`；在那之前宁可空着，也不要伪造一条"有图"的记录 ——
-    前端会照着这个列表去请求 PNG，指向不存在的文件比没有图更糟。
+    这条本来叫 `test_workflow_keeps_charts_empty_in_d4`，断言 `state.charts == []`。
+    D4 的名字就写着 "in_d4" —— 它的断言内容是**D4 的占位事实**，不是产品要求；
+    D5 让 planner 给分组汇总配上图之后，它必然红。**这类红是预期取代，不是回归**，
+    所以把断言反过来钉：D5 的规则路径必须出图，而且每张图都要能追到盘上的文件。
+
+    「空着比伪造好」这条原则没有作废，只是换了位置 —— 现在由
+    `tests/test_charts.py` 负责"失败时不登记半个对象"。
+
+    三条断言各有分工：
+    ① `charts` 非空 —— 证明 charting 阶段真的跑了（不是 D4 那个只打日志的占位）；
+    ② PNG 真在磁盘上 —— 证明不是"内存里有条记录、文件没写"（前端会拿到死链）；
+    ③ `url` 能拼回接口 8 的真实路径 —— 前端拿到 `chart.url` 就直接塞 `<img src>`，
+       拼错的表现是图片裂开，而后端一切正常，最难查的一类。
+
+    注意这条测试会往**真实的** `data/charts/` 里写 PNG（它没有把 `CHARTS_DIR`
+    指到 `tmp_path`，因为要验的就是"按配置里的路径落盘"这件事）。
+    目录由 `.gitignore` 的 `data/charts/*` 兜住，不会进版本库。
     """
     _, dataset_id = basket
     state = _make_state(dataset_id)
     run_workflow(state)
 
-    assert state.charts == []
+    assert state.charts, "规则路径也必须出图（D5 验收④）"
+    for chart in state.charts:
+        assert chart.point_count > 0, "图上至少要有一个数据点"
+
+        path = config.get_settings().charts_path / state.workflow_id / chart.filename
+        assert path.is_file(), f"图没有落盘：{path}"
+        assert path.stat().st_size > 0, "PNG 是 0 字节，等于没有图"
+
+        expected_url = f"/api/workflows/{state.workflow_id}/charts/{chart.filename}"
+        assert chart.url == expected_url
+        assert chart.chart_id in chart.url
+        assert chart.url.endswith(".png")
 
 
 def test_heartbeat_is_refreshed_during_the_run(basket):
