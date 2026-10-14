@@ -23,9 +23,9 @@
    （判据：代码是真理来源 ⇒ 行号必须被代码自己锚定。）
 2. **用例存在性**：文档里出现或作为行号锚点被代码标为「由 <用例> 覆盖」的每个
    `test_*`，必须真实存在于 `tests/` 里（用 `ast` 收集，不扫文本）。
-3. **断言方向**：文档的降级契约写死了若干「注入值 → HTTP 期望值」，本脚本按
-   `<用例名> -> <期望值>` 的锚点执行这些用例，核对**每个参数化实例的 HTTP 状态码**
-   是否等于期望值。这能抓住「文档说 200、用例已改回 500」。
+3. **断言方向**：文档按 `<用例名[instances=N,requests=M] -> 期望值>` 声明
+   参数化实例数、每实例请求数与 HTTP 期望值。本脚本执行用例，核对计数及**每个请求**的状态码；
+   用例断言/fixture 执行异常也作为干净的 `Problem` 汇总，而非裸 traceback 或假绿。
 
 它**不保证**什么
 ----------------
@@ -65,7 +65,11 @@ LINE_ANCHOR_RE = re.compile(r"\*\*(?P<path>[A-Za-z0-9_./]+\.py)?:?(?P<line>\d+)\
 LINE_ANCHOR_DECL_RE = re.compile(
     r"^\s*#?\s*\*\*(?P<path>[A-Za-z0-9_./]+\.py)?:?(?P<line>\d+)\*\*\s+`(?P<quote>.+?)`"
 )
-CASE_ANCHOR_RE = re.compile(r"^投喂行\s+`(?P<case>test_[A-Za-z0-9_]+)\s*->\s*(?P<status>\d+)`")
+CASE_ANCHOR_RE = re.compile(
+    r"^投喂行\s+`(?P<case>test_[A-Za-z0-9_]+)"
+    r"\[instances=(?P<instances>\d+),requests=(?P<requests>\d+)\]"
+    r"\s*->\s*(?P<status>\d+)`"
+)
 DOC_LINE_REF_RE = re.compile(r"`(?P<path>[A-Za-z0-9_./]+\.(?:py|md|txt|js|html)):(?P<line>\d+)`")
 DOC_TEST_RE = re.compile(r"\btest_[A-Za-z0-9_]+\b")
 
@@ -97,6 +101,8 @@ class LineAnchor:
 class CaseAnchor:
     case: str
     status: int
+    instances: int
+    requests: int
     source: str
     payload: str = ""
 
@@ -212,7 +218,7 @@ def collect_doc_anchors(problems: list[Problem]) -> tuple[list[LineAnchor], list
     case_anchors: list[CaseAnchor] = []
     last_path: str | None = None
     for index, line in enumerate(lines, start=1):
-        if "投喂行" in line:
+        if line.strip().startswith("投喂行 "):
             match = CASE_ANCHOR_RE.match(line.strip())
             if match is None:
                 problems.append(
@@ -224,6 +230,8 @@ def collect_doc_anchors(problems: list[Problem]) -> tuple[list[LineAnchor], list
                 CaseAnchor(
                     case=match.group("case"),
                     status=int(match.group("status")),
+                    instances=int(match.group("instances")),
+                    requests=int(match.group("requests")),
                     source=f"docs/HISTORY_ROBUSTNESS.md:{index}",
                 )
             )
@@ -292,20 +300,31 @@ def collect_test_cases() -> dict[str, ast.FunctionDef]:
     return cases
 
 
-def _load_case_results(cases: list[str]) -> dict[str, dict[str, int]]:
-    """跑一遍用例，返回 {用例名 -> {参数化 id 或 '': 状态码}}。
+def _load_case_results(
+    cases: list[str], problems: list[Problem]
+) -> dict[str, dict[str, list[int]]]:
+    """跑一遍用例，返回 {用例名 -> {参数化 id 或 '': 全部状态码}}。
 
-    实现在测试文件里的 `_record_acceptance_status`（用 monkeypatch 挂钩 TestClient）。
+    测试钩子记录每个实例发出的全部请求状态码；用例断言失败或 fixture
+    无法提供时转成 Problem，由 main 汇总后以 rc=1 报告，不留裸 traceback。
     """
     sys.path.insert(0, str(PROJECT_ROOT))
     from tests import test_history_robustness as module  # noqa: PLC0415
 
     total = len(cases)
-    results: dict[str, dict[str, int]] = {}
+    results: dict[str, dict[str, list[int]]] = {}
     for index, case in enumerate(cases, start=1):
         print(f"  投喂 {index}/{total}: {case}")
         fn = getattr(module, case)
-        results[case] = module._record_acceptance_status(fn)
+        try:
+            results[case] = module._record_acceptance_status(fn)
+        except Exception as exc:
+            problems.append(
+                Problem(
+                    "用例执行",
+                    f"{case} 执行失败：{type(exc).__name__}: {exc}",
+                )
+            )
     return results
 
 
@@ -364,28 +383,54 @@ def main() -> int:
     # ---- 维度 3：断言方向 ------------------------------------------------
     observable = [a for a in case_anchors if a.case in all_cases]
     checked_instances = 0
+    checked_requests = 0
     if observable:
         print(f"执行 {len(observable)} 个用例核对断言方向……")
-        results = _load_case_results(sorted({a.case for a in observable}))
+        results = _load_case_results(sorted({a.case for a in observable}), problems)
         for anchor in observable:
-            instances = results.get(anchor.case)
+            if anchor.case not in results:
+                # _load_case_results 已经报告 fixture/断言执行异常；避免重复报错。
+                continue
+            instances = results[anchor.case]
+            if len(instances) != anchor.instances:
+                problems.append(
+                    Problem(
+                        "断言方向",
+                        f"{anchor.source} 用例 `{anchor.case}` 文档声明 {anchor.instances} 个实例，"
+                        f"实测 {len(instances)} 个",
+                    )
+                )
             if not instances:
                 problems.append(
-                    Problem("断言方向", f"{anchor.source} 用例 `{anchor.case}` 没有记录到任何请求")
+                    Problem("断言方向", f"{anchor.source} 用例 `{anchor.case}` 没有记录到任何实例")
                 )
                 continue
-            for param, status in sorted(instances.items()):
+            for param, statuses in sorted(instances.items()):
                 label = anchor.case + (f"[{param}]" if param else "")
-                if status != anchor.status:
+                checked_instances += 1
+                if len(statuses) != anchor.requests:
                     problems.append(
                         Problem(
                             "断言方向",
-                            f"{anchor.source} 文档说 `{label}` 期望 {anchor.status}，"
-                            f"实测 {status}",
+                            f"{anchor.source} 用例 `{label}` 文档声明每实例 {anchor.requests} 个请求，"
+                            f"实测 {len(statuses)} 个",
                         )
                     )
-                else:
-                    checked_instances += 1
+                if not statuses:
+                    problems.append(
+                        Problem("断言方向", f"{anchor.source} 用例 `{label}` 没有记录到任何请求")
+                    )
+                    continue
+                for request_index, status in enumerate(statuses, start=1):
+                    checked_requests += 1
+                    if status != anchor.status:
+                        problems.append(
+                            Problem(
+                                "断言方向",
+                                f"{anchor.source} 文档说 `{label}` 请求 #{request_index} 期望 "
+                                f"{anchor.status}，实测 {status}",
+                            )
+                        )
 
     # ---- 报告 ------------------------------------------------------------
     print()
@@ -398,7 +443,8 @@ def main() -> int:
         return 1
     print(
         f"文档与仓库一致：行号锚点 {matched} 条（代码锚点 {len(code_anchors)} 个）、"
-        f"用例 {len(named_in_doc)} 个全部存在、断言方向 {checked_instances} 个参数化实例"
+        f"用例 {len(named_in_doc)} 个全部存在、断言方向 {checked_instances} 个参数化实例 "
+        f"（{checked_requests} 个请求）"
     )
     print("=" * 68)
     return 0

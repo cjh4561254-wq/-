@@ -1044,7 +1044,7 @@ D5 才把"解释"也交给模型。把这两件事混在一句话里说（"跑�
 
 ## D-23 "数字可追溯"这条规矩要连**我们自己写的模板**一起管住；等价变异要如实报
 
-**背景**：D5 把"溯源"做成了真功能（`validate()` 把报告里每个数字拿回工具结果找出处）。
+**背景**：D5 把"溯源"做成了真功能（`validate()` 检查报告中需溯源的数字是否能从工具结果或数据画像找到出处）。
 它立刻抓出一个 **D4 模板自己的 bug**：`_summarize_missing` 里写
 「另有 `len(with_nulls) - 3` 列也存在缺失」。这个差值是**展示层现算的**，
 工具结果里没有任何一个键对应它 —— 也就是一个"追不到出处"的数字。
@@ -1131,7 +1131,73 @@ Lead 独立复算（纯 stdlib csv 手算六地区 + 手工塞假数字 + AST �
 `tests/test_llm_client.py`（`test_timeout_and_max_retries_are_passed_to_the_sdk`
 改名并改断言；新增一条配置为 5 时仍传 0 的用例）、`docs/ARCHITECTURE.md` §5.3。
 
-**状态**：已落地。全量 799 passed / 0 failed / 0 skipped。
+**状态**：已落地（当时实测 799 passed / 0 failed / 0 skipped；之后 D6-SQLite 补做又加了用例，
+当前全量为 **817 passed**（仓库根、`tests/` 两个入口一致；见 D-24）。
+
+---
+
+## D-24 SQLite 历史归档：拍板在 D6、**D6 没做**、D6 交付之后才补上；选型从 SQLAlchemy 改成标准库 `sqlite3`
+
+**背景（这条的重点是时间线，不是技术）**
+
+`docs/ARCHITECTURE.md` 第 14 节**决策 3** 早在 D6 之前就拍了板：**做 SQLite 历史归档、明确不做 SSE**。
+配套的 §8.3（触发条件）、§8.3.1（读写路径约定）、§8.3.2（已知限制）也写得很完整。
+
+**但是 D6 当天，SQLite 一行代码都没写。** D6 的精力去了前端联调与安全测试
+（`web/` 三件套 + `tests/test_security.py`），SQLite 正是被"可砍顺序"砍掉的那一项
+（`docs/ARCHITECTURE.md` §13 风险 9 事后复盘里已如实记下这一点）。
+**于是出现了一个更隐蔽的问题：这批文字是"计划时态"，却一直在被当成"完成时态"读。**
+文档里写着"选 SQLite"，读者（包括后来接手的人）会默认它已经有了。
+这类错误**不会让任何一条测试变红** —— 它没有代码可失败，只有人会信。
+
+**用户在本轮拍板"补做"**（代号 D6-SQLite），条件是：**标准库 `sqlite3`，零新依赖**。
+
+**决定**
+
+1. **做归档写入，不做状态恢复。** 工作流进入终态（`TERMINAL_STATUSES`）时，把一条记录
+   UPSERT 进 SQLite。**内存态 `registry._workflows` 仍然是唯一的运行态事实来源**，
+   `app/agents/orchestrator.py` 的原有执行路径**一行都没有改**。
+   理由：真正被问到的问题是"重启后还能查到之前的工作流吗"，这个能答；
+   而"重启后接着把没跑完的工作流跑完"需要把运行态外置，成本与风险都远高于收益。
+2. **选型从 SQLAlchemy 改成标准库 `sqlite3`。**
+   §14 决策 3 里写的"用**已装的** SQLAlchemy"——**那是假的：仓库从来没装过任何数据库包**
+   （`requirements.txt` 里 12 个直接依赖，一个是数据库都没有）。
+   本项目的真实需求只有两件事：一张表的 UPSERT（`archive()`）和一次分页 SELECT
+   （`list_recent()`）。用 ORM 描述这两件事属于**负资产**：多一层抽象、多一个依赖，
+   换来的是本项目不需要的迁移/多表/关系映射能力。
+   所以用标准库，**`requirements.txt` 与 `requirements.lock.txt` 一个字都没加**。
+3. **落地路径是 `data/db/app.db`，不是设计稿里的 `data/app.db`。**
+   选址依据是**仓库已有的 ignore 规则**：`.gitignore` 早就挡了 `data/db/*`
+   （原本是 `data/db/*.db`，后来发现 SQLite 写事务期间会产生 `app.db-journal`，
+   只挡 `*.db` 不够，才放宽成 `data/db/*`）。选 `data/app.db` 反而要新加一条 ignore 规则。
+   **结果：库文件天然不会被误提交，也不需要改 `.gitignore`。**
+4. **归档失败不能影响分析结果。** `archive_if_terminal()` 的契约是**"绝不抛异常"**：
+   磁盘满、目录只读、文件被占用，一律只记 warning 并返回 `False`。
+   理由：用户要的是那份分析报告，归档是旁路；旁路坏了不能把主路带崩。
+5. **归档可以被关掉。** `DB_PATH` 设成空串 = 显式关闭归档，`get_history_store()` 返回 `None`。
+   这时 `GET /api/workflows/history` 返回 **HTTP 200 + `enabled=false` + 空列表**；
+   历史详情因没有归档记录而返回 **404 `NOT_FOUND`**。这不是错误状态不一致：列表是在查询功能可用性，
+   详情是在查询一条不存在的记录。
+
+**这条决策真正的教训**：**"文档里写了"不等于"代码里有"。**
+D-22 第 3 条早就说过"注释里的前提一样会骗人"，这一条是它在文档层面的同型问题：
+计划时态的句子会在几轮之后自动升格成事实。这次的处置是在正文里**留下时间线**
+（§8.3 与 §14 决策 3 都加了"D6 当天没做、之后补做"的如实记录），
+而不是把文字改干净就算完 —— **把"补做"伪装成"当初就做完了"，等于又撒了一次谎。**
+
+**影响到**：`app/data/history.py`（新增 `HistoryStore` / `HistoryRecord` / `HistoryStoreError` /
+`get_history_store()` / `reset_history_store_cache()`）、`app/core/archive.py`（新增
+`archive_if_terminal()` / `build_record()`）、`app/config.py`（第 16 个字段 `db_path` +
+第 6 个计算属性 `db_file`）、`app/api/routes_workflows.py`（接口 9 / 10）、
+`.gitignore`（`data/db/*.db` 放宽为 `data/db/*`）、
+`tests/test_history_store.py` / `tests/test_history_archive.py` / `tests/test_history_api.py` /
+`tests/test_history_acceptance.py` / `tests/test_history_robustness.py`；
+文档侧同步 `docs/ARCHITECTURE.md`（§4.0.1 / §7 / §8.3 / §8.3.1 / §8.3.2 / §11 / §12 / §13 / §14 / 附录 B）、
+`docs/WORKFLOW.md` §7、`README.md`、`docs/DEMO.md`、`docs/STAGE2_ACCEPTANCE.md`。
+
+**状态**：已落地。task-34 时全量为 **800 passed**（仓库根入口与 `tests/` 入口一致）；当前 **817 passed**（含 task-40 护栏用例，两个入口一致）。
+未做：运行态恢复、多进程共享、历史记录"继续运行"、鉴权 —— 这四条都**不在本次范围内**，
+`docs/ARCHITECTURE.md` §8.3.2 与本条一并写明。
 
 ---
 

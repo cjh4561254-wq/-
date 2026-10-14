@@ -339,7 +339,7 @@ conn.commit(); conn.close()
 `report_text` 换成 `"not json"`、或 `error_code` 换成 `"TIMEOUT_LEGACY"`，
 分别命中缺陷 1 / 3 / 2。
 
-**步骤 3 — 跑取证测试**（41 条，覆盖三个缺陷 + 对照组）：
+**步骤 3 — 跑取证测试**（task-37 时 41 条，覆盖三个缺陷 + 对照组；task-38 后增至 44 条）：
 
 ```powershell
 & ".\.venv\Scripts\python.exe" -m pytest tests/test_history_robustness.py -q
@@ -445,17 +445,18 @@ PowerShell 会重组行尾，数出来是假的。要数行就 `read_bytes()` �
 ### 断言方向
 
 下面每一行都是 `scripts/check_docs.py` 的**可执行断言**：它会以真实夹具**执行**该用例，
-把用例体里发出的**第一个请求**实测到的状态码，与这里写死的期望值比对。
-所以「文档说 200、用例其实已经是 500」这种腐烂会变成一次红灯，而不是一句无人核对的散文。
+把每个参数化实例发出的**全部 GET 请求**的状态码、实例数与每实例请求数，
+与这里声明的期望比对。所以「文档说 200、用例其实已经是 500」或请求被短路/实例被删，
+都会变成一次红灯，而不是一句无人核对的散文。
 
-投喂行 `test_one_bad_row_no_longer_poisons_the_listing -> 200`
-投喂行 `test_ten_legal_rows_plus_one_bad_row_all_eleven_are_returned -> 200`
-投喂行 `test_one_bad_error_code_no_longer_poisons_the_listing -> 200`
-投喂行 `test_a_bad_report_text_no_longer_breaks_the_detail_endpoint -> 200`
-投喂行 `test_a_bad_report_text_row_does_not_poison_its_page -> 200`
-投喂行 `test_the_listing_is_unaffected_by_a_bad_report_text -> 200`
-投喂行 `test_a_null_report_text_row_is_unaffected -> 200`
-投喂行 `test_a_healthy_history_is_unaffected -> 200`
+投喂行 `test_one_bad_row_no_longer_poisons_the_listing[instances=1,requests=1] -> 200`
+投喂行 `test_ten_legal_rows_plus_one_bad_row_all_eleven_are_returned[instances=1,requests=1] -> 200`
+投喂行 `test_one_bad_error_code_no_longer_poisons_the_listing[instances=3,requests=1] -> 200`
+投喂行 `test_a_bad_report_text_no_longer_breaks_the_detail_endpoint[instances=3,requests=1] -> 200`
+投喂行 `test_a_bad_report_text_row_does_not_poison_its_page[instances=1,requests=2] -> 200`
+投喂行 `test_the_listing_is_unaffected_by_a_bad_report_text[instances=1,requests=2] -> 200`
+投喂行 `test_a_null_report_text_row_is_unaffected[instances=1,requests=2] -> 200`
+投喂行 `test_a_healthy_history_is_unaffected[instances=1,requests=2] -> 200`
 
 ### 遗留：`tests/test_errors.py` 仍是兜底 handler 的守卫
 
@@ -671,6 +672,12 @@ test_the_report_path_no_longer_reaches_the_fallback_handler
 
 ## ⑦ 防腐烂：`scripts/check_docs.py`
 
+**护栏本身现由 pytest 自动化守护**：`tests/test_check_docs.py` 在隔离镜像里注入变异，
+覆盖文档漂移、用例改名、真实状态回归、实例/请求计数缩水及执行异常报告；
+变异不写入工作树里的真实源文件。镜像位于仓库级 `.tmp/task40_mirror/`，而非 `tmp_path`：
+本机 `tempfile` 会退回 cwd，且从 `tests/` 启动时相对 `--basetemp` 可能将 `tmp_path`
+落入 `tests/` 子目录。源码与文档 SHA-256 证明排除临时目录、pytest 缓存与字节码等运行产物。
+
 本文是交接文档，但它靠**大量「代码第 NNN 行是表达式 Z」「用例 X 钉住行为 Y」
 「期望值 200」**来讲故事 —— 这些断言**无法靠人肉长期复核**。代码一改，
 行号漂移、用例改名、断言方向翻转，文档就开始骗人，而读它的人
@@ -690,28 +697,38 @@ test_the_report_path_no_longer_reaches_the_fallback_handler
 |---|---|---|
 | **① 行号锚点** | 本文「行号锚点」块里的 `` `文件.py:NNN` ``，必须与**代码里自己声明的**锚点注释（`` # **:NNN** `<该行原文>` ``）落在同一行 | 代码改了一行、注释/文档没跟上 |
 | **② 用例存在性** | 文档提到或被锚点标注的每个 `test_*`，必须在 `tests/` 里真实存在（用 `ast` 收集，**不扫文本**） | 用例被改名/删除，文档还在引用它 |
-| **③ 断言方向** | 文档「断言方向」块里写死的 `<用例名> -> 200`，脚本会**以真实夹具执行该用例**，把它实际发出的第一个请求的状态码与之比对 | 「文档说 200、用例其实已经是 500」 |
+| **③ 断言方向** | 文档「断言方向」块写明 `<用例名[instances=N,requests=M] -> 200`，脚本在隔离执行上下文中调用该用例，逐实例核对实例数、每实例请求数及所有请求状态码（不是 pytest fixture 注入） | 文档期望与实际实例数、请求数或状态码不一致 |
 
 维度 ③ 的采集钩子是 `tests/test_history_robustness.py` 里的
-`_record_acceptance_status(func)`：它只**观察**不改行为，在请求发出的那一刻
-取值 —— 所以即使用例自己的断言后来失败了，记录到的也还是它**真的看到**的数字。
+`_record_acceptance_status(func)`：它只**观察**不改行为，现会记录每个参数化实例
+发出的全部 GET 状态码；投喂行同时声明参数实例数与每实例请求数，脚本逐项核对。
+若用例断言失败或依赖 pytest fixture 而无法直接调用，脚本将返回一条 `[用例执行]`
+Problem、退出码 1，不会把裸 traceback 当作有效的核对结果。
 
 ### 它**不**保证什么（诚实边界）
 
 - 只核对文档里**写了**的东西。文档漏写的属性（某个坏行不再返回、
   某个字段被悄悄丢掉）它一无所知 —— **它防腐烂，不防遗漏。**
+- 断言方向投喂仅支持无 pytest fixture 参数的用例（可含 `parametrize`）；
+  fixture 型用例不会被注入 fixture，而是被干净地报告为 `[用例执行]`，因此不应列为投喂对象。
+- 请求计数针对被采集钩子拦截到的 `TestClient.get` 调用；它不是通用 HTTP 流量记录器。
 - 不核对散文：判断性叙述（「为什么修」「影响面多大」）无法机械复核。
 - 只要代码锚点与文档引用**同谋地一起改错**，它看不出来（两者一致它就绿）。
   **它防的是单边漂移。**
 
-### 探针有效性（task-39 自证：3 种漂移各注入一次）
+### 探针有效性（task-39 历史记录：3 种漂移各注入一次）
 
 一个"守护哨兵"如果对任何改坏都无反应，它就是安慰剂。三类漂移各注入一次，
 `.tmp/prove_check_docs.py`（**字节级 I/O** + 工作区字节备份 + `try/finally`）：
 
 ```
 BASELINE rc=0 | 文档与仓库一致：行号锚点 7 条（代码锚点 7 个）、
-                用例 23 个全部存在、断言方向 12 个参数化实例
+                用例 23 个全部存在、断言方向 12 个参数化实例（16 个请求）
+```
+
+> 上面是 task-39 当时的历史快照（23 个测试用例）。当前 `scripts/check_docs.py`
+> 的运行结果另计：24 个 `test_*` 名称全部存在，12 个参数化实例、16 个 GET 请求；
+> 新增的 `tests/test_check_docs.py` 不改变这里 8 条投喂用例的实测计数。
 
 === M1 代码锚点行号漂移一位（:215 -> :216）===
   改坏 rc=1 | 不一致 2 条：   ← 代码锚点自校验 + 文档对不上，双响
@@ -724,16 +741,25 @@ BASELINE rc=0 | 文档与仓库一致：行号锚点 7 条（代码锚点 7 个�
   还原逐字节一致 -> True（39908 bytes）；复跑 rc=0
 === M3 文档期望值 200 改成 500 ===
   改坏 rc=1 | 不一致 1 条：
-    [断言方向] docs/HISTORY_ROBUSTNESS.md:451 文档说
-      `test_one_bad_row_no_longer_poisons_the_listing` 期望 500，实测 200
-  还原逐字节一致 -> True（39908 bytes）；复跑 rc=0
+    [断言方向] 文档期望 500，实测 200
+  还原逐字节一致 -> True；复跑 rc=0
+=== M4 产品代码退回 WorkflowStatus(record.status) ===
+  改坏 rc=1 | [用例执行] AssertionError: 期望 200，实际 500：'RUNNING' is not a valid WorkflowStatus
+  还原逐字节一致；复跑 rc=0
+=== M5 投喂用例断言改成必假 ===
+  改坏 rc=1 | [用例执行] AssertionError: TASK40_FORCED_ASSERTION_FAILURE
+  还原逐字节一致；复跑 rc=0
+=== M6 参数实例 3 -> 2 ===
+  改坏 rc=1 | [断言方向] 文档声明 3 个实例，实测 2 个
+  还原逐字节一致；复跑 rc=0
+=== M7 两请求用例短路为一请求 ===
+  改坏 rc=1 | [断言方向] 文档声明每实例 2 个请求，实测 1 个
+  还原逐字节一致；复跑 rc=0
 ```
 
-三个变异**全部被抓住**，且还原后逐字节一致、复跑复绿。
+上述变异全部抓住，并要求对应 Problem 类型/关键错误信息；镜像副本恢复后再次运行 rc=0。
+实例计数对账修复了参数化实例 3→2 的假绿；请求计数对账修复了“仅记录首个请求”导致的部分请求假绿。Fixture 参数用例如被投喂会以 `[用例执行] TypeError` 干净失败；因此选作维度 3 投喂的用例必须不依赖 pytest fixture。
 
-★ **M3 是最有说服力的一条**：它不是"文本对不上"，而是**真的把用例跑了一遍**，
-用实测状态码推翻了文档里写死的期望值。这正是维度 ③ 存在的理由 ——
-只比对文本的哨兵抓不住"断言方向被悄悄翻回去"。
 
 ---
 

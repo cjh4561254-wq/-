@@ -2,8 +2,8 @@
 
 > 这份文件写给两类人：想快速看懂"这个项目做对了什么"的读者，以及要决定"值不值得给面试机会"的面试官。
 > **诚实前提**：这不是什么高深技术。它是一个 7 天、单人、本机跑的项目，
-> 2026-10-14 基线 `a703364`，`594 passed`（实测 `python -m pytest -q`，约 17 秒；写这份文件的当天
-> 后续提交 `a677425` 只加了演示脚本与 `docs/DEMO.md`，本文件引用的行号未受影响）。
+> 本文保留 2026-10-14 的历史快照：基线 `a703364`，当时 `594 passed`（实测 `python -m pytest -q`，约 17 秒；后续提交 `a677425` 只加演示脚本与 `docs/DEMO.md`，本文件引用的行号未受影响）。
+> 当前代码与测试规模以 [README 测试说明](../README.md#测试) 为准；不要把本文件历史快照当作当前测试状态。
 > 下面每一条都给出**可复现的证据**；不厉害的地方我单列在最后一节，不吹。
 >
 > 配套阅读：[docs/INTERVIEW_QA.md](INTERVIEW_QA.md)（12 个追问）、[docs/WORKFLOW.md](WORKFLOW.md)（完整链路）、
@@ -13,17 +13,14 @@
 
 ## 一、亮点（5 条）
 
-### 亮点 1：报告里的每个数字都能追到工具结果（数字溯源校验）
+### 亮点 1：报告中的数字有机械可核对的来源（数字溯源校验）
 
 **是什么**：报告里的表格**不是模型写的**，是从 `ToolResult.data["rows"]` 原样复制的
-（`_copy_table`，`app/agents/validation.py:386`）；模型只写文字段落。
-写完之后，`validate()`（`:551-604`）用正则把报告里出现的**所有数字**抽出来
-（`_NUMBER_RE`，`:532`），逐个到该工作流所有工具结果里回查（`_allowed_numbers`，`:766`），
-查不到就记 `UNSUPPORTED_NUMBER`（error 级）。
+（`_copy_table`，`app/agents/validation.py:386`）；模型可写正文段落，但不能改表格、摘要或质量提示。
+写完之后，`validate()`（`:551-604`）扫描摘要、正文和质量提示中的数字，
+到 `ToolResult.data` 与 `DatasetProfile` 中逐个核对；查不到就记 `UNSUPPORTED_NUMBER`（error 级）。
 
-**为什么算亮点**：LLM 报告最常见的失败模式不是"算错"，而是**编一个看起来对的数**。
-常见做法是"用提示词要求模型别编"——那是在跟概率博弈；这里的做法是**让模型根本没有机会碰数字**，
-再加一道**可验证的机械检查**。并且校验层立了三条"不能做"：不改报告、不重跑工具、不决定工作流状态。
+**为什么算亮点**：LLM 报告常见风险是**写出没有工具依据的数字**。提示词不能提供保证；本项目让模型只写正文段落，并用机械校验检查正文、摘要和质量提示中的数字是否能从工具结果或数据画像追溯。表格、摘要和质量提示由代码生成，表格直接复制工具结果。校验层只读状态，不改报告、不重跑工具，也不决定工作流状态。
 
 **证据**：`app/agents/validation.py:386,532,551-604,725-844`；6 种 issue code 被测试冻结
 （`tests/test_contracts_d5.py:88-95,163`）；千分位与百分号口径见 `tests/test_validation_numbers.py:211,330`。
@@ -31,16 +28,12 @@
 
 ### 亮点 2：诚实标注不是口号，是从真值推导出来的字段
 
-**是什么**：报告里有两个互斥的首段文案 `TEMPLATE_NOTICE`（没用模型）和
-`LLM_PLANNED_NOTICE`（模型参与了规划、正文仍是模板）（`app/agents/validation.py:57,62`），
-外加布尔 `llm_used`。它们**都不是传进来的参数**，而是从 `state.plan.source` 推导
-（`_llm_used`，`:136`；`source` 只有 `llm` / `rule_fallback` 两种）。
+**是什么**：目前有三种首段文案：`TEMPLATE_NOTICE`（没用模型）、`LLM_PLANNED_NOTICE`（模型参与规划、正文是模板）和 `LLM_WROTE_NOTICE`（模型撰写了正文）（`app/agents/validation.py:57,62,73`）。`llm_used` 仍只表示模型是否参与规划，由 `_llm_used` 根据 `state.plan.source` 推导（`:225-242`）；它不单独表示正文是否由模型写。
 
 **为什么算亮点**：这条规矩是**QA 复验逼出来的**——D4 阶段 `llm_used` 曾经硬编码 `False`，
 真 key 规划成功之后，报告首段、接口 7 的字段、前端横幅三处一起显示"未使用大模型"，
 而当时**490 个测试一条都没红**（`docs/DECISIONS.md:1008-1013`）。
-现在的保护是：两个常量被测试**逐字写死、不从实现 import**，且断言二者互不相同
-（`tests/test_validation.py:286-293`）——抄成别名会立刻变红。
+现在的保护是：首段文案按计划来源与正文来源分别选择，并由 `tests/test_validation.py` / `tests/test_report_llm.py` 覆盖其行为；不能把 `llm_used` 误读成“正文是否由模型撰写”。
 
 **证据**：`app/agents/validation.py:57,62,136,326-337`；`tests/test_validation.py:286-293`；
 `docs/DECISIONS.md` D-22（第 1017-1019 行）。
@@ -66,7 +59,7 @@ BAD_RESULT                                                        （第 5 类�
 （`os.system`/`eval`/`open`/`__import__` 全部取不到）、`tests/test_tools.py:569-580`、
 `tests/test_analysis_agent.py:176-185`。
 
-### 亮点 4：从"模型没配"到"模型挂了"，全链路都有兜底，工作流永远出报告
+### 亮点 4：从"模型没配"到"模型挂了"，提供规则与模板兜底
 
 **是什么**：四层降级，每一层都有代码和文案证据：
 
@@ -74,15 +67,14 @@ BAD_RESULT                                                        （第 5 类�
 |---|---|
 | `llm_configured=false`（没填 key） | Planner 走 `plan_with_rules`，`source="rule_fallback"`（`app/agents/planner.py:160-161,225`） |
 | 配置不全就调模型 | `chat()` 抛 `LLMNotConfigured`（`app/llm/client.py:65,111-112`），调用方转规则兜底 |
-| 模型网络/5xx 抖动 | `llm_max_retries=2`（共 3 次尝试，`app/llm/client.py:126-130`） |
+| 模型网络/5xx 抖动 | SDK `max_retries=0`，项目循环按 `llm_max_retries=2` 最多尝试 3 次（`app/llm/client.py:133-148`） |
 | 报告生成失败 | `_minimal_report` 产出一份最小报告（`app/agents/validation.py:417`），状态降级不崩 |
 
-**为什么算亮点**："模型不可用"在这个项目里不是异常路径，是**正常路径之一**：
-`docs/ARCHITECTURE.md` 把"规则兜底模式"写进了 D4 验收条件，
-所以演示不依赖任何外部服务的可用性。这也是"工作流永远出报告"这条承诺的底气。
+**为什么算亮点**："模型不可用"不是分析失败的唯一原因；Planner 可走规则计划，报告生成可退回模板，
+因此项目仍能在未配置模型时运行演示。外部模型调用仍可能耗时或失败；这里描述的是可观察的降级路径，不承诺任何环境下绝不失败。
 
 **证据**：`app/agents/planner.py:9,160-161,225,274,287,318,329`；
-`app/llm/client.py:65,93,104,111-112,126-130`；
+`app/llm/client.py:72,114-148`；
 `app/agents/validation.py:417`；`app/agents/orchestrator.py:295-324`。
 
 ### 亮点 5：运行时可写目录探测（`runtime_environment`）——先证明，再假设
@@ -204,10 +196,10 @@ BAD_RESULT                                                        （第 5 类�
 
 ## 四、诚实边界（这些不是亮点）
 
-- **单进程**：状态在进程内存里，`uvicorn --workers 4` 会让上传与轮询落到不同进程；
-  **重启即丢**内存态，而且**没有任何持久化兜底** —— SQLite 历史归档是「拍板要做、最终没做」的一项
-  （`docs/ARCHITECTURE.md` §8.3 只有设计，`app/config.py` 里没有 `db_path`，
-  `requirements.txt` 里也没有数据库依赖；如实记录见 `docs/WORKFLOW.md` §7）。
+- **单进程**：运行态仍在进程内存里，`uvicorn --workers 4` 会让上传与轮询落到不同进程；
+  重启后未完成的工作流和数据集不会恢复。已完成工作流的摘要与报告正文由 D6 之后补做的
+  SQLite 历史归档保留，但它不提供运行态恢复，也不支持多进程共享 registry（详见
+  `docs/ARCHITECTURE.md` §8.3、`docs/DECISIONS.md` D-24）。
 - **数字校验的边界**：只保证"报告里写出来的数字有出处"，
   不保证"该写的数字都写了"；容差只覆盖格式差异，见 [INTERVIEW_QA 第 7 题](INTERVIEW_QA.md)。
 - **没有队列/优先级/背压**：提交 100 个分析就是 100 个后台线程。

@@ -13,10 +13,10 @@
 
 用户上传 CSV / Excel → 用一句自然语言提问（"哪个地区销售额最高"）→ 主控智能体把问题拆成
 最多 8 个任务 → 每个任务交给一个**白名单里的 Python 工具**去算（pandas 真算，模型不算数）→
-出图 → 生成报告 → 最后一步校验"报告里的每个数字都能在工具结果里找到出处"。
+出图 → 生成报告 → 最后一步检查摘要、正文与质量提示中的数字能否追溯到工具结果或数据画像。
 
 三条线要记住：**模型只负责"拆问题"和"写正文"，数字全部来自 pandas**；**报告里的每个数字都能溯源**；
-**工作流永远会出报告**（模型没配、模型挂了，都降级成规则计划 + 模板报告，并在报告首段写明）。
+**模型不可用时有规则计划与模板报告兜底路径**；这不代表任意运行时故障下都保证产出报告。
 
 ---
 
@@ -31,12 +31,10 @@
 - **Celery**：需要 broker（RabbitMQ/Redis）+ 独立的 worker 进程 + 序列化边界。
   我的任务最慢 180 秒上限（`max_workflow_seconds=180`），而且只有一个用户，
   `BackgroundTasks` 就够。触发条件：要并发多用户、要任务持久化排队、要跨机器。
-- **Redis**：进程内 `dict` 是最快的存档（`app/core/registry.py:37`），跨进程反而要序列化。
-  重启丢内存态这件事我**接受并写进文档**。SQLite 历史归档是**拍板要做、最终没做**的一项：
-  `docs/ARCHITECTURE.md` 第 14 节决策 3 定了「做 SQLite、不做 SSE」，§8.3 也写了完整读写路径约定，
-  但代码里**一行都没有** —— `app/config.py` 的 15 个字段里没有 `db_path`，
-  `requirements.txt` 里也没有数据库依赖（见 `docs/WORKFLOW.md` §7 的如实记录）。
-  这条在面试里要**主动说没做**：说了"有 SQLite 归档"却拿不出表和函数，比说"我没做"扣分多得多。
+- **Redis**：进程内 `dict` 是最快的运行态存档（`app/core/registry.py:37`），跨进程反而要序列化。
+  终态历史现会用标准库 `sqlite3` 归档到 `data/db/app.db`，重启后可通过只读历史列表/详情查询；
+  但运行中的工作流与数据集仍在进程内存中，重启后不会恢复，SQLite 也不让多进程共享 registry。
+  这是 D6 之后补做的 D6-SQLite（D-24），不是 D6 当天完成的。
   触发条件：多进程（`--workers`）或多机部署。
 - **Docker**：Windows 上要 WSL2，装环境的时间会挤掉测代码的时间；交付时再加也来得及
   （一个 15 行的 Dockerfile）。触发条件：面试官要"一条命令跑起来"或要部署到服务器。
@@ -128,8 +126,7 @@ SSE 的心跳/重连/代理缓冲问题在 7 天里是负收益。
 1. **单进程**：状态在进程内存里（`app/core/registry.py:37`），
    一旦用 `uvicorn --workers 4`，"上传的进程"和"轮询的进程"不是同一个 → 用户会看到 404。
    所以启动命令里明确禁止 `--workers`。
-2. **重启即丢，且没有任何持久化兜底**：进程重启后老 `workflow_id` / `dataset_id` 全部 404，
-   连历史记录也查不到 —— SQLite 归档是「拍板要做、最终没做」的项（`docs/WORKFLOW.md` §7 有记录）。
+2. **运行态重启即丢，但终态历史有 SQLite 归档**：进程重启后老 `workflow_id` / `dataset_id` 不会恢复为可继续轮询的运行态；已完成工作流的摘要与报告正文可从历史归档接口读取。SQLite 历史归档是后来补做的 D6 收尾（D-24），不是运行态恢复或多进程 registry。
 3. **没有队列**：提交 100 个分析就是 100 个后台线程，没有优先级、没有背压。触发条件是"真的有人用"。
 
 **追问**：
@@ -151,11 +148,11 @@ SSE 的心跳/重连/代理缓冲问题在 7 天里是负收益。
 
 ## 5. 重试上限为什么这么定？会不会叠乘？
 
-**答**：三层重试**各自独立、互不相乘**，每一层的触发条件不同：
+**答**：重试分属模型 HTTP 调用、单个分析任务和整条工作流三个层面；但不能笼统说它们“互不相乘”。一次 `chat()` 内只由项目自己的循环重试：`OpenAI` 被显式设置为 `max_retries=0`，所以 `llm_max_retries=2` 时最多 3 次 HTTP 尝试。工作流可能发起多次 `chat()`，因此总请求数还取决于模型调用次数。
 
 | 层 | 上限 | 管什么 | 在哪 |
 |---|---|---|---|
-| 模型 HTTP 层 | `llm_max_retries=2`（总尝试 3 次） | 一次 `chat()` 调用内的网络/5xx 抖动 | `app/config.py:96`、`app/llm/client.py:126-130` |
+| 模型 HTTP 层 | SDK `max_retries=0`；项目循环由 `llm_max_retries=2` 控制（最多 3 次尝试） | 一次 `chat()` 调用内的连接错误 / 超时 / 429 / 500 / 503 | `app/config.py` 的重试配置、`app/llm/client.py` 的 `max_retries=0` 与外层循环 |
 | 单个任务 | `_MAX_TASK_RETRIES=1`（同任务再跑 1 次） | 工具返回 `BAD_RESULT`（NaN、结构不符） | `app/agents/orchestrator.py:54,222-226` |
 | 整条工作流 | `_MAX_WORKFLOW_RETRIES=6`（与 `retry_count` 的 `le=6` 对齐） | 所有任务重试次数的**总账** | `app/agents/orchestrator.py:50`、`app/schemas_workflow.py:257` |
 
@@ -163,10 +160,7 @@ SSE 的心跳/重连/代理缓冲问题在 7 天里是负收益。
 整条 6 次是因为 `TaskPlan` 最多 8 个任务，全部失败也只需要 8 次机会的一半略多，
 配合"每次重试都要过 `retry_count < 6` 这道闸"就能保证有限；模型 2 次是经验值，再往上只是让用户多等。
 
-**会不会叠乘？** 会**相乘但不失控**，因为还有两道全局闸在**每个阶段之前 + 每个任务之前**检查：
-`max_workflow_seconds=180`（超时 → `FAILED` + `WORKFLOW_TIMEOUT`）
-和 `tool_call_limit=20`（超限 → `FAILED` + `INTERNAL_ERROR`，`app/agents/orchestrator.py:327-354`）。
-最坏情况：20 次工具调用 × (1+1) 次尝试 = 40 次工具执行，远小于 180 秒闸能容忍的量级。
+**边界要分开看**：工具任务重试受 `_MAX_TASK_RETRIES`、`tool_call_limit` 与工作流重试账本约束；模型 HTTP 每次调用最多 3 次尝试。`max_workflow_seconds=180` 在阶段/任务之间检查，不能中断一条已经阻塞的 HTTP 请求，因此它不是单次模型调用的硬墙钟上限。整条工作流的模型总请求数随实际 planner / report 调用次数变化，不应用工具调用上限直接推算。
 
 **追问**：
 - *"重试耗尽了用户看到什么？"* —— 单任务：该任务 `FAILED`/`SKIPPED`（依赖它的任务跳过），
@@ -176,22 +170,16 @@ SSE 的心跳/重连/代理缓冲问题在 7 天里是负收益。
 - *"`attempt` 最多两次，那第一次的结果呢？"* —— 都留在 `state.results` 里（审计用），
   报告取的是同一 `task_id` 的最后一次（`app/agents/orchestrator.py:286-292`）。
 
-**证据**：`app/config.py:96,104,107`；`app/agents/orchestrator.py:49-54,222-226,286-292,327-354`；
-`app/schemas_workflow.py:257`；`tests/test_contracts_d3.py:319`（`retry_count` 硬上限）。
+**证据**：`app/config.py` 的重试/超时/工具调用限制；`app/llm/client.py` 的显式 SDK `max_retries=0` 与唯一 HTTP 重试循环；`app/agents/orchestrator.py` 的任务及工作流重试边界；`app/schemas_workflow.py` 的 `retry_count` 上限。
 
 ---
 
-## 6. "报告里每个数字都能追到 `ToolResult.data`"这条规矩怎么落地的？
+## 6. "报告里的数字如何做来源核对？"这条规矩怎么落地的？
 
-**答**：分两半——**数字不让模型写**，**写完再逐个数回查**。
+**答**：模型只写 `sections[].text`；表格、摘要和质量提示由代码生成，校验器再对报告可见文本做数字溯源。
 
-1. 报告里所有**表格**都是 `ToolResult.data["rows"]` 原样复制（`_copy_table`，`app/agents/validation.py:386`），
-   模型只写文字段落，它没有机会改表格里的数字。
-2. `validate(state)` 做五类检查、产出 6 种固定 `code` 的问题（`app/agents/validation.py:551-604`）：
-   数字溯源、任务状态、图表文件、列名、报告长度。数字这类的做法是：
-   用 `_NUMBER_RE`（`:532`，带千分位的也认）把报告里的数字全抽出来，逐个在
-   `_allowed_numbers(results)`（`:766`，递归收集所有工具结果里的数字）里回查，
-   查不到就记 `UNSUPPORTED_NUMBER`（`severity="error"`）。
+1. 报告里的所有**表格**都从 `ToolResult.data["rows"]` 原样复制（`_copy_table`），模型不能改表格数字；`summary` 与 `data_quality_notes` 也由模板生成。
+2. `validate(state)` 扫描 `summary`、各 `sections[].text` 和 `data_quality_notes`；`_allowed_numbers(state)` 从成功的 `ToolResult.data` 与 `DatasetProfile` 收集出处，找不到来源就记 `UNSUPPORTED_NUMBER`（`severity="error"`）。
 3. 校验**只读 state、绝不调模型**（`app/agents/validation.py:554`、`tests/test_contracts_d5.py:226-238`），
    而且**自己绝不抛异常**：万一校验代码崩了，返回一份 `passed=False` 的最小结果并写日志，
    不能让"最后一道防线自己塌了还毁掉已经算好的结果"（`app/agents/validation.py:559-586`）。
@@ -217,11 +205,11 @@ SSE 的心跳/重连/代理缓冲问题在 7 天里是负收益。
 - 百分比与小数：报告写 `1.1%`，工具结果里是 `0.0111`；
 - 正负号：工具返回 `-3.2`，报告写的是"下降了 3.2"（幅度）。
 
-所以 `_same_number`（`app/agents/validation.py:825-844`）只认三种"写法差异"：
-绝对值相等（含符号互换）、四舍五入到 0/1/2 位小数后相等、×100 / ÷100 互换。
-**不收窄成相对误差**（比如"差 1% 就算同一个数"）的理由：一旦放宽到 1%，
-`24,871,657` 与 `24,871,000` 也会被判为同一个数，"溯源"就名存实亡——
-容差只能覆盖**格式差异**，不能覆盖**数值差异**。
+所以 `_same_number`（用函数名定位，行号随变更可能漂移）先认绝对值相等（含符号互换），
+再让一般数值比较通过**相对差 0.1% 的量级门槛**后才四舍五入到 1/2 位；百分比与小数的 ×100 / ÷100
+换算单独比较，允许报告展示精度造成的差异。**不放宽成任意相对误差**（比如"差 1% 就算同一个数"）：
+否则 `24,871,657` 与 `24,871,000` 也可能被判成同一个数，"溯源"就名存实亡——
+容差只覆盖**写法与展示精度**，不能洗白明显数值差异。
 
 **追问**：
 - *"那 `0.99` 和 `99%` 呢？"* —— 走 ×100 那条规则，认。

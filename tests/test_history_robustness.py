@@ -128,17 +128,15 @@ def _client():
 # （monkeypatch 环境变量 + registry.clear() + lifespan 建表）就在这里，
 # 复刻一份必然漂移。核对脚本只调用 `_record_acceptance_status()`。
 #
-# 钩子只**观察**，不改行为：把用例**体**里发出的第一个请求的状态码记下来，
-# 在请求发出的那一刻取值 —— 所以即使用例自己的断言后来失败了，
-# 记录到的也还是它当时**真的看到**的那个数字。
+# 钩子只**观察**，不改行为：记录用例**体**发出的全部请求状态码，
+# 在每个请求发出时取值 —— 脚本据此核对每实例请求数与状态码方向。
 _CAPTURED_STATUS: list[int] = []
 _ORIGINAL_GET = TestClient.get
 
 
 def _recording_get(self, *args, **kwargs):
     response = _ORIGINAL_GET(self, *args, **kwargs)
-    if not _CAPTURED_STATUS:
-        _CAPTURED_STATUS.append(response.status_code)
+    _CAPTURED_STATUS.append(response.status_code)
     return response
 
 
@@ -153,13 +151,13 @@ def _capture_status():
 
 
 def _record_acceptance_status(func):
-    """以真实夹具执行 `func`，返回 `{参数化 id 或 "": 首个响应状态码}`。
+    """以真实夹具执行 `func`，返回 `{参数化 id 或 "": 全部响应状态码}`。
 
-    给 `scripts/check_docs.py` 用：文档的「投喂行」写死了
-    `<用例名> -> 200`，本函数把**每个参数化实例**实测到的状态码交回去，
-    让「文档说 200、用例其实已经是 500」这种腐烂变成一条红灯。
+    给 `scripts/check_docs.py` 用：文档的「投喂行」声明每个参数化实例与请求数，
+    本函数记录每个实例的全部响应状态码，让脚本核对状态方向以及是否漏发请求。
 
     夹具与 rest 用例逐字同源（`tmp_path` + 环境变量 + 缓存重置 + registry 清空）。
+    Fixture 参数需由调用方提供；纯 pytest 内建 fixture 用例不适合作为投喂对象。
     """
     import tempfile
 
@@ -187,7 +185,7 @@ def _record_acceptance_status(func):
         argvalues = [()]
         ids = [""]
 
-    recorded: dict[str, int] = {}
+    recorded: dict[str, list[int]] = {}
     for index, values in enumerate(argvalues):
         if not isinstance(values, tuple):
             values = (values,)
@@ -217,7 +215,7 @@ def _record_acceptance_status(func):
             _CAPTURED_STATUS.clear()
             with _capture_status():
                 func(**dict(zip(argnames, values)))
-            recorded[param_id] = _CAPTURED_STATUS[0] if _CAPTURED_STATUS else -1
+            recorded[param_id] = list(_CAPTURED_STATUS)
         finally:
             registry.clear()
             reset_history_store_cache()

@@ -13,7 +13,7 @@
 
 ## 0. 一句话说清这个系统在干什么
 
-用户上传一个 CSV/Excel → 用中文提一个问题（例：「按地区看销售额前 5，并画柱状图」）→ 大模型**只负责把问题翻译成一份"分析计划"**（选哪几个工具、用哪些字段）→ 后端用 pandas 真实执行这些工具 → 得到真实数字和图表 → 大模型**只负责用中文解释这些数字** → 校验 Agent 检查"报告里出现的每个数字是否真的来自工具结果" → 返回网页。
+用户上传一个 CSV/Excel → 用中文提一个问题（例：「按地区看销售额前 5，并画柱状图」）→ 大模型**只负责把问题翻译成一份"分析计划"**（选哪几个工具、用哪些字段）→ 后端用 pandas 真实执行这些工具 → 得到真实数字和图表 → 大模型**只负责用中文解释这些数字** → 校验 Agent 检查"报告中需要溯源的数字是否能在工具结果或数据画像中找到依据" → 返回网页。
 
 **贯穿全系统的铁律：数字只能由 Python 算出来。大模型不许做算术，不许发明字段名，不许直接执行代码。**
 
@@ -151,7 +151,7 @@ ai-data-analyst-agent/
 ├─ app/
 │  ├─ __init__.py                     (已存在) __version__ = "0.1.0"
 │  ├─ main.py                         (已存在) D6 追加静态文件挂载 /static 与 web 首页路由
-│  ├─ config.py                       (已存在) Settings 共 15 个字段（见 §4.0.1，字段表为准，别信本文行号）；含 temp_dir/temp_path；D4 冻结时追加 charts_dir（+ charts_path 属性）、max_workflow_seconds、tool_call_limit
+│  ├─ config.py                       (已存在) Settings 共 16 个字段（见 §4.0.1，字段表为准，别信本文行号）；含 temp_dir/temp_path；D4 冻结时追加 charts_dir（+ charts_path 属性）、max_workflow_seconds、tool_call_limit；D6-SQLite 追加 db_path（+ db_file 属性）
 │  ├─ runtime.py                      (已存在) STARTED_AT + uptime_seconds() + runtime_environment()（lifespan 里设临时目录，见 D-07）
 │  ├─ schemas.py                      (已存在) ApiError / ApiResponse[T] / ErrorCode（8 个码，见 §7.0）
 │  ├─ schemas_dataset.py              (已存在, 44566c6) FileExt / ALLOWED_EXTENSIONS / SemanticType 三个模块级别名常量 + Dataset / DatasetSummary / DatasetProfile / ColumnProfile（见 4.1、4.2）
@@ -329,7 +329,7 @@ errors.py  →  schemas.py（只为了用 ErrorCode）
 |---|---|
 | 输入 | `state.results: list[ToolResult]`、`state.charts: list[ChartResult]`、`state.report: FinalReport \| None`、`state.profile: DatasetProfile` |
 | 输出 | `ValidationResult`（见 4.9） |
-| 能做 | ① **数字溯源校验**：把 `FinalReport.sections[].text` 里的所有数字用正则抽出来，逐个在 `ToolResult.data` 的所有数值里找"允许的近似值"（容差规则：绝对值相等、或四舍五入到 0/1/2 位小数后相等、或百分比/小数换算后相等）；找不到就记为 `UNSUPPORTED_NUMBER` 问题；② **任务校验**：`plan.tasks` 中失败的、被跳过的、返回 0 行的，逐条记问题；③ **图表校验**：`ChartResult.source_task_id` 必须能在 `results` 里找到，PNG 文件必须真的存在；④ **画像一致性**：报告里提到的列名必须出现在 `DatasetProfile.columns[].name` 里，否则记 `UNKNOWN_COLUMN`；⑤ 给出 `severity`（`error` / `warning` / `info`）与 `passed`（只要没有 `error` 且所有任务成功，`passed=True`） |
+| 能做 | ① **数字溯源校验**：扫描 `FinalReport.summary`、每个 `sections[].text` 与 `data_quality_notes` 中的数字，逐个在 `ToolResult.data` 与 `DatasetProfile` 的数值来源中查找可接受值（绝对值相等；一般数值先过相对差 0.1% 的量级门槛，再比较 1/2 位舍入；百分比/小数换算按展示精度比较）；无出处记 `UNSUPPORTED_NUMBER`；② **任务校验**：`plan.tasks` 中失败、跳过或成功但返回空结果的任务逐条记问题；③ **图表校验**：`ChartResult.source_task_id` 必须能在 `results` 中找到，PNG 文件必须存在；④ **画像一致性**：报告提到的列名必须在 `DatasetProfile.columns[].name` 中，否则记 `UNKNOWN_COLUMN`；⑤ 给出 `severity`（`error` / `warning` / `info`）与 `passed`（没有 error 级问题才为 True） |
 | **不能做** | ① 不修改报告内容（发现问题就报告问题，不偷偷改数字）；② 不重跑工具；③ 不决定 `WorkflowState.status`（那是 Orchestrator 的事，Orchestrator 依据 `ValidationResult.passed` 决定） |
 | 调用 LLM | **否** |
 | LLM 职责边界 | 不适用 |
@@ -338,12 +338,12 @@ errors.py  →  schemas.py（只为了用 ErrorCode）
 
 | 项目 | 内容 |
 |---|---|
-| 输入 | `state.question`、`state.profile`、`state.results`（已裁剪为各任务 Top 20 行，控制 token）、`state.charts`、`validation.issues` |
-| 输出 | `FinalReport`（见 4.10） |
-| 能做 | ① 让模型**看着 `results` 里已有的数字**写 3–5 段中文结论：数据概况、关键发现、数据质量提示；② 每段必须带 `cites: list[str]`，指向 `task_id`（例如 `["T1","T3"]`）以证明这段话有依据 |
-| **不能做** | ① 不许出现 `results` 里没有的数字（会被 `validate` 抓出来）；② 不许执行任何代码；③ 不许改变数值精度之外的东西（不允许"四舍五入到百万"）；④ 不许承诺业务建议之外的事（模型只做解释，不做决策） |
-| 调用 LLM | **是，1 次**（文本生成，不带 tools） |
-| LLM 职责边界 | 输入是"已经算好的数字表"，输出是"中文解释"。Prompt 里写死三条：只能引用输入中出现的数字；不能新增列名；不能写代码。若模型输出被校验拦下 → 触发 1 次**重写**（把 `validation.issues` 附在 Prompt 里让它改），再不过就保留原文但把 `status` 降级为 `SUCCESS_WITH_WARNINGS` |
+| 输入 | `state.question`、`state.results` 中成功工具的结果（列表裁到最多 20 项）、工具列名、可选的 `validation.issues`；不向模型发送原始 DataFrame |
+| 输出 | `FinalReport`（见 4.10）；模型只生成 `sections[].text`，其余字段由代码组装 |
+| 能做 | ① 让模型根据工具结果写中文结论段；② 为每段提供 `cites`，指向相关 `task_id` |
+| **不能做** | ① 不写 summary、质量提示、表格、引用总表或 LLM 标记；② 不执行代码；③ 不能新增无出处数字（后续由 `validate` 核对）；④ 不替用户作业务决策 |
+| 调用 LLM | 正常情况下 1 次；仅在校验发现 error 级 `UNSUPPORTED_NUMBER` 时最多再调用 1 次重写 |
+| LLM 职责边界 | 模型只写正文段落文本；summary、`data_quality_notes`、表格、citations 与首段标记均由代码根据真实状态生成。首次输出被数字校验拦下时，最多给一次带校验问题的重写机会；重写仍不通过则保留最终报告并将工作流降级为 `SUCCESS_WITH_WARNINGS` |
 
 ---
 
@@ -422,7 +422,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 **顺序不能反**：反了的话本机那套 `DEEPSEEK_*` 会悄悄盖掉显式设置的 `LLM_*`，而"我明明设了 `LLM_MODEL` 却不生效"是最难查的一类配置问题（`app/config.py:84-86` 有同样的注释）。根 `conftest.py:230-250` 的 autouse 夹具 `_isolate_llm_env` 在每个用例开始前清空这六个名字，清的就是 `LLM_ENV_VAR_NAMES` 这一份清单——否则"未配置"类用例在**有 key 的机器上必红**，而用户的机器就是有 key 的那台。
 
-为什么给一张表：`Settings` 里已经有 15 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
+为什么给一张表：`Settings` 里已经有 16 个字段，写代码时最容易犯的错是"自己造一个名字相近的配置"（例如把 `max_upload_mb` 写成 `max_file_mb`、把 `max_rows` 写成 `max_dataset_rows`），造出来还不报错，只是**永远不会生效**（默认值一直在起作用）。写任何配置相关代码前先在这张表里查一下。
 
 **字段名 → 环境变量名**：没有别名的字段，环境变量名就是**字段名的大写形式**——`model_config` 里 `case_sensitive=False`、`env_prefix=""`（实测 `APP_NAME` / `MAX_ROWS` / `UPLOAD_DIR` 分别改到 `app_name` / `max_rows` / `upload_dir`），所以下面表格最后一列里的名字，就是能拿去 `setx` 的名字。只有三个大模型字段例外：它们用了 `AliasChoices`，名字写死在上面那张小表里。还要分清两种错法的响法：**名字写错会静默失效**（默认值一直在起作用，查不出来），**值写错立刻报错**（`MAX_ROWS=not-an-int` 直接抛 `ValidationError`，实测）。
 
@@ -443,9 +443,9 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 | `charts_dir` | `str`，`min_length=1` | `"data/charts"` | `CHARTS_DIR` | 生成的 PNG 落地目录（相对项目根）；用 `settings.charts_path` 取 `Path`。接口 8 按文件名从这里取图 | **D4 冻结时新增** |
 | `max_workflow_seconds` | `int`，`gt=0, le=3600` | `180` | `MAX_WORKFLOW_SECONDS` | 整条工作流总时长上限；轮询接口按 `heartbeat_at` **惰性**判定超时（§8.2 边界 4）。必须再兜一层的原因：模型超时重试会叠加，只靠单次超时会让前端一直转圈 | **D4 冻结时新增** |
 | `tool_call_limit` | `int`，`ge=1, le=200` | `20` | `TOOL_CALL_LIMIT` | 一条工作流允许的模型工具调用总数；防"模型重试 × 任务重试"组合成死循环，也顺带防住无限花钱 | **D4 冻结时新增** |
-| `db_path` | `str` | — | `DB_PATH` | SQLite 历史归档路径（决策 3：只做归档写入，内存态仍是唯一事实来源） | **D6 追加**（尚未在 `config.py` 里） |
+| `db_path` | `str` | `"data/db/app.db"` | `DB_PATH` | SQLite 历史归档库路径（决策 3：只做归档写入，内存态仍是唯一事实来源）。**空字符串 = 关闭归档**（`get_history_store()` 返回 `None`，接口 9 回 `enabled=false` + 空列表 + 200）。用 `settings.db_file` 取 `Path`；该属性在 `db_path` 为空时会退回项目根，**调用方必须先判断归档是否开启**，别直接拿它 `sqlite3.connect()` | **D6-SQLite 追加**（已落地） |
 
-五个**计算属性**（不是配置项，环境变量里没有它们，别去设）：`settings.upload_path`（`Path` 形式的上传目录，`main.py` 的 lifespan 已用它 `mkdir`）、`settings.charts_path`（同上，图表目录）、`settings.temp_path`（同上，临时目录）、`settings.max_upload_bytes`（字节数）、`settings.llm_configured`（`llm_base_url` / `llm_model` / `llm_api_key` **三项都非空**才为 `True`，**兜底模式的判定依据**，也是 `GET /api/health` 里 `llm_configured` 的来源）。
+六个**计算属性**（不是配置项，环境变量里没有它们，别去设）：`settings.upload_path`（`Path` 形式的上传目录，`main.py` 的 lifespan 已用它 `mkdir`）、`settings.charts_path`（同上，图表目录）、`settings.temp_path`（同上，临时目录）、`settings.db_file`（同上，归档库文件；**D6-SQLite 追加**）、`settings.max_upload_bytes`（字节数）、`settings.llm_configured`（`llm_base_url` / `llm_model` / `llm_api_key` **三项都非空**才为 `True`，**兜底模式的判定依据**，也是 `GET /api/health` 里 `llm_configured` 的来源）。
 
 ### 4.0.2 关键决定：`pd.DataFrame` 不放进任何 Pydantic 模型
 
@@ -646,9 +646,9 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 |---|---|---|---|
 | `report_id` | `str` | 是 | `uuid4().hex[:8]` |
 | `title` | `str` | 是 | 报告标题，例 `"销售额按地区分析"` |
-| `summary` | `str` | 是 | 3–5 句总述（模型生成，数字必须来自 `results`） |
+| `summary` | `str` | 是 | 代码生成的总述（数字按来源规则校验） |
 | `sections` | `list[ReportSection]` | 是 | 至少 1 段，通常 3 段 |
-| `data_quality_notes` | `list[str]` | 否 | 直接抄 `DatasetProfile.warnings`，不由模型编 |
+| `data_quality_notes` | `list[str]` | 否 | 代码根据 `DatasetProfile` 生成；其文本也纳入数字来源校验 |
 | `citations` | `list[str]` | 是 | 命中的 `task_id` 列表 |
 | `generated_at` | `datetime` | 是 | |
 | `llm_used` | `bool` | 是 | 是否真的调了模型（未配 LLM 时为 `False`，前端要显示"规则模式"提示） |
@@ -990,7 +990,9 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 
 ---
 
-## 7. API 设计（8 个必需接口）
+## 7. API 设计（8 个必需接口 + D6-SQLite 追加的 2 个只读历史接口）
+
+> **编号沿用既有风格**：接口 **1–8** 是原计划的 8 个必需接口；接口 **9 / 10** 是 D6-SQLite 交付时追加的两个**只读**历史接口（`GET /api/workflows/history`、`GET /api/workflows/history/{workflow_id}`），实现在 `app/api/routes_workflows.py`。下表是**完整的编号总表**（1–10），下方 7.1 的既有说明里凡提到"8 个接口"均指 1–8。
 
 统一约定：
 - 全部返回 `ApiResponse[T]` 外壳（已存在于 `app/schemas.py`）：成功 `{"ok":true,"data":{...},"error":null}`，失败 `{"ok":false,"data":null,"error":{"code","message","detail"}}`。
@@ -1044,6 +1046,8 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 | 6 | 查询工作流状态 | `GET /api/workflows/{workflow_id}` | 无 | **200** + `{workflow_id,status,step,step_index,total_steps,question,dataset_id,tasks:[{task_id,description,status,error}],charts:[ChartResult],error,created_at,finished_at,has_report}` —— **不含 `report`**（报告可能很大，单独接口取） | **404** `NOT_FOUND`、**200** `WORKFLOW_TIMEOUT`（轮询时判定超时并落 `FAILED`，此时 `error.code=WORKFLOW_TIMEOUT`）、**500** `INTERNAL_ERROR`。注意：**工作流自身 `FAILED`（含超时）仍然是 HTTP 200** —— 查询请求成功了，失败的是被查询的工作流 |
 | 7 | 获取报告 | `GET /api/workflows/{workflow_id}/report` | 无 | **200** + `{report:FinalReport, validation:ValidationResult, results:[ToolResult], llm_used:bool}` | **404** `NOT_FOUND`（没有这个工作流）；报告还没生成 → **400** `BAD_REQUEST`（`message="报告尚未生成"`，`detail` 带当前 `status`） |
 | 8 | 获取图表 | `GET /api/workflows/{workflow_id}/charts/{filename}` | 无 | **200** + PNG 二进制（`Content-Type: image/png`） | **404** `NOT_FOUND`（文件不存在）、**400** `BAD_REQUEST`（文件名含 `/`、`\`、`..` 或不是 12 位 hex + `.png` —— 这是"非法输入"，不是"资源不存在"，所以是 400 不是 404） |
+| 9 | 历史归档列表（**D6-SQLite 新增**） | `GET /api/workflows/history` | 查询参数 `limit`（默认 20，`ge=1, le=100`）、`offset`（默认 0，`ge=0`） | **200** + `HistoryListData{items:[HistoryItem], total, limit, offset, enabled}`。`HistoryItem` = `workflow_id / question / status / created_at / finished_at / has_report / llm_used`。**只读 SQLite，不读内存 registry**（见 8.3.1）。归档关闭（`DB_PATH` 为空）时 `enabled=false` + 空列表，**仍然是 200** —— 用户主动关了一个功能，不是他请求错了。排序在库里定死（`finished_at DESC NULLS LAST, created_at DESC`），接口层不再排 | **422** `BAD_REQUEST`（`limit` / `offset` 不符合查询约束）；**500** `INTERNAL_ERROR`（底层读库/schema 操作失败；正常关闭归档与空库路径为 200）。关闭归档时 `list_history()` 返回空列表、`enabled=false`；启用时查询并返回记录。底层 `HistoryStore` 操作仍可能抛 `HistoryStoreError`，由统一异常处理器转为 500。**注意路由声明顺序**：本路由必须写在 `GET /api/workflows/{workflow_id}` **之前**，否则 `/workflows/history` 会被后者接走、`workflow_id="history"` → 404。`tests/test_history_api.py` 有一条用例专门钉这个 |
+| 10 | 历史归档详情（**D6-SQLite 新增**） | `GET /api/workflows/history/{workflow_id}` | 无 | **200** + `HistoryDetailData{item:HistoryItem, report}` —— `report` 是**归档那一刻的报告正文**，没归档报告时为 `None`。只读 SQLite | **404** `NOT_FOUND`（库里没有这个 `workflow_id`）。**它不会把记录塞回内存 registry**，所以对同一个 ID，接口 10 可能 200 而接口 6/7 是 404 —— 这是设计，不是不一致（见 8.3.1 的禁令） |
 
 > **读表提醒（v1.1）**：`NOT_FOUND` 在接口 3/5/6/7 都是 **404**，`UNSUPPORTED_FILE` 是 **415**，`FILE_TOO_LARGE` 是 **413**，`SERVICE_UNAVAILABLE` 是 **503**，`METHOD_NOT_ALLOWED` 是 **405** —— 同一个错误码在不同接口里的状态码是**一致的**，因为它由 `app/errors.py` 的 `ERROR_STATUS` 映射表（§7.3）统一决定，不在路由里逐处指定。这就是 A-1 要解决的"同一个 NOT_FOUND 有时 404 有时 200"的根源。**框架抛的 405 也走同一个 `code`**（`app/main.py` 的 handler 里 `METHOD_NOT_ALLOWED`），所以前端看到 405 时 `body.error.code` 是 `"METHOD_NOT_ALLOWED"`，不是 `"BAD_REQUEST"`。
 
@@ -1052,6 +1056,8 @@ def group_aggregate(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
 **注 ②（D4 实测修正）：接口 5 的 503 在 D4 起不可达。** 原始条件是"模型未配置**且无法兜底**"，而 D4 的 `planner.plan()` 是**签名级保证不抛异常**的（内部 `except Exception` 兜到规则兜底），而规则兜底只依赖 `DatasetProfile`（内存里的一个对象）、不碰任何外部服务，所以"无法兜底"这个前提在 D4 不可能成立 —— 实测未配模型时 `POST /api/analysis` 返回 **202**，工作流随后 `SUCCESS`、`report.llm_used=false`（正是 D4 验收标准 ①）。**503 这个码本身保留**（§7.3 的表不动）：到 D5，"连兜底也用不了"的候选场景已经出现了两个（数据集在进程内存里丢了 → 接口 404；报告生成也失败 → `_minimal_report` 仍能出一段说明），届时直接用这个现成语义，不必改表。**当前结论：D4/D5 的接口 5 只有 404 与 422 两种错误。**
 
 ### 7.1 我在你给的 8 个接口之外做的两处调整（已于第 14 节拍板通过）
+
+> 本节讲的是**原计划 8 个接口**范围内的两处调整（接口 1–8）。D6-SQLite 之后又多出接口 9 / 10，那两个不在这里讨论，见 §7 总表与 §8.3.1。
 
 1. **不加** `GET /api/datasets`（数据集列表）。理由：单用户、单会话的展示项目，前端只需要"最近上传的那一个"，加列表接口会让"数据集属于谁"变成一个新问题（需要 cookie/会话），而第一版没有登录体系。**若第 6 天演示需要一次性对比两个文件，再加这个接口，用进程内注册表直接 `list()` 即可，成本 20 行。**
 2. **`GET /api/workflows/{id}` 不含 `report` / `results`**，由接口 7 单独提供。理由：`results` 里的表格可能有几百行，1 秒一次轮询会白白传几十 KB；状态接口保持小（<2 KB），轮询才便宜。
@@ -1250,11 +1256,24 @@ def start_analysis(req: QuestionRequest, background: BackgroundTasks) -> ApiResp
 
 ### 8.3 什么时候升级、升级成什么（触发条件必须写清楚，不预先做）
 
-> **第 14 节决策 3 已拍板：D6 只做 SQLite 持久化，SSE 明确标注为"不做"。** 因此下表第 1 行（SQLite）是**已批准的 D6 可选任务**，第 4 行（SSE）从"可选"降为"明确不做，只作为将来的方向记录"。
+> **第 14 节决策 3 已拍板：D6 只做 SQLite 持久化，SSE 明确标注为"不做"。** 下表第 1 行（SQLite）**已经交付**（见下方 8.3 的"已交付"记录与 8.3.1 / 8.3.2），第 4 行（SSE）从"可选"降为"明确不做，只作为将来的方向记录"。**触发条件 1 的第一半（"重启后仍要能查到历史工作流"）已由这次交付满足；第二半（`--workers > 1`）仍然没有满足** —— 见 8.3.2 第 3 条。
+
+**已交付（D6-SQLite，D6 之后补做，非 D6 当天完成）**：表 1 行的"历史归档"部分已按如下方式落地，**与下表原始描述有出入的地方以本节为准**：
+
+| 项 | 原始设计（本表第 1 行） | 实际实现 |
+|---|---|---|
+| 库路径 | `data/app.db` | **`data/db/app.db`**（按仓库已有的 `.gitignore` 规则选址：`data/db/*` 早已被挡，`data/app.db` 得新加一条规则） |
+| 访问方式 | "已装的 SQLAlchemy" | **标准库 `sqlite3`，零新依赖**（仓库**从来没装过** SQLAlchemy，`requirements.txt` 里也没有任何数据库包） |
+| 连接模型 | 未写 | **短连接**（每次操作开一个连接、用完关）+ 进程内**一把写锁**，不是连接池 |
+| 写入语句 | 未写 | `INSERT ... ON CONFLICT(workflow_id) DO UPDATE`（同一 `workflow_id` 重复归档是 UPSERT，不是插两行） |
+| 表 | "加 1 张表" | 1 张表 `workflow_history`，**一个工作流一行**（不是"每个状态一行"） |
+| 读路径 | "启动时按 `workflow_id` 从库里加载，`registry` 退化为缓存" | **没做，也明确不做**（见 8.3.1 的禁令）。读路径仍然只有内存，库只服务于"历史列表 / 历史详情"两个只读接口 |
+
+代码位置：`app/data/history.py`（`HistoryStore`：`ensure_schema()` / `archive()` / `get()` / `list_recent()` / `count()`）、`app/core/archive.py`（`archive_if_terminal()`，**唯一写入口**）、`app/config.py` 的 `db_path`。
 
 | 触发条件（满足任一） | 升级动作 | 学习成本 |
 |---|---|---|
-| 需要 `--workers > 1`，或服务重启后仍要能查到历史工作流 | 把 `WorkflowState` 落 SQLite（`data/app.db`，用已装的 SQLAlchemy），启动时按 `workflow_id` 从库里加载；`registry` 退化为"缓存" | 低：加 1 张表 + 2 个函数 |
+| ~~需要 `--workers > 1`，或~~ 服务重启后仍要能查到历史工作流 | ✅ **已交付（D6-SQLite）**：落 SQLite 归档表（`data/db/app.db`，**标准库 `sqlite3`**），终态后 `archive_if_terminal()` 写一条；只读历史接口从库里读。**注意这只解决了"查历史"，没有解决 `--workers > 1`** —— 完整的那一步（读路径也改库、`registry` 退化为缓存）**没有做** | 低：加 1 张表 + 2 个函数 |
 | 分析经常超过 60 秒、或想同时跑多个分析而不抢占 | 引入**线程池 + 队列**（`concurrent.futures.ThreadPoolExecutor(max_workers=2)`），`submit` 改成入队，`status` 加 `QUEUED` | 低：标准库，不加依赖 |
 | 需要多台机器 / 需要任务不丢 | 才考虑 Celery + Redis（或 RQ + Redis） | 高：多一个进程、一个中间件、一套配置；个人项目**不建议** |
 | ~~需要"边跑边看"（不用轮询）~~ | ~~加 SSE~~ —— **本项目不做**（见第 14 节决策 3：1 秒轮询已够用，收益小、学习成本不低，两个都做会挤掉 D5 校验时间）。方向记在这里，留待将来 | — |
@@ -1263,28 +1282,38 @@ def start_analysis(req: QuestionRequest, background: BackgroundTasks) -> ApiResp
 
 #### 8.3.1 SQLite 的读写路径约定（决策 3 的第 ① 点补充，必须遵守）
 
-D6 加 SQLite 之后，**内存态 `registry._workflows` 仍然是唯一事实来源（single source of truth）**，SQLite 只做**历史归档写入**：
+**以下四条已按此实现**（D6-SQLite 落地后仍然是这四条，一条没改），映射到真实函数名：
 
 ```
-写路径：run_workflow 到终态时 → registry 更新内存对象（原地）
-                              → 顺手 archive.save_snapshot(state) 写一条库记录
-                              → 失败也只记日志（logging.warning），绝不影响工作流收尾
+① 内存态唯一事实来源
+   `registry._workflows`（`app/core/registry.py`）仍是唯一事实来源；
+   SQLite 只做历史归档写入，**任何接口都不许"内存没有就 fallback 查库"**。
 
-读路径：GET /api/workflows/{id}          → 只读内存 registry。
-        GET /api/workflows/{id}/report   → 只读内存 registry。
-        历史列表（若做）GET /api/workflows/history → 只读 SQLite。
+② 写只写终态
+   唯一写入口是 `app/core/archive.py` 的 `archive_if_terminal(state) -> bool`
+   （返回"这次到底写没写"）。它内部用 `app/data/history.py` 的
+   `HistoryStore.archive(record)` 做 `INSERT ... ON CONFLICT(workflow_id) DO UPDATE`（UPSERT）。
+   写失败只记 warning（`logging.warning`），**绝不影响工作流收尾**。
+
+③ 接口只读内存
+   `GET /api/workflows/{id}`（接口 6）、`GET /api/workflows/{id}/report`（接口 7）、
+   `GET /api/workflows/{id}/charts/{filename}`（接口 8）**只读内存 registry**。
+
+④ 历史列表只读库 / 禁止 fallback 复活
+   `GET /api/workflows/history`（接口 9）与 `GET /api/workflows/history/{workflow_id}`（接口 10）
+   走 `get_history_store()` 只读 SQLite；库里的老 ID **不会**被塞回内存 registry。
 ```
 
 **明确禁止**："有时读内存、有时读库"的混合读路径（例如"内存里没有就 fallback 去查库，查到了再塞回内存"）。理由：那会引入最难查的一类 bug——同一个 `workflow_id` 在两个地方状态不一致、`has_report` 一会儿 true 一会儿 false、后台线程还在原地改的对象已经不在字典里。**宁可"重启后查不到这个 ID（404），但历史列表里能看到"，也不要"半活的复活对象"。**
 
 对外表现因此是两条清晰的路：
 - `GET /api/workflows/{old_id}`（重启后）→ **404 + `NOT_FOUND`**，`detail` 写"该工作流已不在内存中（服务可能已重启），历史记录见历史列表"；
-- `GET /api/workflows/history`（可选）→ 从 SQLite 读归档记录（`workflow_id / question / status / created_at / finished_at / has_report / llm_used`），**只读展示，不提供"继续运行"**。
+- `GET /api/workflows/history` → **已交付**（不再是"可选"）：从 SQLite 读归档记录（`workflow_id / question / status / created_at / finished_at / has_report / llm_used`），分页参数 `limit`（默认 20，1–100）/ `offset`（默认 0），**只读展示，不提供"继续运行"**；`GET /api/workflows/history/{workflow_id}` 额外还原归档的报告正文。
 
 #### 8.3.2 已知限制（必须同时写进 README，不许让人误以为"持久化 = 断点续跑"）
 
 1. **SQLite 存的是"历史归档"，不是"断点续跑"**：服务重启后内存态丢失，**正在运行中的工作流不会恢复，也不会被标成失败**——它只是从内存里消失（前端轮询到 404 就提示"服务已重启，请重新提交"）。
-2. **重启后历史记录仍在**：已到达终态的工作流可从 SQLite 查到（问题、状态、时间、报告文本），但**报告接口不提供对这些旧 ID 的服务**（读路径只有内存，见 8.3.1），历史记录里直接带上归档的报告内容。
+2. **重启后历史记录仍在**：**已做到**（D6-SQLite）。做法是：工作流进入终态时 `archive_if_terminal()` 把一条记录 UPSERT 进 SQLite（`data/db/app.db` 的 `workflow_history` 表，一个 `workflow_id` 一行），所以进程死了、内存 dict 清空了，**库里的行还在**；下一个进程启动后 `GET /api/workflows/history` 从库读，就能看到这些旧记录。但**报告接口不提供对这些旧 ID 的服务**（读路径只有内存，见 8.3.1）——报告正文是在写入时**一起归档进库的**，所以只有"历史详情"接口能拿到它，`GET /api/workflows/{old_id}/report` 仍然是 404。
 3. **仍然只能单进程**：SQLite 不会让 `--workers 4` 变安全（内存字典仍然分裂）；要支持多进程必须先走 8.3 第 1 行的完整改造（读路径也改库），那是另一个决定。
 4. **归档是"尽力而为"**：写库失败只记 warning，不让工作流失败——因为工作流的成功与否不该由归档决定。
 
@@ -1426,9 +1455,10 @@ def test_unexpected_error_response_has_no_local_path(client):
 |---|---|---|---|
 | **LangGraph** | 用图（节点 + 边 + 状态）描述多 Agent 流程，自带状态机、检查点、条件分支、人工审核环节 | 我们的流程是**固定顺序的 6 个阶段 + 最多 6 个任务的循环**，用 `orchestrator.py` 里一个 `for` 循环 + `if/elif` 就能写清，一共约 150 行。自己写的好处：出问题时你能一眼看出在第几步、状态存在哪、为什么重试；LangGraph 出问题时你要先学会它的 `StateGraph`/`Reducer`/`checkpoint` 概念才能调试 | 流程出现**真正的分支与回溯**（例：校验不过要回到规划阶段重规划、需要人工审批节点、需要从中断点续跑）。第一版若硬上：多学 2–3 天概念、调试成本翻倍，而展示效果不变 |
 | **Celery** | 分布式任务队列：把任务丢给独立 worker 进程，支持重试、定时、结果后端 | 一个分析任务最慢 60 秒，并发量是"演示者一个人点"。`BackgroundTasks` + 线程池完全够用，且**零新依赖** | 需要多 worker 进程、需要任务持久化/定时调度、分析耗时进入分钟级、或要部署到多台机器 |
-| **Redis** | 缓存 / 消息中间件 / 分布式锁 | 数据集和 DataFrame 放进程内 `dict`；工作流状态也在 `dict`。**项目只有一个人用，进程内存是最快的"缓存"** | 要多进程共享状态，或 Celery 需要 broker。引入前先问：为什么不先加 SQLite？（SQLite 已经够解决"重启不丢"） |
+| **Redis** | 缓存 / 消息中间件 / 分布式锁 | 数据集和 DataFrame 放进程内 `dict`；工作流状态也在 `dict`。**项目只有一个人用，进程内存是最快的"缓存"** | 要多进程共享状态，或 Celery 需要 broker。引入前先问：为什么不先加 SQLite？（**"重启不丢历史"这一半 SQLite 已经解决了**，见 §8.3；剩下那一半是"多进程共享状态"，SQLite 的归档表并不能解决它） |
 | **Docker** | 环境隔离与一键部署 | 你的环境是 Windows 11 + `.venv`（`--system-site-packages`），`requirements.txt` 已经能复现。Docker Desktop 在 Windows 上要开 WSL2、多占几个 GB 内存，学习成本与收益不成比例 | 需要给别人"一条命令跑起来"的交付（例：面试官要本地跑）→ 那时加一个 `Dockerfile`（FROM python:3.12-slim + pip install + uvicorn）大约 15 行，成本可控。**放在第 7 天之后，不进七天排期** |
-| **SQLAlchemy / SQLite** | 持久化：重启后仍能查询历史工作流 | 第一版状态全在内存。**但它在"进阶可选"里，第 6 天若有富余，优先加这一项**（见 8.3 触发条件 1） | 需要"历史记录"页、需要多进程、需要交付后复盘 |
+| **SQLAlchemy** | 持久化：用 ORM 描述表、迁移与关系（注：早期文档写成"用**已装的** SQLAlchemy"，那是错的 —— 仓库从来没装过它） | 本项目只需要"一张表的 UPSERT + 一次 SELECT"，用**标准库 `sqlite3`** 约 100 行就写完了，**零新依赖**。ORM 在这里是**负资产**：多一层抽象、多一个依赖，换来的迁移/多表能力一条都用不上 | 出现多张有关联的表、需要迁移管理、或要在多种数据库之间切换时 |
+| **SQLite（历史归档）** | 持久化：重启后仍能查询历史工作流 | **第一版状态全在内存；这一项已在 D6 之后补做（D6-SQLite，见 §8.3）**：只做归档写入（`data/db/app.db`），读路径仍然只有内存 | 已采用。下一步（读路径也改库、支持多进程）在需要 `--workers > 1` 时再做，见 §8.3 触发条件 1 |
 | **向量数据库 / RAG** | 语义检索 | 完全没有场景：用户数据是结构化表格，字段名和类型是精确的，靠 `DatasetProfile` 就能让模型看全 | 出现"用自然语言在大量自由文本里找相关内容"的需求时 |
 | **前端框架（React/Vue）** | 组件化与状态管理 | 单页 + 6 个区块 + 一次轮询，原生 JS 约 200 行能写清；引入框架就要引入 node_modules 与构建步骤，还会挡住"每一行都能读懂"这个目标 | 页面超过 3 个路由、需要组件复用或团队协作时 |
 | **PandasAI / 让模型写 pandas 代码** | 让模型直接生成代码分析 | **明确禁止**。它直接违反项目铁律（数字必须由我们自己的白名单工具算出），而且生成的代码会 `exec`，安全与可控性都不满足 | 永不引入（与本项目的核心卖点冲突） |
@@ -1467,7 +1497,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health | ConvertTo-Json -Depth 5
 | **D3** | 工具层（**串行，核心资产**） | AI / BE、QA | 7 个工具可以拆给 2 人：`describe.py`+`missing_values` 一人，`aggregate.py`+`compare.py`+`timeseries.py` 一人；profiler 与 routes_datasets 的 `/profile` 可并行 | ① 每个工具至少 3 条测试（正常 / 参数错 / 列不存在）；② `python -m pytest tests/test_tools.py tests/test_profiler.py -q` 全绿；③ **对照测试**：手工用 Excel 算一遍 `sales.csv` 的"各地区销售额汇总"，与 `group_aggregate` 的返回完全一致（这条是"数字是真的"的第一道证据）；④ `GET /api/datasets/{id}/profile` 返回的 `null_count` 与 `df.isna().sum()` 一致 |
 | **D4** | LLM 客户端 + 规划 + Orchestrator + 分析接口（**串行，最大风险点**） | AI / BE | AI 写 `llm/`+`planner.py`+`orchestrator.py`+`analysis.py`；BE 写 `core/registry.py`+`core/background.py`+`routes_analysis.py`；QA 写 `test_workflow_state.py`。**接口先按 Pydantic 模型定好，两边对着模型写，不需要等对方完成** | ① **兜底模式 + 真实数据必须能跑出完整报告**（第 14 节决策 1 的验收条件）：未配 LLM 时 `POST /api/analysis` 用规则兜底计划跑完全流程，`status=SUCCESS`、`report.llm_used=false`，报告有正文、有表格、有 `cites`，**且报告里明确写清哪一步用了模型、哪一步没用**（模板报告首段固定写"本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总"）；② 配上 LLM 后：同一问题返回的 `plan.source == "llm"`，且 `tasks[].tool_name` 全在白名单内，报告里写明数字来自 pandas 工具、模型只负责解释；③ 把 `LLM_BASE_URL` 改成错误地址 → 工作流仍是 `SUCCESS`（走兜底），而不是 500；④ 轮询接口在 3 秒内能查到 `step` 变化 |
 | **D5** | 图表 + 报告 + 校验（报告依赖 D4 的 `ToolResult`，**串行接在 D4 后**） | AI / FE（提前搭页面骨架） | AI 写 `agents/charts.py`+`validation.py`；FE 可以**用假 JSON 先把页面写完**（不需要等后端）；QA 写 `test_validation.py`、`test_charts.py` | ① `GET /api/workflows/{id}/charts/{f}.png` 返回 `image/png` 且能在浏览器打开（中文标题不乱码）；② `pytest tests/test_validation.py -q` 全绿，其中**必含一条**：手工把一个不存在的数字塞进 `FinalReport.sections[].text`，`validate()` 必须产出 `UNSUPPORTED_NUMBER` 且 `passed=false`；③ 报告里的表格数字与 `ToolResult.data["rows"]` 逐字段相同（写一条断言） |
-| **D6** | 前端联调 + 安全检查 + SQLite 持久化 | FE / QA、BE | FE 写 `web/` 三件套；QA 写 `test_security.py`；BE 加 SQLite 持久化（**第 14 节决策 3 已定为做它、不做 SSE**） | ① 浏览器打开 `http://127.0.0.1:8000/` 能完成"上传 → 提问 → 看进度 → 看图 → 看报告"全流程；② `pytest -q` 全绿（含安全测试：AST 源码检查、响应不含 `sk-`、密钥不进 `repr`、`sanitize_detail` 去路径）；③ 上传 `.txt` 和超大文件时页面显示中文错误而不是白屏；④ 断网/模型超时场景页面在 180 秒内必出结果（含失败提示），不会永远转圈 |
+| **D6** | 前端联调 + 安全检查 + SQLite 持久化 | FE / QA、BE | FE 写 `web/` 三件套；QA 写 `test_security.py`；BE 加 SQLite 持久化（**第 14 节决策 3 已定为做它、不做 SSE**） | ① 浏览器打开 `http://127.0.0.1:8000/` 能完成"上传 → 提问 → 看进度 → 看图 → 看报告"全流程；② `pytest -q` 全绿（含安全测试：AST 源码检查、响应不含 `sk-`、密钥不进 `repr`、`sanitize_detail` 去路径）；③ 上传 `.txt` 和超大文件时页面显示中文错误而不是白屏；④ 断网/模型超时场景页面在 180 秒内必出结果（含失败提示），不会永远转圈。**⑤ SQLite 持久化（当初这一天的第 5 项）：D6 当天没做完，交付后才补上（D6-SQLite）。详见下方"时间线"** |
 | **D7** | 收尾：演示数据 + README + 简历材料 | LEAD / 全员 | ① LEAD 写 README（架构图、启动步骤、3 个演示问题、已知限制）；② QA 跑**全新克隆验证**（`git clone` 到临时目录 → 建 venv → `pip install -r requirements.txt` → `pytest`）；③ ARCH 更新本文档的"实际实现与设计差异"一节；④ 录一段 90 秒演示（含校验拦截编造数字的画面） | ① 全新目录按 README 步骤能在 10 分钟内跑起来；② `pytest -q` 全绿；③ 用 `data/samples/sales.csv` 的三个示例问题都能出图出报告；④ 故意把某个工具注释掉再跑，`SUCCESS_WITH_WARNINGS` 能正常展示（证明容错不是写在 PPT 上的） |
 
 ### 12.1 依赖顺序（关键路径）
@@ -1506,7 +1536,7 @@ D1 骨架 ──▶ D2 数据层/上传 ──▶ D3 工具层 ──▶ D4 LLM+
 | 6 | **大模型不可用 / 没有 API Key / 网络不通** | 第 4 天要演示，第 4 天密钥还没配；或调用 429/超时 | ① `settings.llm_configured` 为 `false` 时**系统照常工作**（规则计划 + 模板报告，`llm_used=false`），并且 `/api/health` 已经把 `llm_configured` 暴露出来；② 客户端超时/重试参数已经配置化（第 10 节第 6 条）；③ 演示前**准备一个不依赖网络的备用演示**（同样的 `sales.csv` + 兜底模式）；④ 报告里明确写"本次未使用大模型"，这是诚实展示，不是缺陷 |
 | 7 | **性能与内存** | 上传 50 MB Excel / 20 万行 × 100 列，画像要跑十几秒，DataFrame 常驻内存不释放；10 次上传后内存涨到几个 GB | ① 上传前限制大小（10 MB）与行数（20 万行）与列数（200 列）；② `DatasetStore` 加**容量上限**（例最多保留 5 个 DataFrame，超了按 `created_at` 淘汰并删除磁盘文件），并用 `df.memory_usage(deep=True)` 记录占用（画像里已有 `memory_bytes`）；③ 画像对高基数列（`unique_count > 10000`）只做近似统计（跳过 `top_values` 精确计数）；④ 不做的优化也要写清：**第一版不做流式读取、不做分块处理**（收益低于复杂度） |
 | 8 | **中文编码与乱码** | CSV 是 GBK（Windows 上 Excel 另存的 CSV 默认 GBK），`read_csv` 直接 `UnicodeDecodeError`；matplotlib 中文显示成方框 | ① `loader.py` 按顺序尝试 `utf-8-sig` → `utf-8` → `gbk` → `gb18030`，全部失败才报 `BAD_REQUEST`，并把"检测到的编码"写进 `DatasetProfile.warnings`；② 分隔符尝试 `,` → `;` → `\t`（通过第一行的字符统计启发式判断）；③ matplotlib 设 `rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei"]` 与 `rcParams["axes.unicode_minus"] = False`；④ 测试里放一个 GBK 编码的 CSV 文件（用 `encoding="gbk"` 写出来）作为固定用例 |
-| 9 | **时间与排期风险（最大的非技术风险）** | D4 卡住一天，D5/D6 被压缩，最后一天在赶工中把"校验"砍掉——而校验恰恰是简历里最值钱的部分 | ① 排期把**校验**（D5 的一部分）视为**不可砍项**，砍它之前先砍前端美化、SQLite 历史（SSE 已按第 14 节决策 3 明确不做，不占预算）；② 每天结束必须有可运行成果（第 12 节的退守方案已为每天准备好"缩小版"）；③ LEAD 每天收工前跑一次 `pytest -q` 并把输出贴进 README 的"进度"一节，避免"以为完成了" |
+| 9 | **时间与排期风险（最大的非技术风险）** | D4 卡住一天，D5/D6 被压缩，最后一天在赶工中把"校验"砍掉——而校验恰恰是简历里最值钱的部分 | ① 排期把**校验**（D5 的一部分）视为**不可砍项**，砍它之前先砍前端美化、SQLite 历史（SSE 已按第 14 节决策 3 明确不做，不占预算）；② 每天结束必须有可运行成果（第 12 节的退守方案已为每天准备好"缩小版"）；③ LEAD 每天收工前跑一次 `pytest -q` 并把输出贴进 README 的"进度"一节，避免"以为完成了"。**事后复盘：这条风险真的发生了 —— D6 当天 SQLite 历史就是被砍掉的那一项**（精力去了前端联调与安全测试），一直到交付后才由用户拍板补做（D6-SQLite）。所以"可砍顺序"这个排法本身是对的，代价也对得上：砍掉的东西没有消失，它变成了一个确定的欠债 |
 | 10 | **演示环境与真实环境不一致** | 换一台机器（面试官电脑）没有 `Microsoft YaHei`、没有 `--system-site-packages` 的全局包、Python 版本不同，跑不起来 | ① `requirements.txt` 用下界（`>=`）而不是锁定版本，兼容 3.10–3.12；② README 写清 Python 版本与安装命令（含国内镜像源）；③ D7 做**全新克隆验证**（第 12 节 D7 验收项 ①）；④ 不使用任何绝对路径（现有 `config.py` 用 `PROJECT_ROOT` 拼接，已经是对的，后续代码必须沿用这个模式） |
 
 ---
@@ -1539,6 +1569,8 @@ D1 骨架 ──▶ D2 数据层/上传 ──▶ D3 工具层 ──▶ D4 LLM+
 |---|---|
 | 我的建议 | 只做 SQLite 持久化（8.3 触发条件 1）。能解决一个真实且会被问到的问题（"重启后数据还在吗？"），约 40 行、用已装的 SQLAlchemy；SSE 只是把 1 秒轮询换成推送，用户体验提升很小、学习成本不低 |
 | **最终决定** | **选 SQLite，SSE 明确标注为"不做"**。8.3 表格里的 SSE 一行已划掉；第 13 节风险 9 的"可砍顺序"已改为"前端美化 → SQLite 历史"（SSE 不再占预算，因为它已经不做）；第 12 节 D6 的目标栏也已从"SSE（可选）"改为"SQLite 持久化" |
+| **⚠️ 时间线（如实记录，不要读成"D6 就做完了"）** | 上面这条**只是拍板**。**D6 当天 SQLite 一行都没写** —— 那一天的精力去了前端联调与安全测试（`web/` 三件套 + `test_security.py`），SQLite 就是被按"可砍顺序"砍掉的那一项。所以在这之后很长一段时间里，本文档 §8.3 / §14 的 SQLite 设计稿**是计划，不是已实现的事实**，而它被误读成了完成时态（**这正是本项目"文档从不撒谎"规矩要防的那类错**：不是写了假话，是**计划时态被读成了完成时态**）。**后来由用户拍板补做**，代号 **D6-SQLite**，在 D6 交付之后才落地；补做时**改了一个选型**：不用 SQLAlchemy（见下一行），用**标准库 `sqlite3`**。 |
+| **⚠️ 落地时改掉的选型（必须写清为什么）** | 上面"我的建议"里写的"用**已装的** SQLAlchemy"——**那时它根本没装**，仓库里从来没有任何 SQLAlchemy 依赖（`requirements.txt` 通篇没有数据库包），这句话当时就是**假的**。补做时改为**标准库 `sqlite3`，零新依赖**。理由：本项目只需要"一张表的 UPSERT + 一次 SELECT"，ORM 换来的迁移/关系/多数据库能力一条都用不上，**用 ORM 是负资产**。库路径也从设计稿的 `data/app.db` 改成 **`data/db/app.db`**（按仓库已有的 `.gitignore` 规则选址：`data/db/*` 早就被挡，`data/app.db` 得新加一条规则）。完整实现口径见 §8.3 的"已交付"表 |
 | **追加的约束 ①（最关键）** | **SQLite 只做历史归档写入，内存态 dict 仍是唯一事实来源。** 不要让读写路径变成"有时读内存有时读库"，那会引入最难查的一类 bug。完整读写路径约定见 **8.3.1**（写：终态后归档，失败只记 warning；读：接口只读内存；历史列表只读库；禁止 fallback 复活对象） |
 | **追加的约束 ②** | 文档里必须**显式写明"重启后内存态丢失、但历史记录仍在"这个已知限制**，而不是让人以为"持久化 = 断点续跑"。见 **8.3.2**（4 条已知限制，其中"正在运行的工作流重启后不会恢复也不会被标失败"要写进 README） |
 | 未采纳的选项 | SSE。**承认它是个好技术**，但本项目不需要——用户只有一个人、1 秒轮询已够用，多出来的学习成本会挤掉 D5 的校验时间（而校验是简历里最值钱的部分） |
@@ -1915,6 +1947,37 @@ B. app/ 下未出现在树里的 .py: 无
 
 ---
 
+### 14.10 D6-SQLite 落地（决策 3 的最终交付）后的文档同步记录
+
+**这件事的性质**：§8.3 / §8.3.1 / §8.3.2 / §14 决策 3 早就把 SQLite 设计写完了 —— **但那是计划**。D6 当天它一行都没写（精力去了前端联调与安全测试），而后来的很长一段时间里，这批文档被**当成了已完成的事实来读**。这次的改动是把这批文字从"计划"落成"已实现"，**并且在正文里如实留下时间线**，不假装它当初就做完了。
+
+**代码侧实际交付的东西**（本节只记录文档同步，设计口径以 §8.3 为准）：
+
+| 文件 | 内容 |
+|---|---|
+| `app/data/history.py` | `HistoryStore`（标准库 `sqlite3`，短连接 + 一把写锁；表 `workflow_history`，一个工作流一行；`archive()` 是 `INSERT ... ON CONFLICT(workflow_id) DO UPDATE`）、`HistoryRecord`、`HistoryStoreError`、`get_history_store()`（`db_path` 为空时返回 `None` = 归档关闭）、`reset_history_store_cache()` |
+| `app/core/archive.py` | `archive_if_terminal(state) -> bool` —— **唯一写入口**；`build_record(state)`。写库失败只记 warning，不影响工作流收尾 |
+| `app/config.py` | 第 16 个字段 `db_path`（默认 `data/db/app.db`，环境变量 `DB_PATH`）+ 第 6 个计算属性 `db_file` |
+| `app/api/routes_workflows.py` | 接口 9 `GET /api/workflows/history`、接口 10 `GET /api/workflows/history/{workflow_id}`（两个都只读库，**必须声明在 `GET /api/workflows/{workflow_id}` 之前**） |
+| `requirements.txt` / `requirements.lock.txt` | **一个字都没加** —— `sqlite3` 是标准库，零新依赖 |
+
+**本文档这次改了什么**（逐处；早先关于“接口 9 不会返回错误”的描述已由下面第 5 项纠正，详见接口总表）：
+
+1. **§4.0.1 配置项总表**：`db_path` 那行从"**D6 追加**（**尚未在 `config.py` 里**）"改成"**D6-SQLite 追加**（已落地）"，并补上默认值、环境变量名、"空串 = 关闭归档"；表下"五个**计算属性**"改成"**六个**"，把 `db_file` 列进去。
+2. **§8.3 触发条件表**：新增一段"**已交付（D6-SQLite，D6 之后补做，非 D6 当天完成）**"，用一张对照表逐条写出**原始设计 vs 实际实现**的五处差异（库路径、访问方式、连接模型、写入语句、表结构），并写明**读路径"启动时从库加载"这一半明确不做**；表第 1 行由"已批准的 D6 可选任务"改为"已交付"，并把触发条件"`--workers > 1`"那半划掉、注明**仍然没满足**。
+3. **§8.3.1**：开头"D6 **加** SQLite **之后**"改成"**以下四条已按此实现**"；四条约定**原文一条没改**，但每条后面挂上真实函数名（`archive_if_terminal()` 唯一写入口、`HistoryStore.archive()`、`get_history_store()`）；"历史列表（若做）"去掉"若做"。
+4. **§8.3.2**：第 2 条从"重启后历史记录仍在"（当时是计划）改成**已做到 + 怎么做到的**（终态时 UPSERT 进 `workflow_history`，一个 ID 一行，进程死了行还在）；第 1、3、4 条**未改**（本来就与实现一致）。
+5. **§7 接口总表**：编号总表从 8 行补到 **10 行**，新增接口 9 / 10（含分页参数、返回体、路由声明顺序这个坑）；章标题改成"8 个必需接口 + D6-SQLite 追加的 2 个只读历史接口"，§7.1 加一句限定"本节讲的是原计划 8 个接口"。**接口 9 的错误栏经实现复核已补齐**：正常空库与关闭归档都返回 200；非法分页参数会被框架拒为 422；SQLite/schema 读操作失败可转为 500。
+6. **§11 技术选型**：原先只有一行 **"SQLAlchemy / SQLite"**，其中写着"用**已装的** SQLAlchemy"——**那是假的，仓库从来没装过**。拆成两行：**"SQLAlchemy"**（如实写"早期文档写成'已装的'是错的"、用 ORM 在本项目是负资产）与 **"SQLite（历史归档）"**（已采用，写明只做归档写入、读路径仍是内存）。Redis 那一行"SQLite 已经够解决重启不丢"补上限定：**只解决了"重启不丢历史"这一半，"多进程共享状态"没解决**。
+7. **§12 开发计划 D6 行**：目标栏保留"第 14 节决策 3 已定为做它、不做 SSE"（**这是当时的事实，不改**），验收栏末尾加第 ⑤ 项，说明**这一项 D6 当天没做完、交付后才补上**。
+8. **§13 风险 9**：应对措施原文保留，末尾加一句**事后复盘**——这条风险**真的发生了**，被砍掉的正是 SQLite 历史。
+9. **§14 决策 3**："我的建议"行**原文保留**（它记录的是当时的判断，包括那句"用已装的 SQLAlchemy"——保留它才能看出错在哪），但下方**新增两行**：**"⚠️ 时间线（如实记录，不要读成'D6 就做完了'）"** 与 **"⚠️ 落地时改掉的选型（必须写清为什么）"**。
+10. **附录 B**：`app/config.py` 行由"已在的 **15 个**"改成"**16 个**"并列出 `db_path`，末尾"若 D6 做 SQLite 再追加 `db_path`"（已完成）改成陈述句；`app/main.py` 行补一句"D6-SQLite 落地时 `main.py` 没有再改"。
+
+**行号口径**：本节与 §8.3 / §7 一律改用**章节名 + 函数名/接口编号**引用，**不写 `文件:行号`** —— 因为这次插入内容后所有后续行号都推移了，而"行号会漂移"正是本仓库已经有 `scripts/check_docs.py` 专门防腐烂的原因。凡确需行号的场合（如 `app/api/routes_workflows.py` 的"必须声明在 `get_workflow` 之前"）都改成了**语义描述 + 守护用例名**（`tests/test_history_api.py`）。
+
+---
+
 ## 附录 A：术语速查（给基础 Python 水平读者）
 
 | 词 | 大白话解释 |
@@ -1934,8 +1997,8 @@ B. app/ 下未出现在树里的 .py: 无
 | 已存在文件 | 本文档的处理方式 |
 |---|---|
 | `app/schemas.py` | **不改**已有 `ApiResponse`/`ApiError`/`ErrorCode`；`ErrorCode` 现在共 **8 个码**（`BAD_REQUEST`/`NOT_FOUND`/`METHOD_NOT_ALLOWED`/`FILE_TOO_LARGE`/`UNSUPPORTED_FILE`/`SERVICE_UNAVAILABLE`/`WORKFLOW_TIMEOUT`/`INTERNAL_ERROR`，与 §7.0 表逐行对应）。后三个是 `fe155af` 追加的（追加不算破坏） |
-| `app/config.py` | **不改**已有字段；已在的 **15 个**以 **§4.0.1 的配置项总表**为准（`app_name`/`app_version`/`upload_dir`/`temp_dir`/`max_upload_mb`/`max_rows`/`max_columns`/`llm_base_url`/`llm_model`/`llm_api_key`/`llm_timeout_seconds`/`llm_max_retries`/`charts_dir`/`max_workflow_seconds`/`tool_call_limit`）。配置来源 = **进程环境变量，不读 `.env`**；三个大模型字段自 `db95df3` 起各认两个名字（`LLM_*` 优先、`DEEPSEEK_*` 兜底），`llm_model` 默认 `"deepseek-flash"` —— 见 D-19 与 §14.8。若 D6 做 SQLite 再追加 `db_path` |
-| `app/main.py` | D6 追加静态文件挂载与首页路由；CORS 白名单保持不动。**已存在的 4 个异常处理器不要动**（`AppError` / `StarletteHTTPException` / `RequestValidationError` / 兜底 `Exception`，见 §7） |
+| `app/config.py` | **不改**已有字段；已在的 **16 个**以 **§4.0.1 的配置项总表**为准（`app_name`/`app_version`/`upload_dir`/`temp_dir`/`max_upload_mb`/`max_rows`/`max_columns`/`llm_base_url`/`llm_model`/`llm_api_key`/`llm_timeout_seconds`/`llm_max_retries`/`charts_dir`/`max_workflow_seconds`/`tool_call_limit`/**`db_path`**）。配置来源 = **进程环境变量，不读 `.env`**；三个大模型字段自 `db95df3` 起各认两个名字（`LLM_*` 优先、`DEEPSEEK_*` 兜底），`llm_model` 默认 `"deepseek-flash"` —— 见 D-19 与 §14.8。第 16 个字段 `db_path`（D6-SQLite 追加，默认 `data/db/app.db`，环境变量 `DB_PATH`）见 §4.0.1 与 §8.3 |
+| `app/main.py` | D6 追加静态文件挂载与首页路由；CORS 白名单保持不动。**已存在的 4 个异常处理器不要动**（`AppError` / `StarletteHTTPException` / `RequestValidationError` / 兜底 `Exception`，见 §7）。D6-SQLite 落地时 `main.py` **没有再改** |
 | `app/runtime.py` | **已改过（`24aeac1`）**：除 `STARTED_AT` / `uptime_seconds()` 外新增 `runtime_environment(settings)`，由 `main.py` 的 lifespan 包住 `yield`。文档不重复它的实现，原因见 `docs/DECISIONS.md` D-07 |
 | `app/errors.py` | **已存在（`fe155af`）**，本文档 §7.3 的两个代码块要与它逐行一致；`AppError.status_code` 目前没有调用点，**留着别删**（将来"模型不可用"想返回 503 时从调用点传，不要往枚举里塞新码） |
 | `tests/test_health.py` | 已随第一阶段返工改过（不再硬断言 `llm_configured is False`，改为"接口报的值 == 配置真实值"）。D6 若把 `/` 改成返回 HTML，**`test_root_returns_documentation_hint` 会失败**——届时必须同步修改测试并在 README 记一笔，这是唯一预期会改动的已有测试 |

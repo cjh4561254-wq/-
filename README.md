@@ -4,12 +4,13 @@
 由主控智能体调度专业子智能体，用真实的 Python 工具完成统计计算与图表生成，
 并校验报告中的关键数字。
 
-> **项目状态：第 7 天 / 共 7 天 —— 全链路已跑通并全部提交。**
+> **项目状态：第 7 天 / 共 7 天 —— 功能与验证已完成；本轮收尾改动仍待最终提交。**
 > （当前提交用 `git log -1` 查；这里刻意不写死 hash —— 写死的那一行每提交一次就变成假话。）
 > 已完成：应用骨架与统一错误契约、**文件上传（CSV / xlsx）与数据画像**、
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
-> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**，798 项自动化测试。
+> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**、
+> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，817 项自动化测试。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
 > 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
@@ -121,6 +122,18 @@ setx DEEPSEEK_API_KEY "sk-你的密钥" /M
   `llm_configured` 就是它 —— 这是"配置到底生效没有"最快的自检。
   第 4 天才真正需要密钥；现在不设也能跑（走兜底模式）。
 
+### 历史归档认哪个名字（一个）
+
+| 字段 | 环境变量名 | 默认值 |
+|---|---|---|
+| `db_path` | `DB_PATH` | `data/db/app.db` |
+
+- 工作流跑到**终态**时，归档那条记录会写进这个 SQLite 库；**服务重启后仍能查到**（见下面「接口」）。
+- **设成空串 `""` 就关闭归档**：不再写库，`GET /api/workflows/history` 返回
+  `enabled=false` + 空列表（**HTTP 200**，不是报错 —— 是你主动关了一个功能）。
+- 库文件由 `.gitignore` 的 `data/db/*` 挡住，**不会被误提交**（这个规则原本是 `data/db/*.db`，
+  后来发现 SQLite 写事务期间还会生成 `app.db-journal`，只挡 `*.db` 不够）。
+
 安全上做了三件事：密钥只从**环境变量**读取（应用不读 `.env`，原因见
 [docs/DECISIONS.md](docs/DECISIONS.md) D-19）；`Settings.llm_api_key` 设置了
 `repr=False`，打印配置不会带出密钥原文；`.gitignore` 仍然排除 `.env` ——
@@ -152,11 +165,12 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**798 passed**（797 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**817 passed**（816 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
 （`pytest.ini` 里开了 `--doctest-modules`，`testpaths = tests app`）。
+**在仓库根和 `cd tests` 跑都应为 817 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
 为什么要跑它：docstring 里写着"输入这个会输出那个"，那就是承诺；不跑的话，
 代码改了而注释没改，注释会一直骗人。
 
@@ -189,7 +203,7 @@ python -m pytest
 退出码 `0` = 文档与仓库一致；`1` = 逐条打印对不上的地方。它核对三个维度：
 **行号锚点**（文档里的 `` `文件:NNN` `` 必须与代码里自己声明的锚点注释同行）、
 **用例存在性**（文档提到的 `test_*` 必须真实存在，用 `ast` 收集）、
-**断言方向**（文档写死的 `<用例名> -> 200`，脚本会**真的执行该用例**再比对实测状态码）。
+**断言方向**（文档写出 `<用例名>[instances=N,requests=M] -> 200`；脚本会执行用例并核对参数实例数、每实例 GET 数及全部响应状态码）。
 
 > 它防腐烂，**不防遗漏**：只核对文档里写了的东西。判断性叙述（「为什么修」）
 > 无法机械复核；代码锚点与文档引用**同谋地一起改错**它也看不出来。
@@ -214,14 +228,16 @@ ai-data-analyst-agent/
 │  │  ├─ routes_health.py      # 接口 1：GET /api/health
 │  │  ├─ routes_datasets.py    # 接口 2-4：上传 / 详情 / 画像
 │  │  ├─ routes_analysis.py    # 接口 5：POST /api/analysis（202，立刻返回）
-│  │  └─ routes_workflows.py   # 接口 6-8：轮询 / 报告 / 图表
+│  │  └─ routes_workflows.py   # 接口 6-10：轮询 / 报告 / 图表 / 历史列表 / 历史详情
 │  ├─ core/
 │  │  ├─ background.py         # BackgroundTasks 外壳：起后台、兜异常、盖 finished_at
-│  │  └─ registry.py           # 工作流注册表（进程内 dict + 一把锁）
+│  │  ├─ registry.py           # 工作流注册表（进程内 dict + 一把锁）
+│  │  └─ archive.py            # 终态归档：archive_if_terminal() 是唯一的写库入口（标准库 sqlite3）
 │  ├─ data/
 │  │  ├─ loader.py             # 读 CSV / xlsx：编码、分隔符、最小清洗、行列上限
 │  │  ├─ store.py              # 数据集仓库（DataFrame 只在内存里，不进 Pydantic）
-│  │  └─ profiler.py           # 数据画像：缺失值、重复行、语义类型、五数概括（零 LLM）
+│  │  ├─ profiler.py           # 数据画像：缺失值、重复行、语义类型、五数概括（零 LLM）
+│  │  └─ history.py            # HistoryStore：SQLite 归档库（短连接 + 一把写锁，UPSERT）
 │  ├─ tools/
 │  │  ├─ registry.py           # 白名单注册表：7 个工具的名字 / 参数 schema / 返回结构
 │  │  ├─ validate.py           # 5 类校验的前 4 类（工具名 → 参数 → 字段 → 操作）
@@ -243,11 +259,12 @@ ai-data-analyst-agent/
 ├─ scripts/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
 │  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上
-│  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完九段、自己关掉
-├─ tests/                      # 797 项（36 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+│  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完十段（编号 0-9）、自己关掉
+├─ tests/                      # 817 项（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
 │  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）
+│  ├─ db/                      # SQLite 归档库（默认 app.db，由 .gitignore 的 data/db/* 挡住，不进 git）
 │  └─ samples/
 │     └─ sales.csv             # 示例销售数据：2168 行 × 9 列，故意含缺失值 / 重复行 / 异常值
 ├─ docs/
@@ -257,7 +274,7 @@ ai-data-analyst-agent/
 │  ├─ HIGHLIGHTS.md            # 亮点与难点（现象 → 根因 → 定位 → 修复 → 防复发）
 │  ├─ DECISIONS.md             # 决策记录：每条都写了"为什么"
 │  ├─ DEMO.md                  # scripts/demo.py 的真实运行输出
-│  ├─ HISTORY_ROBUSTNESS.md    # 历史归档健壮性：三个已实证缺陷的完整证据链 + 修复状态 + 方法学
+│  ├─ HISTORY_ROBUSTNESS.md    # 历史归档健壮性：坏数据降级、边界取证、文档自检与变异证据
 │  └─ STAGE2_ACCEPTANCE.md     # 第二阶段的验收说明（交付物、怎么自己跑一遍）
 ├─ .env.example                # 环境变量清单（应用不读它；只有键名与占位值，无真实密钥）
 ├─ .gitattributes              # 行尾策略：示例 CSV 钉成 LF，保证克隆后字节一致
@@ -306,7 +323,20 @@ ai-data-analyst-agent/
 | GET | `/api/workflows/{workflow_id}` | 轮询状态：13 个小字段，**故意不含报告** |
 | GET | `/api/workflows/{workflow_id}/report` | 完整报告 + 校验结果（`report` / `validation` / `results` / `llm_used`） |
 | GET | `/api/workflows/{workflow_id}/charts/{filename}` | 图表 PNG（`filename` 形如 `a1b2c3d4e5f6.png`） |
+| GET | `/api/workflows/history` | **历史归档列表**（只读 SQLite 库，新→旧；分页 `limit` 1-100 默认 20、`offset` ≥0 默认 0） |
+| GET | `/api/workflows/history/{workflow_id}` | **历史归档详情**（归档记录 + 还原的报告正文；没归档报告时 `report` 为 `null`） |
 | GET | `/docs` | Swagger 接口文档（FastAPI 自动生成） |
+
+两个历史接口的边界（**别把它们读成"重启后什么都在"**）：
+
+- **只读**：它们只查库、不查内存，**也不提供"继续运行"** —— 拿着历史 `workflow_id` 去调
+  **状态 / 报告 / 图表**三个接口，仍然是 `404 NOT_FOUND`。
+- **只覆盖终态工作流**：跑到终态才写库，重启时**正在运行**的工作流不会被恢复，也不会被标成失败。
+- **没有鉴权**：归档列表里的任何一条都能被任何人查到（本地单机工具，不开放到公网）。
+- **归档关掉时返回 200**：`DB_PATH=""` → `enabled=false` + 空列表，不是 4xx。
+- **声明顺序有讲究**：`/api/workflows/history` 与 `/api/workflows/{workflow_id}` 路径形状相同，
+  所以历史路由**必须声明在前**，否则会被后者当成 `workflow_id="history"` 吞掉而 404
+  （`tests/test_history_api.py` 钉住了这一点）。
 
 分析链路为什么要 202 + 轮询、每个阶段失败时长什么样、六种会变成 `FAILED` 的情况，
 都写在 [docs/WORKFLOW.md](docs/WORKFLOW.md)（含可直接复制的 PowerShell 复现命令）。
@@ -397,8 +427,9 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets
 
 - API Key 只从**进程环境变量**读取（应用不读 `.env`，见 D-19），仓库内不存任何真实密钥。
 - `Settings.llm_api_key` 设置了 `repr=False`，打印配置不会带出密钥原文。
-- `.gitignore` 排除 `.env`、`.venv`、`data/uploads/*`、`.tmp/`、matplotlib 缓存。
-  其中 `.env` 这条是**防止误提交**（谁本地写了一个），不是应用要读它。
+- `.gitignore` 排除 `.env`、`.venv`、`data/uploads/*`、`data/db/*`、`data/charts/*`、`.tmp/`、
+  matplotlib 缓存。其中 `.env` 这条是**防止误提交**（谁本地写了一个），不是应用要读它；
+  `data/db/*` 挡的是 SQLite 归档库（写事务期间还会产生 `app.db-journal`，所以挡的是整个目录）。
 - CORS 只允许本机来源，不使用通配符 `*`。
 - 上传只按**扩展名白名单 + 真的能解析成功**两道关判断，不信客户端报的 `Content-Type`。
 - 落盘名固定是 `{dataset_id}.{ext}`（32 位十六进制 id），用户原始文件名一个字符都不参与路径；
@@ -419,3 +450,19 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets
 | 第 5 天 | 图表智能体、数字溯源校验（六类 issue）、规则路径也配图 | ✅ 完成（`d18fdbf` → `618acc2`），D-22/D-23 记录了两处"修好必须能证明改回去会红" |
 | 第 6 天 | 网页交互：上传 / 概览 / 提问 / 六步进度 / 图表 / 报告校验，前后端联调 | ✅ 完成（`a703364`，前端由 `tests/test_frontend.py` 钉住） |
 | 第 7 天 | 端到端演示脚本与真实输出（[docs/DEMO.md](docs/DEMO.md)）、完整测试、三份交付文档（[WORKFLOW](docs/WORKFLOW.md) / [INTERVIEW_QA](docs/INTERVIEW_QA.md) / [HIGHLIGHTS](docs/HIGHLIGHTS.md)）、README 与架构文档收尾 | ✅ 完成（`a677425` + 本次文档提交） |
+| 第 7 天之后 | **D6-SQLite 补做**：把第 6 天拍板、当天没做完的 SQLite 历史归档落地（标准库 `sqlite3`、零新依赖）+ 两个只读历史接口 | ✅ 完成，决策记录见 [docs/DECISIONS.md](docs/DECISIONS.md) D-24（**如实记：这条是拍板在 D6、D6 没做、之后才补上的**） |
+
+## 已知限制（用之前先看这一节）
+
+- **重启后，数据集与运行中的工作流仍然全丢**：数据集在 `app/data/store.py` 的 dict、
+  工作流在 `app/core/registry.py` 的 dict，都只在内存里。老的 `dataset_id` 一律 404；
+  老的 `workflow_id` 调**状态 / 报告 / 图表**也一律 404。
+- **唯一能在重启后查到的，是已经跑到终态的工作流的归档记录**，并且只能通过
+  `GET /api/workflows/history`（列表）与 `GET /api/workflows/history/{workflow_id}`（详情）读。
+  它**不是**"重启不丢数据"：归档里没有 `DataFrame`、没有数据集、没有运行态，
+  **也不能"继续运行"** —— 它只是"当时那条工作流长什么样"的一份只读记录。
+- **仍然必须单进程**：`uvicorn --workers 4` 会让上传落在一个进程、查询落到另一个进程，
+  表现就是"刚传完就 404"。**SQLite 归档没有改变这一点** —— 进程内的 dict 依然是唯一的运行态
+  事实来源，多进程下它们仍然各自分裂。
+- **历史接口没有鉴权**：本地单机工具，归档列表谁都能查；不要直接暴露到公网。
+- 归档**可以被关掉**（`DB_PATH=""`）：历史列表返回 200 + `enabled=false` + 空列表；历史详情因无归档记录返回 404 `NOT_FOUND`。
