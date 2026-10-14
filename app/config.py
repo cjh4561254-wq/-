@@ -1,10 +1,24 @@
-"""应用配置：把环境变量 / .env 里的文本变成有类型、可校验的 Python 对象。"""
+"""应用配置：把**系统环境变量**里的文本变成有类型、可校验的 Python 对象。
+
+两件事在这一版里变了（见 docs/DECISIONS.md D-19）：
+
+1. **不再读 `.env` 文件**。配置来源只剩一个：进程的环境变量（Windows 上就是
+   「系统属性 → 环境变量」里那些）。`.env.example` 保留下来只当"有哪些键"的清单用，
+   它已经不再是模板。
+2. **大模型三项各认两个环境变量名**：`LLM_*` 优先，`DEEPSEEK_*` 兜底。
+   本机环境里只有 `DEEPSEEK_BASE_URL` / `DEEPSEEK_API_KEY` 这套 DeepSeek 官方
+   名字，而应用此前只认 `LLM_*` —— 于是"机器上明明配了 key，应用却报没配置"。
+
+实测过（`.tmp/probe_env_compare.py`）：旧 `.env` 里的 15 个键，值**全部**等于
+Settings 的默认值。所以"不再读 .env"对当前取值零影响，是纯粹的减法 ——
+这一点很重要，否则就变成一边改配置源一边悄悄改行为。
+"""
 
 from functools import lru_cache
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -25,15 +39,34 @@ os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE_DIR))
 #   2. 放在 lifespan 里，行为可以被测试观察、可以按配置覆盖（TEMP_DIR）。
 # 两者机制不同是因为约束不同，不是疏忽。
 
+# 大模型三个字段各自认的环境变量名，**按优先级从高到低**（AliasChoices 取第一个
+# 存在的）。字段声明与测试夹具共用这三个常量，避免"实现换了名字、测试还在清旧名字"
+# 的漂移：少清一个，本机真实密钥就会渗进"未配置"用例 —— 于是测试在没 key 的机器上
+# 绿、在有 key 的机器上红，而后者才是用户的机器。
+_LLM_BASE_URL_NAMES = ("LLM_BASE_URL", "DEEPSEEK_BASE_URL")
+_LLM_MODEL_NAMES = ("LLM_MODEL", "DEEPSEEK_MODEL")
+_LLM_API_KEY_NAMES = ("LLM_API_KEY", "DEEPSEEK_API_KEY")
+
+#: 上面三组名字的并集。测试用它把环境清干净（见根 conftest.py 的隔离夹具）。
+LLM_ENV_VAR_NAMES: tuple[str, ...] = (
+    *_LLM_BASE_URL_NAMES,
+    *_LLM_MODEL_NAMES,
+    *_LLM_API_KEY_NAMES,
+)
+
 
 class Settings(BaseSettings):
     """配置只负责取值；创建目录和设置运行环境由 main.py 的 lifespan 负责。"""
 
     model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env",
-        env_file_encoding="utf-8",
+        # **故意没有 env_file**：不读 .env（理由见模块 docstring）。
+        # 想临时读某个 dotenv 文件，仍然可以显式传 Settings(_env_file=...)。
         case_sensitive=False,
         extra="ignore",
+        # validation_alias 会把"字段名"从取值来源里顶掉，而 Settings(llm_api_key="x")
+        # 这种按字段名传参在测试里用得很顺手，所以显式允许（pydantic ≥2.11 的写法，
+        # 老写法叫 populate_by_name；用新的，免得踩弃用告警）。
+        validate_by_name=True,
     )
 
     app_name: str = "AI Data Analyst Agent"
@@ -47,9 +80,18 @@ class Settings(BaseSettings):
     max_columns: int = Field(default=200, gt=0, le=2_000)
 
     # 第四阶段才使用；当前不会发出任何模型请求。
-    llm_base_url: str = ""
-    llm_model: str = ""
-    llm_api_key: str = Field(default="", repr=False)
+    #
+    # 名字顺序（LLM_* 在前、DEEPSEEK_* 在后）不能反：反了的话，本机那个
+    # DEEPSEEK_* 会悄悄盖掉显式设置的 LLM_*，而"我明明设了 LLM_MODEL 却不生效"
+    # 是最难查的一类配置问题。
+    llm_base_url: str = Field(default="", validation_alias=AliasChoices(*_LLM_BASE_URL_NAMES))
+    # 模型名有默认值，因为本机环境只给了 base_url 与 key、没有模型名这一项；
+    # 留空会让 llm_configured 永远为 False —— 表现就是"配了 key 却不生效"。
+    # 取值依据：实测 GET https://api.deepseek.com/models 返回
+    # `deepseek-flash` 与 `deepseek-v4-pro` 两个（前者是对话模型）。
+    # 要换服务/换模型：设 LLM_MODEL（或 DEEPSEEK_MODEL）。
+    llm_model: str = Field(default="deepseek-flash", validation_alias=AliasChoices(*_LLM_MODEL_NAMES))
+    llm_api_key: str = Field(default="", repr=False, validation_alias=AliasChoices(*_LLM_API_KEY_NAMES))
     llm_timeout_seconds: int = Field(default=60, gt=0, le=300)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
 
@@ -97,7 +139,11 @@ class Settings(BaseSettings):
 
     @property
     def llm_configured(self) -> bool:
-        """仅说明三项配置非空，不代表真实 API 调用成功。"""
+        """仅说明三项配置非空，不代表真实 API 调用成功。
+
+        `llm_model` 现在有默认值，所以实际起作用的是 base_url 与 api_key 两项；
+        字段本身仍然是三项都要非空 —— 空 base_url 表示"明确不接模型"。
+        """
         return bool(self.llm_base_url and self.llm_model and self.llm_api_key)
 
 

@@ -110,7 +110,10 @@ def chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = No
     # 测试里改环境变量、`reset_settings_cache()` 都不再起作用（本项目踩过这个坑）。
     if not settings.llm_configured:
         raise LLMNotConfigured(
-            "未配置大模型：LLM_BASE_URL / LLM_MODEL / LLM_API_KEY 三项都要有值。"
+            "未配置大模型：base_url 与 api_key 两项都要有值 ——"
+            "环境变量 LLM_BASE_URL / LLM_API_KEY（本机已有的 DEEPSEEK_BASE_URL / "
+            "DEEPSEEK_API_KEY 同样认）；模型名可用 LLM_MODEL / DEEPSEEK_MODEL 覆盖，"
+            "默认 deepseek-flash。"
             "没有它系统会走规则兜底计划，功能不受影响。"
         )
 

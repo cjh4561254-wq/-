@@ -212,3 +212,39 @@ def pytest_configure(config: pytest.Config) -> None:
         except OSError:  # pragma: no cover - 防御性
             continue
     config.args = [*config.args, str(app_dir)]
+
+
+# ── 环境隔离：大模型配置不许受**本机真实环境变量**影响 ──────────────────────
+# 这条是踩出来的，不是想出来的：
+#   用户机器上真的有 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL`（机器级环境变量），
+#   而配置层从 D4 收尾起认这两个名字。于是所有"未配置"用例（例如断言
+#   `Settings().llm_configured is False`、断言没配模型时必须抛 `LLMNotConfigured`）
+#   在**没 key 的机器上绿、在有 key 的机器上红** —— 而后者才是用户的机器。
+#   这类失败看起来像代码坏了，其实是测试把"我这台机器碰巧没配"当成了前提。
+#
+# 做法：每个用例开始前把六个名字全部清空。清单只有一份
+# （`app.config.LLM_ENV_VAR_NAMES`，与字段声明共用同一组常量），测试不另抄一份 ——
+# 抄的那份迟早漏一个，而漏掉的那个正好就是本机真实存在的名字。
+#
+# 用例想用环境变量就自己 `monkeypatch.setenv`：本夹具先跑、用例后设，顺序天然正确。
+@pytest.fixture(autouse=True)
+def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch):
+    """清掉大模型相关的六个环境变量名，并在前后各清一次配置缓存。"""
+    from app import config
+
+    # 在这里就抓住真正的清缓存函数，而**不是在拆除阶段调用
+    # `config.reset_settings_cache()`：那个函数内部会去调 `get_settings.cache_clear()`，
+    # 而个别用例会把 `config.get_settings` 换成假对象（见
+    # tests/test_planner_rules.py::test_llm_is_configured_reads_settings_at_call_time），
+    # 夹具拆除又发生在 monkeypatch 还原**之前** —— 于是拆除阶段拿到的是那个假对象、
+    # 没有 cache_clear，用例明明通过了却报 ERROR（实测踩到：2 failed 里有 1 个 ERROR）。
+    # 夹具只该清"真实存在的那份缓存"，所以这里持有真函数的引用。
+    clear_settings_cache = config.get_settings.cache_clear
+
+    for name in config.LLM_ENV_VAR_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    # 清缓存不能省：`get_settings()` 带 `lru_cache`，不清的话上一个用例读到的
+    # 配置会留给下一个用例（本项目真踩过这个坑）。
+    clear_settings_cache()
+    yield
+    clear_settings_cache()
