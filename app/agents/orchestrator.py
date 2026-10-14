@@ -33,6 +33,7 @@ from app.agents.analysis import run_task
 from app.agents.charts import render_chart
 from app.agents.planner import plan as plan_tasks
 from app.agents.validation import build_report, should_rewrite_report, validate
+from app.core.archive import archive_if_terminal
 from app.data.profiler import build_profile
 from app.data.store import store
 from app.errors import AppError
@@ -61,6 +62,27 @@ def run_workflow(state: WorkflowState) -> None:
     兜住任何逃出来的异常、并在 `finally` 里盖 `finished_at`。这里再写一次
     `finished_at` / `step="done"` 是有意的**重复**：正常路径上它们本来就该是
     Orchestrator 写的（§5.1 结尾），调用方那次只是"被强杀时也要有个收尾"的保险。
+
+    归档（§8.3.1）收在这一层的 `finally` 里，而不是各个 `return` 前面：
+    这个函数有 7 个出口（数据集缺失、画像失败、两处上限、计划失败、执行阶段中止、
+    正常收尾），挨个写一遍迟早漏一个 —— 而漏掉的往往正是最不常走的失败路径。
+    `archive_if_terminal()` 自己会判断是不是终态（非终态直接返回 False），
+    所以这里不用先看 `state.status`。
+    """
+    try:
+        _run(state)
+    finally:
+        # 归档是旁路：写不进去只记一条 warning，既不影响已经算好的结果，
+        # 也不改 `state` 的任何字段（契约见 app/core/archive.py 的模块 docstring）。
+        # 放在 `finally` 里，`finished_at` 一定已经由 `_finish()` / `_fail()` 写好了。
+        archive_if_terminal(state)
+
+
+def _run(state: WorkflowState) -> None:
+    """`run_workflow()` 的实现体：顺序推进 6 个阶段。
+
+    **不负责归档**（外层 `run_workflow()` 的 `finally` 收口），也不负责起线程、
+    写 `started_at`/`finished_at` —— 那些是 `app/core/background.py` 的职责。
     """
     settings = config.get_settings()
 

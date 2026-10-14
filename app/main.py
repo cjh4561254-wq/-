@@ -8,6 +8,7 @@ r"""FastAPI 应用入口。
 """
 
 from contextlib import asynccontextmanager
+import logging
 import traceback
 
 from fastapi import FastAPI, Request
@@ -22,9 +23,12 @@ from app.api.routes_analysis import router as analysis_router
 from app.api.routes_datasets import router as datasets_router
 from app.api.routes_health import router as health_router
 from app.api.routes_workflows import router as workflows_router
+from app.data.history import get_history_store
 from app.errors import AppError, sanitize_detail
 from app.schemas import ApiError, ApiResponse, ErrorCode
 from app.runtime import runtime_environment
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -34,6 +38,9 @@ async def lifespan(app: FastAPI):
     启动时把上传目录建出来。放在这里而不是写在 send 文件的那一刻：
     目录建不出来属于"环境问题"，应该在启动日志里就喊出来，
     而不是等用户点了上传才报错。
+
+    归档库（§14 决策 3）也在这里初始化：建表幂等，启动做一次，
+    之后每个连接就不必再判断表在不在。
     """
     settings = config.get_settings()
     upload_dir = settings.upload_path
@@ -41,8 +48,35 @@ async def lifespan(app: FastAPI):
     with runtime_environment(settings) as temp_dir:
         print(f"[startup] 上传目录就绪: {upload_dir}")
         print(f"[startup] 临时目录就绪: {temp_dir}")
+        _prepare_history_store()
         yield
     # 退出上下文管理器，恢复进程原有的环境变量与 tempfile 缓存。
+
+
+def _prepare_history_store() -> None:
+    """建归档库的表（归档关闭时什么都不做）。
+
+    **这里的异常必须吞掉，只记 warning。** 两条可用性的优先级不一样：
+    归档是旁路功能 —— 历史列表打不开、库文件建不出来，用户照样能上传、提问、
+    看图表和报告；而启动失败是**整个服务不可用**，连页面都打不开。
+    拿后者去赌前者是不划算的（对比 `app/core/archive.py`：归档写入失败也只记 warning）。
+    真正的故障不会因此消失：第一次归档失败时日志里会出现一条带 workflow_id 的 warning，
+    这里则留下"归档库初始化失败"这一条，排查时两处对得上。
+    """
+    try:
+        store = get_history_store()
+        if store is None:
+            # `DB_PATH` 为空串 = 用户主动关掉归档，不是错误。
+            print("[startup] 归档已关闭（DB_PATH 为空），历史接口返回 enabled=false")
+            return
+        store.ensure_schema()
+        print(f"[startup] 归档库就绪: {store.path}")
+    except Exception as exc:  # noqa: BLE001 —— 见 docstring：可用性优先于归档可用性
+        logger.warning(
+            "归档库初始化失败，服务继续启动（历史列表将不可用）：%s: %s",
+            type(exc).__name__,
+            exc,
+        )
 
 
 app = FastAPI(

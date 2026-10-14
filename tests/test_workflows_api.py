@@ -397,21 +397,30 @@ def test_chart_interface_serves_a_real_png(client):
     assert resp.content == FAKE_PNG
 
 
-def test_the_router_exposes_exactly_the_three_contract_paths():
-    """路由路径必须与 §7.0 表逐字一致，且 router 自己**不能再加 prefix**。
+def test_the_router_exposes_exactly_the_contract_paths():
+    """路由路径必须与契约逐字一致（task-32 起多了两个历史接口），且 router 自己**不能再加 prefix**。
 
     为什么这条值得写：`/api` 这一段由 `app/main.py` 统一挂。如果这里写了
     `prefix="/workflows"`，最终路径会变成 `/api/workflows/workflows/{id}` ——
     前端拿到的是一个 404 的地址，而且**没有任何测试会因此变红**（除非写了这一条）。
+
+    task-32 补记：`/workflows/history` 与 `/workflows/history/{workflow_id}` 必须声明在
+    `/workflows/{workflow_id}` **之前**，否则 FastAPI 会把 `history` 当成一个 workflow_id
+    去匹配（路由顺序的专项用例在 tests/test_history_api.py）。这条集合相等断言同时兜住
+    “有人又悄悄加/删了一条路径”——集合相等而不是包含，是因为多一条少一条都是契约变更。
     """
     assert router.prefix == ""
     assert {route.path for route in router.routes} == {
+        "/workflows/history",
+        "/workflows/history/{workflow_id}",
         "/workflows/{workflow_id}",
         "/workflows/{workflow_id}/report",
         "/workflows/{workflow_id}/charts/{filename:path}",
     }
     # 挂到真实 app 上之后，前缀确实只有一层 /api
     assert {route.path for route in app.routes if route.path.startswith("/api/workflows")} == {
+        "/api/workflows/history",
+        "/api/workflows/history/{workflow_id}",
         "/api/workflows/{workflow_id}",
         "/api/workflows/{workflow_id}/report",
         "/api/workflows/{workflow_id}/charts/{filename:path}",

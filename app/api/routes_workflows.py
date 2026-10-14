@@ -27,17 +27,32 @@
 
 错误一律 `raise AppError`，状态码查 `app/errors.py` 的 `ERROR_STATUS`；
 这里不写 `JSONResponse`，也不返回 `ok:false` 的 200（§7.0 落码约束第 3 条）。
+
+两个只读历史接口（接口 9 / 10：`GET /workflows/history`、`/workflows/history/{id}`）
+--------------------------------------------------------------------------------
+它们读的是 SQLite 归档库（`app/data/history.py`），**与内存注册表无关**：
+库里查不到就是 404，**禁止**回头去 `registry` 里捞一条补上（§8.3.1 的
+"不得 fallback 复活对象"）。那条 fallback 会让"重启后历史还在"这个卖点
+变成"有时候在、有时候不在"，而且两条路径的字段来源不同，迟早出现同一个
+`workflow_id` 两个版本。
+
+⚠️ **路由顺序**：这两个接口必须声明在 `get_workflow` **之前**。FastAPI 按声明顺序
+匹配，`/workflows/history` 和 `/workflows/{workflow_id}` 的路径形状一模一样，
+写在后面就会被后者接走、`workflow_id="history"` → 404。`tests/test_history_api.py`
+有一条测试专门钉这个（`GET /api/workflows/history` 必须是 200 而不是 404）。
 """
 
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app import config
 from app.core import registry
+from app.core.archive import archive_if_terminal
+from app.data.history import HistoryRecord, get_history_store
 from app.errors import AppError
 from app.schemas import ApiError, ApiResponse, ErrorCode
 from app.schemas_tool import ToolResult
@@ -80,6 +95,154 @@ class ReportData(BaseModel):
     validation: ValidationResult | None = None
     results: list[ToolResult] = Field(default_factory=list)
     llm_used: bool = False
+
+
+class HistoryItem(BaseModel):
+    """历史列表与详情共用的一条记录。**字段只来自归档库**，不掺内存态。
+
+    `status` 用 `WorkflowStatus` 而不是裸字符串：库里存的是 `state.status.value`，
+    接口层把它转回枚举，这样前端拿到的取值域与接口 6 完全一致
+    （同一个前端函数要能画两种来源的状态）。
+
+    `error_code` 用 `ErrorCode`：前端要按 `WORKFLOW_TIMEOUT` 这类码分流，
+    码的取值域必须与接口 6 的 `error.code` 同源。
+    """
+
+    workflow_id: str
+    question: str
+    status: WorkflowStatus
+    created_at: datetime
+    finished_at: datetime | None = None
+    has_report: bool = False
+    llm_used: bool = False
+    error_code: ErrorCode | None = None
+
+
+class HistoryListData(BaseModel):
+    """接口 9 的返回体：一页记录 + **全库**总数 + 回显分页参数。
+
+    `total` 是 `store.count()`（全库总数），不是 `len(items)`：前端要拿它算
+    "还有几页"，给了本页条数就会在第一页之后就开始骗人。
+
+    `enabled=False` 表示归档被关掉了（`DB_PATH` 为空）。这时 HTTP 仍然是 200：
+    这不是错误，是"这个功能关着"，前端据此显示一句说明而不是报错。
+    """
+
+    items: list[HistoryItem] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 20
+    offset: int = 0
+    enabled: bool = True
+
+
+class HistoryDetailData(BaseModel):
+    """接口 10 的返回体：归档记录 + 还原出来的报告（没归档报告时为 None）。"""
+
+    item: HistoryItem
+    report: FinalReport | None = None
+
+
+def _item_from_record(record: HistoryRecord) -> HistoryItem:
+    """库里的 `HistoryRecord` → 接口模型。
+
+    两个字符串字段（`status` / `error_code`）在这里转回枚举：库里存的是字符串
+    （TEXT 列，方便人手查库），接口对外给的是契约里的枚举取值。
+    """
+    return HistoryItem(
+        workflow_id=record.workflow_id,
+        question=record.question,
+        status=WorkflowStatus(record.status),
+        created_at=record.created_at,
+        finished_at=record.finished_at,
+        has_report=record.has_report,
+        llm_used=record.llm_used,
+        error_code=ErrorCode(record.error_code) if record.error_code is not None else None,
+    )
+
+
+# ---- 接口 9 / 10：历史归档（**必须声明在 `get_workflow` 之前**，见模块 docstring）----
+
+
+@router.get(
+    "/workflows/history",
+    response_model=ApiResponse[HistoryListData],
+    summary="查询历史归档列表",
+)
+def list_history(
+    limit: int = Query(20, ge=1, le=100, description="每页条数，1–100"),
+    offset: int = Query(0, ge=0, description="从第几条开始，从 0 起"),
+) -> ApiResponse[HistoryListData]:
+    """接口 9：分页读归档库（新→旧）。
+
+    排序在库里定死（`finished_at DESC NULLS LAST, created_at DESC`），接口层不再排：
+    分页 + 内存排序是经典的错位来源（每页各自排一遍，跨页顺序就乱了）。
+
+    归档关闭（`DB_PATH` 为空）→ `enabled=False` + 空列表 + **HTTP 200**：
+    用户关掉了一个功能，不是他请求错了（对比接口 7 的"报告没生成"是 400：
+    那是时机不对，而这里是功能不存在）。
+    """
+    store = get_history_store()
+    if store is None:
+        return ApiResponse[HistoryListData](
+            ok=True,
+            data=HistoryListData(
+                items=[], total=0, limit=limit, offset=offset, enabled=False
+            ),
+            error=None,
+        )
+
+    records = store.list_recent(limit=limit, offset=offset)
+    return ApiResponse[HistoryListData](
+        ok=True,
+        data=HistoryListData(
+            items=[_item_from_record(record) for record in records],
+            total=store.count(),
+            limit=limit,
+            offset=offset,
+            enabled=True,
+        ),
+        error=None,
+    )
+
+
+@router.get(
+    "/workflows/history/{workflow_id}",
+    response_model=ApiResponse[HistoryDetailData],
+    summary="查询历史归档详情",
+)
+def get_history_detail(workflow_id: str) -> ApiResponse[HistoryDetailData]:
+    """接口 10：读一条归档记录，并把当时的报告还原出来。
+
+    报告是从 `record.report_text`（归档时 `FinalReport.model_dump_json()` 的产物）
+    用 `model_validate_json()` 还原的，**不是**从内存里再拿一份 —— 历史记录的意义
+    就是"当时是什么样"。还原失败会被 FastAPI 翻成 500：那说明库里的 JSON 被外力
+    改坏了，属于真故障，不该假装没这回事。
+
+    查不到 → 404。注意这里**不会**去 `registry` 里找（§8.3.1 禁止 fallback 复活）：
+    重启后内存是空的，而历史记录还在 —— 这正是归档存在的理由。
+    """
+    store = get_history_store()
+    record = store.get(workflow_id) if store is not None else None
+    if record is None:
+        raise AppError(
+            ErrorCode.NOT_FOUND,
+            "没有归档记录",
+            detail=(
+                "这条工作流没有归档记录：归档库只保存跑到终态的工作流，"
+                "服务重启后仍在进行中的工作流不会留下历史。"
+            ),
+        )
+
+    report = (
+        FinalReport.model_validate_json(record.report_text)
+        if record.report_text is not None
+        else None
+    )
+    return ApiResponse[HistoryDetailData](
+        ok=True,
+        data=HistoryDetailData(item=_item_from_record(record), report=report),
+        error=None,
+    )
 
 
 @router.get(
@@ -278,6 +441,13 @@ def _expire_if_stale(state: WorkflowState) -> None:
     # 注意：这里**不抛异常**。工作流超时不是"这次查询失败"，
     # 接口照样返回 HTTP 200，状态与 error.code 说清发生了什么（§7.0 表）。
     # ERROR_STATUS 里 WORKFLOW_TIMEOUT 映射的就是 200，这两处是同一个约定。
+    #
+    # 归档：惰性超时是**第二条到达终态的路径**（第一条是 orchestrator 跑完的
+    # `finally`），所以这里也必须写库 —— 否则一条卡死的工作流永远不会出现在
+    # 历史列表里，用户重启服务后连"它曾经卡住过"都查不到。
+    # `archive_if_terminal()` 自己判终态、自己吞异常；同一条被归档两次也没关系，
+    # `HistoryStore.archive()` 是 UPSERT（模块 docstring 的"为什么可以重复调用"）。
+    archive_if_terminal(state)
 
 
 def _as_utc(value: datetime) -> datetime:
