@@ -392,3 +392,397 @@ def test_the_store_layer_reads_bad_rows_fine():
 
     with _client() as client:
         assert client.get("/api/workflows/history").status_code == _EXPECT_LIST_BAD_ROW
+
+
+# ==========================================================================
+# ============ task-36：ErrorCode 同类硬转 + 枚举硬转点清单 ============
+# ==========================================================================
+#
+# task-35 只证明了 `status` 那一处（`routes_workflows.py:154`）。
+# 同一个函数里**还有一处同款硬转**（`:159`）：
+#
+#     error_code=ErrorCode(record.error_code) if record.error_code is not None else None
+#
+# 本段补上它的实证，并给出「枚举硬转点清单」（见文件末尾的 docstring）。
+#
+# 修复后本段应当这样改：`_EXPECT_LIST_BAD_ERROR_CODE` / `_EXPECT_DETAIL_BAD_ERROR_CODE`
+# 从 500 改成 200，并断言坏行被**跳过**（`error_code` 落成 None 或原始字符串），
+# 而不是既断言 500 又断言 200。
+
+
+#: 期望值写死（D-16 第 3 条）：修好后这两个常量应当改成 200。
+_EXPECT_LIST_BAD_ERROR_CODE = 500
+_EXPECT_DETAIL_BAD_ERROR_CODE = 500
+
+#: 三种代表性非法 error_code：
+#:   - `TIMEOUT_LEGACY` 模拟**老版本的名字**（跨版本持久化，唯一现实触发条件）
+#:   - `bogus` 纯乱值
+#:   - `""` 空串（"有值但无意义"，与 NULL 语义最接近、最容易被误当可容错）
+_BAD_ERROR_CODES = ["TIMEOUT_LEGACY", "bogus", ""]
+
+
+def _insert_raw_error_code(workflow_id: str, status: str, error_code: str | None,
+                           minutes_ago: int = 0, question: str = "毒行探针") -> None:
+    """**原始 SQL 直插**，可以指定 `error_code`（含非法值）。
+
+    不复用 `_insert_raw`：它把 `error_code` 写死成 None，而本段要的正是非空非法值。
+    两个 helper 都直插，都会绕过 `HistoryStore` / `archive_if_terminal`。
+    """
+    fin = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    conn = sqlite3.connect(_db_path())
+    conn.execute(
+        "INSERT INTO workflow_history (workflow_id, question, status, created_at,"
+        " finished_at, has_report, llm_used, report_text, error_code, schema_version,"
+        " archived_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (workflow_id, question, status, fin, fin, 0, 0, None, error_code, 1, fin),
+    )
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize("bad_code", _BAD_ERROR_CODES)
+def test_one_bad_error_code_poisons_the_whole_listing(bad_code):
+    """① 非法 `error_code`（3 种）-> 列表 **500**，`data=null`，一条都拿不到。
+
+    与 `status` 那条的机制完全相同：`ErrorCode(record.error_code)` 硬转抛
+    `ValueError: '<值>' is not a valid ErrorCode`，被兜底 handler 翻成 500。
+
+    注意"1 条合法 + 1 条非法"的构造：合法行的 `error_code` 是 **NULL**，
+    它本身不炸（见 `test_null_error_code_rows_are_unaffected`），
+    所以这里的 500 完全由那条非法行造成。
+    """
+    _seed_schema()
+    _insert_raw_error_code(_legal_id(1), "FAILED", bad_code, minutes_ago=0)
+    _insert_raw_error_code(_legal_id(2), "SUCCESS", None, minutes_ago=5)
+
+    with _client() as client:
+        r = client.get("/api/workflows/history")
+
+    print("\n[P3-error_code] error_code=%r -> %d | %s"
+          % (bad_code, r.status_code, r.text[:220]))
+    assert r.status_code == _EXPECT_LIST_BAD_ERROR_CODE
+    body = r.json()
+    assert body["ok"] is False
+    assert body["data"] is None, "整页挂掉：一条都拿不到（这正是缺陷的核心）"
+    assert body["error"]["code"] == "INTERNAL_ERROR"
+    assert "is not a valid ErrorCode" in body["error"]["detail"]
+    assert repr(bad_code) in body["error"]["detail"]
+
+
+@pytest.mark.parametrize("bad_code", _BAD_ERROR_CODES)
+def test_one_bad_error_code_poisons_the_detail_endpoint(bad_code):
+    """① 详情接口打**坏行自己** -> 也 500（复用同一个 `_item_from_record`）。
+
+    对照：`test_the_detail_endpoint_still_serves_legal_rows` 证明打合法行是 200 ——
+    责任边界是"坏行自己"，不是"详情接口整体不可用"。
+    """
+    _seed_schema()
+    bad_id = _legal_id(7)
+    _insert_raw_error_code(bad_id, "FAILED", bad_code, minutes_ago=0)
+
+    with _client() as client:
+        r = client.get("/api/workflows/history/%s" % bad_id)
+
+    print("\n[P3-error_code] 详情 error_code=%r -> %d | %s"
+          % (bad_code, r.status_code, r.text[:220]))
+    assert r.status_code == _EXPECT_DETAIL_BAD_ERROR_CODE
+    assert "is not a valid ErrorCode" in r.json()["error"]["detail"]
+
+
+def test_the_detail_endpoint_still_serves_legal_rows():
+    """① 对照：同一库里合法行仍然拿得到 200（载荷里 `error_code` 是 null）。
+
+    这条防的是"把影响面说过头"：坏行毒的是"包含它的那一次请求"，
+    不是"接口永久瘫痪"。
+    """
+    _seed_schema()
+    bad_id, ok_id = _legal_id(7), _legal_id(8)
+    _insert_raw_error_code(bad_id, "FAILED", "TIMEOUT_LEGACY", minutes_ago=0)
+    _insert_raw_error_code(ok_id, "SUCCESS", None, minutes_ago=5)
+
+    with _client() as client:
+        r = client.get("/api/workflows/history/%s" % ok_id)
+
+    print("\n[P3-error_code] 详情打合法行 -> %d | %s" % (r.status_code, r.text[:220]))
+    assert r.status_code == 200
+    assert r.json()["data"]["item"]["error_code"] is None
+
+
+def test_null_error_code_rows_are_unaffected():
+    """② 关键对比：`error_code IS NULL` 的行**完全不受影响**。
+
+    这是 `ErrorCode` 与 `WorkflowStatus` 影响面差异的根源：
+
+      - `status` 是 **NOT NULL 必填列**，每条记录都有值 -> 每条记录都可能变毒；
+      - `error_code` 是**可空列**，只有失败的工作流才有值 -> 只有"失败且带非法码"的行才炸。
+
+    而且产品路径写进去的 `error_code` 只可能是 `ErrorCode` 成员（见
+    `test_normal_product_paths_cannot_write_an_invalid_error_code`），
+    所以 `ErrorCode` 这条的实际暴露面比 `status` 那条**小得多**。
+    """
+    _seed_schema()
+    for i in range(5):
+        _insert_raw_error_code(_legal_id(i), "FAILED" if i % 2 else "SUCCESS", None,
+                               minutes_ago=i)
+
+    with _client() as client:
+        r = client.get("/api/workflows/history")
+
+    print("\n[P3-error_code] 5 条 error_code 全 NULL -> %d, total=%s"
+          % (r.status_code, r.json().get("data", {}).get("total")))
+    assert r.status_code == 200, "NULL 是合法取值（无错误），不得因此报错：%s" % r.text
+    body = r.json()
+    assert body["data"]["total"] == 5
+    assert len(body["data"]["items"]) == 5
+    assert all(item["error_code"] is None for item in body["data"]["items"])
+
+
+def test_ten_legal_plus_one_bad_error_code_row_returns_nothing():
+    """② 影响面量化：10 条合法 + 1 条非法 `error_code` -> 用户拿到 **0** 行。
+
+    与 `status` 那条的量化数字一致（都是"1 条毒死整页"）；
+    差别在**触发概率**：非法 `status` 让每条老记录都可能变毒，
+    非法 `error_code` 只影响失败记录的一个子集。
+    """
+    _seed_schema()
+    for i in range(10):
+        _insert_raw_error_code(_legal_id(i), "SUCCESS", None, minutes_ago=i + 1)
+    _insert_raw_error_code(_legal_id(99), "FAILED", "TIMEOUT_LEGACY", minutes_ago=0)
+
+    store = history.HistoryStore(_db_path())
+    assert store.count() == 11, "库里确实是 11 行（10 合法 + 1 非法）"
+
+    with _client() as client:
+        r = client.get("/api/workflows/history")
+
+    print("\n[P3-error_code] 库里 11 行（10 合法 + 1 非法）-> %d | %s"
+          % (r.status_code, r.text[:200]))
+    assert r.status_code == _EXPECT_LIST_BAD_ERROR_CODE
+    assert r.json()["data"] is None, "用户拿到 0 行（本应拿到 10 行合法记录）"
+
+
+def test_error_code_poison_is_per_page_too():
+    """② 补：毒杀**按页**发生（与 `status` 那条一致）。
+
+    `limit=1&offset=0`（含坏行）500；`limit=1&offset=1`（跳过坏行）200。
+    但默认 `limit=20` 且坏行落在页内时，**首页必坏** —— 换 offset 不是可用的绕行方案，
+    因为坏行是"最新的失败记录"时它天然就在第一页。
+    """
+    _seed_schema()
+    for i in range(3):
+        _insert_raw_error_code(_legal_id(i), "SUCCESS", None, minutes_ago=i + 1)
+    _insert_raw_error_code(_legal_id(99), "FAILED", "bogus", minutes_ago=0)
+
+    with _client() as client:
+        page0 = client.get("/api/workflows/history?limit=1&offset=0")
+        page1 = client.get("/api/workflows/history?limit=1&offset=1")
+        default = client.get("/api/workflows/history")
+
+    print("\n[P3-error_code] limit=1&offset=0（含坏行）-> %d" % page0.status_code)
+    print("[P3-error_code] limit=1&offset=1（跳过坏行）-> %d" % page1.status_code)
+    print("[P3-error_code] 默认 limit=20 -> %d" % default.status_code)
+    assert page0.status_code == _EXPECT_LIST_BAD_ERROR_CODE
+    assert page1.status_code == 200, "跳过坏行的那页仍能正常返回：%s" % page1.text
+    assert default.status_code == _EXPECT_LIST_BAD_ERROR_CODE
+
+
+def test_a_row_bad_in_both_fields_blames_status_first():
+    """③ 一行同时坏两个字段 -> **先炸 `status`**（`detail` 原文是 status 的）。
+
+    `_item_from_record` 是关键字实参构造，按**字段声明顺序**求值：
+    `HistoryItem` 先声明 `status`（`:154`）后声明 `error_code`（`:159`），
+    所以 `WorkflowStatus(...)` 先抛，`ErrorCode(...)` 根本轮不到。
+
+    **这条决定修复要覆盖两处**：只修 `:159` 是假修复 ——
+    同一行的 `status` 仍然会把请求打成 500，只是换了个 `detail` 文案。
+    """
+    _seed_schema()
+    _insert_raw_error_code(_legal_id(1), "RUNNING", "TIMEOUT_LEGACY", minutes_ago=0)
+
+    with _client() as client:
+        r = client.get("/api/workflows/history")
+
+    detail = r.json()["error"]["detail"]
+    print("\n[P3-error_code] 双坏字段 -> %d | detail=%r" % (r.status_code, detail))
+    assert r.status_code == _EXPECT_LIST_BAD_ROW
+    assert detail == "'RUNNING' is not a valid WorkflowStatus", (
+        "先炸 status（声明顺序在前）；若这条挂了说明求值顺序变了，"
+        "修复覆盖范围要重新评估"
+    )
+
+
+def test_a_row_bad_only_in_error_code_blames_error_code():
+    """③ 隔离对照：`status` 合法、只有 `error_code` 坏 -> `detail` 是 error_code 的。
+
+    与上一条合起来证明"两处都会炸、谁先取决于 status 是否合法"，
+    因此修复必须**两处都覆盖**。
+    """
+    _seed_schema()
+    _insert_raw_error_code(_legal_id(1), "FAILED", "TIMEOUT_LEGACY", minutes_ago=0)
+
+    with _client() as client:
+        r = client.get("/api/workflows/history")
+
+    detail = r.json()["error"]["detail"]
+    print("\n[P3-error_code] 只有 error_code 坏 -> %d | detail=%r" % (r.status_code, detail))
+    assert r.status_code == _EXPECT_LIST_BAD_ERROR_CODE
+    assert detail == "'TIMEOUT_LEGACY' is not a valid ErrorCode"
+
+
+def test_the_store_layer_reads_bad_error_codes_fine():
+    """责任边界（同 `status` 那条）：`HistoryStore` 对非法 `error_code` 完全正常。
+
+    500 只发生在 API 层，要修就修 `_item_from_record`，别动 `app/data/history.py`
+    （它按设计只存字符串、不做枚举校验）。
+    """
+    _seed_schema()
+    _insert_raw_error_code(_legal_id(1), "FAILED", "TIMEOUT_LEGACY", minutes_ago=0)
+
+    store = history.HistoryStore(_db_path())
+    rec = store.get(_legal_id(1))
+    print("\n[P3-error_code] store.get() -> error_code=%r（原样读出，不抛）" % rec.error_code)
+    assert rec is not None
+    assert rec.error_code == "TIMEOUT_LEGACY"
+    assert store.count() == 1
+    assert len(store.list_recent(limit=10)) == 1
+
+
+def test_normal_product_paths_cannot_write_an_invalid_error_code():
+    """④ 前提：正常产品路径产不出非法 `error_code`（静态 + 运行时两层）。
+
+    静态：全仓写历史库 `error_code` 列的只有 `app/core/archive.py` 的
+    `build_record()`，表达式是
+    `error_code=state.error.code.value if state.error is not None else None` ——
+    `state.error` 是 `app/schemas.py:39` 的 `ApiError`，其 `code` 字段类型是
+    **`ErrorCode`**（pydantic 保证），`.value` 取出来的必是枚举成员或 None。
+
+    运行时：把 8 个 `ErrorCode` 成员逐个放进 `state.error` 调 `build_record()`，
+    断言产出永远是合法值 —— 期望值写死，不写"要么合法要么非法"。
+    """
+    from app.schemas import ApiError, ErrorCode
+
+    now = datetime.now(timezone.utc)
+    legal_values = {m.value for m in ErrorCode}
+    produced = []
+
+    for member in ErrorCode:
+        state = WorkflowState(
+            workflow_id="a" * 32,
+            dataset_id="b" * 32,
+            question="正常路径探针",
+            status=WorkflowStatus.FAILED,
+            created_at=now,
+            error=ApiError(code=member, message="探针"),
+        )
+        rec = archive.build_record(state)
+        produced.append(rec.error_code)
+
+    print("\n[P3-error_code] 8 个 ErrorCode 成员 -> build_record 产出 %r" % produced)
+    assert len(produced) == len(list(ErrorCode)) == 8
+    assert all(v in legal_values for v in produced), (
+        "正常路径产出了非法 error_code：%r" % [v for v in produced if v not in legal_values]
+    )
+
+    # 无 error 时必须是 None（这正是"可空列"的来源）
+    state_ok = WorkflowState(
+        workflow_id="c" * 32, dataset_id="d" * 32, question="无错误探针",
+        status=WorkflowStatus.SUCCESS, created_at=now, error=None,
+    )
+    print("[P3-error_code] state.error=None -> build_record.error_code=%r"
+          % archive.build_record(state_ok).error_code)
+    assert archive.build_record(state_ok).error_code is None
+
+
+def test_a_renamed_error_code_poisons_the_listing():
+    """④ 补：`error_code` 的跨版本触发条件（与 status 那条同构）。
+
+    把库里一个今天合法的码改成"新版才有的名字"，接口立刻 500。
+    现实中这会发生：`ErrorCode` 改名/删值后，老库里的失败记录就成了毒行。
+    """
+    _seed_schema()
+    _insert_raw_error_code(_legal_id(0), "FAILED", "WORKFLOW_TIMEOUT", minutes_ago=5)
+
+    with _client() as client:
+        before = client.get("/api/workflows/history")
+    print("\n[P3-error_code] 当前合法码 WORKFLOW_TIMEOUT -> %d" % before.status_code)
+    assert before.status_code == 200, "这个码今天合法，应当 200：%s" % before.text
+
+    conn = sqlite3.connect(_db_path())
+    conn.execute("UPDATE workflow_history SET error_code='TIMEOUT_LEGACY'")
+    conn.commit()
+    conn.close()
+
+    with _client() as client:
+        after = client.get("/api/workflows/history")
+    print("[P3-error_code] 改成老名字 TIMEOUT_LEGACY（老数据残留）-> %d | %s"
+          % (after.status_code, after.text[:200]))
+    assert after.status_code == _EXPECT_LIST_BAD_ERROR_CODE
+    assert "'TIMEOUT_LEGACY'" in after.json()["error"]["detail"]
+
+
+def test_the_enum_census_documents_exactly_two_hard_cast_sites():
+    """④ 清单自证：全仓 `Enum(...)` 硬转点**只有两处**，都在 `_item_from_record`。
+
+    这条把清单里的静态结论钉死，防止以后新增硬转点却没人更新清单。
+    与清单一起看：`FileExt` / `ChartType` 是 `Literal`（无构造器），
+    `TaskStatus` 只作 pydantic 字段类型出现 —— 都不属于这一模式。
+    """
+    src = (PROJECT_ROOT / "app" / "api" / "routes_workflows.py").read_text(encoding="utf-8")
+    hard_casts = [
+        ln.strip() for ln in src.splitlines()
+        if ("WorkflowStatus(record" in ln or "ErrorCode(record" in ln)
+    ]
+    print("\n[census] routes_workflows.py 硬转点 -> %r" % hard_casts)
+    assert len(hard_casts) == 2, "硬转点数量变了，清单要更新：%r" % hard_casts
+
+    # FileExt / ChartType 是 Literal，不是 Enum —— 没有可调用构造器
+    from app.schemas_dataset import FileExt
+    from app.schemas_tool import ChartType
+
+    for label, alias in (("FileExt", FileExt), ("ChartType", ChartType)):
+        print("[census] %s -> %r（isinstance(type)=%s）" % (label, alias, isinstance(alias, type)))
+        assert not isinstance(alias, type), (
+            "%s 变成了真正的类，清单里「不是 Enum 硬转」的判据要重写" % label
+        )
+
+
+# ==========================================================================
+# 枚举硬转点清单（task-36 核心交付）
+# ==========================================================================
+#
+# 判据（三条同时成立才算**真风险**）：
+#   (1) 值来自**持久化**（库里读回来的字符串）或**用户输入**；
+#   (2) 用 `Enum(...)` / `Literal` **强制构造**且**无兜底**（不带 try、不带默认值）；
+#   (3) 非法值时**没有 pydantic 校验**先拦下来。
+#
+# | 文件:行                              | 表达式                                   | 来源字段                | 持久化/用户输入 | 会不会 500 | 现有测试覆盖 |
+# |--------------------------------------|------------------------------------------|-------------------------|-----------------|-----------|--------------|
+# | app/api/routes_workflows.py:154      | `WorkflowStatus(record.status)`          | 库 TEXT 列 status       | **持久化**      | **会**    | 是（task-35）|
+# | app/api/routes_workflows.py:159      | `ErrorCode(record.error_code) if ...`    | 库 TEXT 列 error_code   | **持久化**      | **会**    | 是（本段）   |
+# | app/api/routes_workflows.py:237      | `FinalReport.model_validate_json(...)`   | 库 TEXT 列 report_text  | **持久化**      | 见下⑤     | 否（未构造） |
+# | app/schemas_workflow.py:110          | `chart_type: ChartType`（Literal 字段）  | 用户/LLM 计划参数       | 用户输入        | **不会**  | 是（pydantic）|
+# | app/schemas_dataset.py:76            | `file_ext: FileExt`（Literal 字段）      | 上传文件扩展名          | 用户输入        | **不会**  | 是（pydantic）|
+# | app/schemas.py:42                    | `code: ErrorCode`（Enum 字段）           | 各处构造 ApiError       | 内部            | **不会**  | 是（pydantic）|
+# | app/schemas_workflow.py（state.status）| `status: WorkflowStatus`（Enum 字段）   | 内存状态对象            | 内部            | **不会**  | 是（pydantic）|
+# | app/agents/orchestrator.py:227-277    | `task.status = TaskStatus.X`             | 内存 task 对象          | 内部常量        | **不会**  | 是           |
+# | app/schemas_tool.py:52                | `ChartType = Literal[...]`（类型别名）   | 工具层图表类型          | 用户输入        | **不会**  | 是（pydantic）|
+#
+# **真风险 2 处**：`routes_workflows.py:154` 与 `:159`（同一函数，必须一起修）。
+#
+# **假警报（及判据）**：
+#   - `TaskStatus` / `WorkflowStatus` / `ErrorCode` 作为**字段类型**出现在 pydantic
+#     模型里（`schemas.py:42`、`schemas_workflow.py`、`schemas_tool.py`）——
+#     非法值会被 pydantic 翻成 `ValidationError`（HTTP 422 或内部 500 之前就被拦），
+#     不是"硬转"。
+#   - `FileExt` / `ChartType` **不是 Enum**，是 `typing.Literal`，
+#     `FileExt("csv")` 直接 `TypeError: Cannot instantiate typing.Literal` ——
+#     它们**根本没有可调用的构造器**，不存在"枚举硬转"这种缺陷模式。
+#   - 全仓只有 3 个 Enum：`ErrorCode` / `TaskStatus` / `WorkflowStatus`
+#     （grep `class \w+\((str|int), ?Enum\)` 的结果）。
+#   - `app/tools/validate.py:53` 的 `self.error_code = error_code` 是**普通 str 赋值**，
+#     词汇是 `TOOL_NOT_FOUND` / `BAD_PARAMS` / `COLUMN_NOT_FOUND` / `BAD_OPERATION`
+#     （与 `ErrorCode` **不相交**），且从不写进历史库的 `error_code` 列
+#     （归档只取 `state.error.code.value`，而 `state.error` 是 `ApiError`）。
+#
+# 从清单看：**修一处不够，必须两处都修**（`154` + `159`）。
+
