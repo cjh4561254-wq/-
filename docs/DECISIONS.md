@@ -1082,6 +1082,56 @@ M13 那条断言（"不该出图的工具不配图"）在规则路径上永远�
 **状态**：已落地（`d18fdbf` / `.gitignore` 补在 `3caab04`）。578 passed / 0 failed / 0 skipped；
 Lead 独立复算（纯 stdlib csv 手算六地区 + 手工塞假数字 + AST 扫零 LLM + 派生列口径）全部通过。
 
+---
 
+## D-25 重试只留一层：`OpenAI(..., max_retries=0)`，SDK 的重试必须钉死
+
+**背景**：`app/llm/client.py` 里有两层重试，而且**是叠乘的**：
+
+- 外层是 `chat()` 里的 `for attempt in range(1, total_attempts + 1)`，
+  `total_attempts = settings.llm_max_retries + 1`，退避 `time.sleep(1.5 * attempt)`；
+- 内层是 `OpenAI(..., max_retries=settings.llm_max_retries)` 传给 SDK 的那个值，
+  它会自己重试 `408 / 409 / 429 / ≥500 / 连接错误`，退避 `min(0.5 * 2^n, 8.0)` 秒，
+  并且尊重服务端的 `Retry-After`（最长 60 秒）。
+
+默认 `llm_max_retries = 2` 时，**单次 `chat()` 最坏 9 次 HTTP、约 9.2 分钟墙钟**；
+一条工作流最多 5 次 `chat()`（planner 3 + 报告 2）→ 最坏 45 次请求、约 45 分钟。
+
+这件事在 D4 就被写进了回报（"单次 chat() 最坏 9 次 HTTP"），当时的处置是
+「属于契约变更，D4 不做，交 Lead 拍板」。**结果是它一直悬着**，而且
+`docs/ARCHITECTURE.md` §5.3 的重试表从 D4 起就写着"重试 `settings.llm_max_retries`（默认 2）"
+—— 文档描述的是**收敛后**的语义，代码当时是 8 次。**一句计划时态的话被读成了事实。**
+
+**为什么必须修，而不是"反正只是慢"**：`max_workflow_seconds`（默认 180）只在
+阶段与任务**之间**检查（`orchestrator._stop_reason`），**打断不了一次正在阻塞的 HTTP 调用**。
+也就是说这套叠乘能让一条工作流的实际耗时达到自己预算的 **15 倍以上**，
+而"超时保护"在这种情况下完全不起作用 —— 它不是性能问题，是**保护机制失效**。
+
+**决定**
+
+1. **`max_retries=0` 写死，不取自配置。** 重试只由外层循环负责，
+   于是单次 `chat()` 最坏 `1 + llm_max_retries` 次 HTTP（默认 3 次）、退避 1.5s / 3.0s，约 3 分钟。
+2. **`llm_max_retries` 的语义收窄成"总重试次数"**，不再需要乘上 SDK 那份看不见的重试。
+   它的名字到这里才名副其实。
+3. **必须是常量，不能是 `0 if ... else ...`**：配置项仍在，但它只影响外层循环。
+   测试用两条用例钉住 —— `tests/test_llm_client.py` 里一条断言写死的 `0`，
+   另一条把 `LLM_MAX_RETRIES` 设成 `5` 再断言 SDK 拿到的仍是 `0`。
+   这样"好心把它改回配置值"会立刻红。
+4. **本次改动是 Lead 直接做的，不是分派出去的。** 原因如实记下：
+   这个任务（`task-30`）曾两次分派给同一个成员，两次都没有产生任何改动；
+   它卡在收口的关键路径上，而它本身是一行常量加一处文档 —— 继续等它的机会成本
+   高于"换手"的成本。**这是流程上的妥协，不是设计上的**。
+
+**没做到的**：本次**没有**实测"真实 429/5xx 下 SDK 只发一次请求"。
+现有证据是：`max_retries=0` 真的传进了 `OpenAI()`（用 `httpx.MockTransport`
+截获构造参数断言），以及外层循环的行为有既有用例覆盖。
+"SDK 拿到 0 之后确实不再重试"依赖 SDK 的既有语义，不是本项目实测的结论。
+
+**影响到**：`app/llm/client.py`（构造参数一行 + 顶部两段"重试策略"文档整段重写）、
+`tests/test_llm_client.py`（`test_timeout_and_max_retries_are_passed_to_the_sdk`
+改名并改断言；新增一条配置为 5 时仍传 0 的用例）、`docs/ARCHITECTURE.md` §5.3。
+
+**状态**：已落地。全量 799 passed / 0 failed / 0 skipped。
 
 ---
+

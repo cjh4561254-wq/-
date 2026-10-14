@@ -160,16 +160,22 @@ def test_not_configured_raises_without_any_request(monkeypatch, missing: str):
 # ---------------------------------------------------------------------------
 
 
-def test_timeout_and_max_retries_are_passed_to_the_sdk(monkeypatch):
-    """`timeout` / `max_retries` 必须**真的**传给 `OpenAI()`（架构文档 §10 安全第 6 条）。
+def test_timeout_is_passed_and_the_sdk_retries_are_pinned_to_zero(monkeypatch):
+    """`timeout` 必须真的传给 `OpenAI()`；`max_retries` 必须是**写死的 0**（D-25）。
 
-    不传的话 SDK 用它的默认值，而"默认值是多少"是随版本变的 —— 这正是要避免的事。
+    两件事性质不同，所以断言也不同：
+
+    - `timeout` 来自配置，不传的话 SDK 用它的默认值，而"默认值是多少"是随版本变的
+      （架构文档 §10 安全第 6 条要求把它真的传进去）。
+    - `max_retries` **故意**不来自配置：SDK 的重试与 `chat()` 里那个循环是叠乘的，
+      传 2 会让单次调用最坏 9 次 HTTP、约 9 分钟（见 `app/llm/client.py` 顶部 §重试）。
+      所以它必须是常量 0。这里写死断言 0，正是为了防住"好心把它改回配置值"。
     """
     seen = _install_transport(monkeypatch, lambda request: httpx.Response(200, json=_completion()))
     chat([{"role": "user", "content": "你好"}])
 
     assert seen["timeout"] == 60
-    assert seen["max_retries"] == 2
+    assert seen["max_retries"] == 0
     assert seen["base_url"] == FAKE_BASE_URL
     assert seen["api_key"] == FAKE_API_KEY
 
@@ -184,7 +190,24 @@ def test_config_values_are_read_not_hardcoded(monkeypatch):
     chat([{"role": "user", "content": "你好"}])
 
     assert seen["timeout"] == 7
-    assert seen["max_retries"] == 1
+    # `llm_max_retries` 现在**只**决定外层循环的次数，不再传给 SDK —— 它已经被
+    # 「只发一次请求」的用例单独钉住（test_sdk_max_retries_stays_zero_when_the_config_asks_for_more）。
+    assert seen["max_retries"] == 0
+
+
+def test_sdk_max_retries_stays_zero_when_the_config_asks_for_more(monkeypatch):
+    """配置把重试调到 5，SDK 那层仍必须是 0 —— 叠乘就是这样被挡住的。
+
+    这条是 D-25 的核心断言：只要有人把 `max_retries=0` 改回 `settings.llm_max_retries`，
+    这里立刻红（同时 `test_config_values_are_read_not_hardcoded` 也会红）。
+    """
+    monkeypatch.setenv("LLM_MAX_RETRIES", "5")
+    config.reset_settings_cache()
+
+    seen = _install_transport(monkeypatch, lambda request: httpx.Response(200, json=_completion()))
+    chat([{"role": "user", "content": "你好"}])
+
+    assert seen["max_retries"] == 0
 
 
 def test_model_comes_from_settings(monkeypatch):

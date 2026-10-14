@@ -30,16 +30,23 @@ DeepSeek 思考模式的官方文档写死了一条：**带 `tools` 的请求，
 间隔固定 `1.5 * attempt` 秒（不做指数退避：这个项目的调用次数少，
 "能一眼算出总共等多久"比"理论最优"更有用）。
 
-## 关于"两层重试"的已知代价（写出来，不藏）
+## 重试只有一层，就写在下面那个 for 循环里（D-25）
 
-`OpenAI(...)` 客户端自己也会重试（SDK 的 `max_retries`），外面这个 for 循环也会重试。
-两层叠起来最坏是 `(N+1)²` 次请求，`N=2` 时是 9 次。
+`OpenAI(...)` 自己也会重试（SDK 的 `max_retries`），本项目**把它钉成 `max_retries=0`**，
+只留外层循环这一层。理由不是风格，是墙钟时间：
 
-仍然这样写的原因：架构文档 §10 安全第 6 条要求把 `settings.llm_max_retries`
-**真的传进客户端**（不能留着 SDK 的默认值不管），而 §5.3 又要求退避是
-`1.5 * attempt` 并且能统计出 `attempts`（SDK 内部重试我们看不见）。
-要收敛成一层，把 `max_retries` 改成 0 即可 —— 那属于契约变更，D4 不做，
-已记在回报里交给 Lead 拍板。
+两层叠乘时，`N = llm_max_retries = 2` 意味着单次 `chat()` 最坏 `(N+1)² = 9` 次 HTTP，
+再叠上 SDK 的指数退避（`min(0.5 * 2^n, 8.0)` 秒，且尊重服务端的 `Retry-After` ≤ 60 秒）
+约 9 分钟；而 `max_workflow_seconds`（默认 180）只在阶段与任务之间检查，
+**打断不了一次正在阻塞的 HTTP 调用**，所以这套叠乘能把实际耗时推到预算的十几倍。
+
+收敛到一层之后：单次 `chat()` 最坏 `1 + N = 3` 次 HTTP、退避 1.5s / 3.0s，约 3 分钟。
+`llm_max_retries` 这个名字到这里才名副其实 —— 它现在就是**总重试次数**，
+不再需要乘上 SDK 自己那份看不见的重试。
+
+历史：D4 就知道了这件事，当时的处置是"写进回报交 Lead 拍板、D4 不动"
+（D6 阶段报告里记的"单次 chat() 最坏 9 次 HTTP"就是它）。Lead 在 D6 之后的
+收口阶段拍板收敛，记为 D-25。
 """
 
 import logging
@@ -120,13 +127,24 @@ def chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = No
     client = OpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
-        # 超时与重试上限都必须真的传进去（架构文档 §10 安全第 6 条）：
-        # 不传的话 SDK 用它的默认值，而"默认值是多少"是会随版本变的。
+        # 超时必须真的传进去（架构文档 §10 安全第 6 条）：不传的话 SDK 用它的默认值，
+        # 而"默认值是多少"是会随版本变的。
         timeout=settings.llm_timeout_seconds,
-        max_retries=settings.llm_max_retries,
+        # `max_retries=0` 是**故意**的，不是漏传：重试只由下面那个循环负责。
+        #
+        # 这不是风格问题，是墙钟时间问题。SDK 的 `max_retries` 与下面的循环是**叠乘**的：
+        # 传 `settings.llm_max_retries`（默认 2）时，单次 chat() 最坏 3 次 HTTP × 3 轮 = 9 次，
+        # 再叠上 SDK 自己的退避（min(0.5*2^n, 8.0) 秒，且尊重 Retry-After ≤ 60s）约 9 分钟；
+        # 一条工作流最多 5 次 chat()（planner 3 + 报告 2）→ 最坏 45 次请求、约 45 分钟。
+        # 而 `max_workflow_seconds`（默认 180）只在阶段与任务**之间**检查，打断不了一次
+        # 正在阻塞的 HTTP 调用 —— 也就是说这套叠乘能让实际耗时远超预算的 15 倍。
+        #
+        # 收敛到一层之后：单次 chat() 最坏 1 × (1 + llm_max_retries) 次 HTTP（默认 3 次），
+        # 退避 1.5s / 3.0s，约 3 分钟；`llm_max_retries` 的语义也终于名副其实。
+        max_retries=0,
     )
 
-    # 首次 + 最多 llm_max_retries 次重试。
+    # 首次 + 最多 llm_max_retries 次重试。这是**唯一**的一层重试。
     total_attempts = settings.llm_max_retries + 1
     started = time.perf_counter()
 

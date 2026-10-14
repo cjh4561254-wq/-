@@ -884,13 +884,29 @@ PENDING ──▶ SKIPPED（depends_on 里有 FAILED 的任务）
 | 工具抛 `KeyError`（列不存在） | **不重试** | 0 | 重试不会让列出现，直接 `COLUMN_NOT_FOUND` |
 | 参数校验失败（第 6.3 节 5 类校验） | **不重试** | 0 | 参数是模型给的，重试同一个参数没意义 |
 | 工具抛 `TypeError`/`ValueError`（例：对文本列求均值） | 是，且**换策略**：跳过该任务 | 1 | 重试时把该任务标记 `FAILED` 并继续后面的任务 |
-| LLM 调用超时 / 连接错误（HTTP 429、5xx） | 是 | `settings.llm_max_retries`（默认 2，不含首次） | 每次之间 `time.sleep(1.5 * attempt)`，退避 |
+| LLM 调用超时 / 连接错误（HTTP 429、5xx） | 是 | `settings.llm_max_retries`（默认 2，不含首次） | 每次之间 `time.sleep(1.5 * attempt)`，退避。**只有这一层重试**：`OpenAI(..., max_retries=0)`，见下方"为什么钉死 SDK 重试" |
 | LLM 返回的 `tool_calls` 参数不是合法 JSON | 是 | 2 | 第 1 次重试时把"你的 JSON 不合法"附回 Prompt |
 | 报告校验发现编造数字 | 是，**重写报告** | 1 | 附上 `ValidationResult.issues` 让模型改；再不过 → `SUCCESS_WITH_WARNINGS` |
 | 整条工作流的工具调用总数 | — | `TOOL_CALL_LIMIT = 20` | 超过就 `FAILED`（防模型/重试组合成死循环） |
 | 整条工作流总时长 | — | `max_workflow_seconds = 180` | 轮询接口按 `heartbeat_at` 判定超时并落 `FAILED` |
 
 `WorkflowState.retry_count` 记录**所有**重试次数之和，上限 6；达到上限后不再重试任何东西，直接进入收尾流程。
+
+**为什么钉死 SDK 重试（`max_retries=0`，D-25）。** `OpenAI(...)` 客户端自己也会重试，
+外面这个循环也会重试，两层是**叠乘**的：传 `settings.llm_max_retries`（默认 2）时，
+单次 `chat()` 最坏 `3 × 3 = 9` 次 HTTP，再叠上 SDK 的指数退避
+（`min(0.5 * 2^n, 8.0)` 秒，且尊重服务端的 `Retry-After`，最长 60 秒）约 9 分钟；
+一条工作流最多 5 次 `chat()`（planner 3 + 报告 2）→ 最坏 45 次请求、约 45 分钟。
+
+而 `max_workflow_seconds`（默认 180）只在阶段与任务**之间**检查
+（`orchestrator` 的 `_stop_reason`），**打断不了一次正在阻塞的 HTTP 调用** ——
+也就是说这套叠乘能让实际耗时远超自己的预算。所以把 SDK 那层钉成 0，只留外层：
+单次 `chat()` 最坏 `1 + llm_max_retries` 次 HTTP（默认 3 次），退避 1.5s / 3.0s，约 3 分钟。
+
+这条曾经是**文档与代码不一致**：D4 起本表就写着"重试 `llm_max_retries`"，
+而代码传的是 `max_retries=settings.llm_max_retries`（实际重试 8 次）。
+D6 收口阶段由 Lead 拍板收敛，记在 `docs/DECISIONS.md` D-25；
+`tests/test_llm_client.py` 里有两条用例专门盯住这个常量（配置改成 5 也不许传给 SDK）。
 
 ### 5.4 失败后的整体收尾（"部分成功"怎么表达）
 
