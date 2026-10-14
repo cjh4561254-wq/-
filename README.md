@@ -4,11 +4,12 @@
 由主控智能体调度专业子智能体，用真实的 Python 工具完成统计计算与图表生成，
 并校验报告中的关键数字。
 
-> **项目状态：第 7 天 / 共 7 天 —— 全链路已跑通并全部提交（HEAD `a677425`）。**
+> **项目状态：第 7 天 / 共 7 天 —— 全链路已跑通并全部提交。**
+> （当前提交用 `git log -1` 查；这里刻意不写死 hash —— 写死的那一行每提交一次就变成假话。）
 > 已完成：应用骨架与统一错误契约、**文件上传（CSV / xlsx）与数据画像**、
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
-> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**，594 项自动化测试。
+> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**，646 项自动化测试。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
 > 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
@@ -151,7 +152,7 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**594 passed**（593 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**646 passed**（645 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
@@ -223,7 +224,7 @@ ai-data-analyst-agent/
 ├─ scripts/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
 │  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完九段、自己关掉
-├─ tests/                      # 594 项（27 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+├─ tests/                      # 646 项（30 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
 │  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）
