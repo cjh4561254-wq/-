@@ -64,6 +64,17 @@ LLM_PLANNED_NOTICE = (
     "但报告正文是模板自动汇总的，以下结论仍为工具结果的直接汇总"
 )
 
+# 模型真的写了正文时用的诚实标记。**第三个常量不是多余的**：
+# `LLM_PLANNED_NOTICE` 里有半句话是"报告正文是模板自动汇总的"。D5 加了
+# `report_llm.write()` 之后，模型可能真的写了正文 —— 这时再复用那句话，
+# 就是 D-22 记的那类"数字全对、陈述是假的"（首段说正文是模板写的，
+# 而用户眼前这几段明明不是模板写的）。三句话互斥、必须逐字为真，
+# 所以三句话都是常量，且要被测试逐字断言。
+LLM_WROTE_NOTICE = (
+    "本次报告正文由大模型根据工具结果撰写，"
+    "其中所有数字均来自下方引用的工具调用，可逐条核对"
+)
+
 # 表格最多复制多少行。20 行足够在网页上读完，再多就变成"把工具输出原样倒出来"。
 _MAX_TABLE_ROWS = 20
 
@@ -94,7 +105,76 @@ def build_report(
 def _build(
     state: WorkflowState, validation: ValidationResult | None = None
 ) -> FinalReport:
-    """正常路径：每个成功的任务一段，外加数据质量说明。"""
+    """正常路径：优先让模型写正文，失败就退回模板（模板路径的实现在下面）。"""
+    if should_try_llm_report(state):
+        # import 写在函数里：`app.llm.client` 会 import openai，放模块顶层的话
+        # "openai 装不上/版本不对"会让整个 validation 模块 import 失败 ——
+        # 连完全不碰模型的模板报告一起挂掉（与 `planner._ask_model` 同一个理由）。
+        from app.agents import report_llm
+
+        try:
+            report = report_llm.write(state, validation)
+            if report is not None:
+                return report
+        except Exception:
+            # `report_llm.write` 自己已经兜了一层（契约是恒不抛异常），真到了这里
+            # 说明它内部有 bug。模型这条路出问题**不是分析失败**：退回模板，
+            # 用户照样拿到一份数字齐全的报告（§5.4 第 3 条）。
+            logger.exception("模型撰写报告失败（未预期的错误），改用模板报告")
+
+    return _template_report(state)
+
+
+def should_try_llm_report(state: WorkflowState) -> bool:
+    """这次要不要让模型写报告正文。**两个条件缺一不可。**
+
+    ① `plan.source == "llm"`：规则兜底计划意味着模型要么没配、要么调失败了。
+       这种情况下再去调模型写报告是自相矛盾的 —— 报告正文说"由大模型撰写"，
+       而这次分析从头到尾没用上模型。而且它会把"没配 key"的演示路径变成每次提问
+       都白等一次超时。
+    ② `llm_is_configured()`：配置齐了才调。光看 `plan.source` 不够 ——
+       测试和演示里常常是"配置被清掉、但状态是手工造出来的"，真发一次请求
+       就是真的花钱、真的等超时。
+
+    这个判断放在 `validation.py`（而不是 Orchestrator）是因为有一条 AST 测试钉着
+    "Orchestrator 不许 import `app.llm`"：状态机不该知道模型怎么调。
+    """
+    if state.plan is None or state.plan.source != "llm":
+        return False
+
+    from app.agents.planner import llm_is_configured
+
+    return llm_is_configured()
+
+
+def should_rewrite_report(state: WorkflowState) -> bool:
+    """要不要让模型**重写一版**报告（§5.3 第 6 行：发现编造数字 → 重写 1 次）。
+
+    两个条件：① 现在这份报告是模型写的；② 校验确实在正文里查出了编造的数字。
+
+    **"只给一次"不在这里判断**，而是由调用方保证：Orchestrator 的 validation 阶段
+    只有一条 `if should_rewrite_report(state):`，不是循环 —— 重写完之后无论结果如何
+    都直接 `_finish`（`tests/test_report_llm.py` 里有用例钉住"整条工作流只写两次报告"）。
+    这里刻意**不**用"报告里还留着上一版被点名的数字吗"这类内容判断来兼职数次数：
+    那是拿一个近似值当计数器用，模型换个说法绕过去就会失效。
+    """
+    report = state.report
+    validation = state.validation
+    if report is None or validation is None:
+        return False
+    if not should_try_llm_report(state):
+        # 报告是模板写的：模板的数字由代码生成，重写它没有意义（模板里也不会有
+        # 编造的数字）。这一条同时挡住了"模型没配、但状态被手工造成 llm"的情况。
+        return False
+
+    return any(
+        issue.code == "UNSUPPORTED_NUMBER" and issue.severity == "error"
+        for issue in validation.issues
+    )
+
+
+def _template_report(state: WorkflowState) -> FinalReport:
+    """模板路径：每个成功的任务一段，外加数据质量说明。**零 LLM。**"""
     sections: list[ReportSection] = []
     citations: list[str] = []
 
@@ -323,18 +403,37 @@ def _summarize_rows(data: dict[str, Any]) -> str:
     return f"排在最前面的一组是 " + "，".join(parts) + f"（共 {len(rows)} 行结果）。"
 
 
-def _summary(state: WorkflowState, citations: list[str]) -> str:
+def _summary(
+    state: WorkflowState, citations: list[str], model_wrote: bool = False
+) -> str:
     """总述：第一段是**逐字**的诚实标记，第二段是这次跑成了什么。
 
-    第一段用哪句取决于"模型到底参与了哪一步"（`_llm_used` 的口径）：
-    全程没模型 → TEMPLATE_NOTICE；模型参与了规划 → LLM_PLANNED_NOTICE。
-    两句话都是常量，因为**这句话是要被测试逐字断言的**（验收标准 ① ② 都钉了它）。
+    第一段用哪句取决于"模型到底参与了哪一步"，**三选一**：
+
+    | 这次发生了什么 | 首段 |
+    |---|---|
+    | 全程没有模型 | `TEMPLATE_NOTICE` |
+    | 模型只做了规划，正文是模板汇总的 | `LLM_PLANNED_NOTICE` |
+    | 正文是模型写的 | `LLM_WROTE_NOTICE` |
+
+    三句话都是常量，因为**这句话是要被测试逐字断言的**（验收标准 ① ② 都钉了它）。
+
+    `model_wrote` 由调用方给，而不是在这里从 `state` 猜：只有 `report_llm._assemble`
+    知道"这几段是模型写的"，而 `_llm_used` 只知道"计划是模型给的"。两件事必须分开 ——
+    模型规划成功但写报告失败时，正文仍然是模板写的，此时首段必须是
+    `LLM_PLANNED_NOTICE`（"参与规划、正文是模板"），不能因为 `llm_used=True`
+    就说"正文由大模型撰写"。
     """
     tasks = state.plan.tasks if state.plan else []
     failed = [task for task in tasks if task.status.value == "FAILED"]
     skipped = [task for task in tasks if task.status.value == "SKIPPED"]
 
-    lines = [LLM_PLANNED_NOTICE if _llm_used(state) else TEMPLATE_NOTICE]
+    if model_wrote:
+        notice = LLM_WROTE_NOTICE
+    else:
+        notice = LLM_PLANNED_NOTICE if _llm_used(state) else TEMPLATE_NOTICE
+
+    lines = [notice]
     lines.append(
         f"针对问题「{state.question}」，系统一共规划了 {len(tasks)} 个分析任务，"
         f"成功 {len(citations)} 个。"

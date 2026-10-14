@@ -32,7 +32,7 @@ from app import config
 from app.agents.analysis import run_task
 from app.agents.charts import render_chart
 from app.agents.planner import plan as plan_tasks
-from app.agents.validation import build_report, validate
+from app.agents.validation import build_report, should_rewrite_report, validate
 from app.data.profiler import build_profile
 from app.data.store import store
 from app.errors import AppError
@@ -143,8 +143,25 @@ def run_workflow(state: WorkflowState) -> None:
     # `validate()` 与 `build_report()` 一样恒不抛异常：校验本身出错也只是
     # 一条 issue，不该让一条已经算完的工作流变成 FAILED。
     state.validation = validate(state)
-    # 最终状态仍然只看"有没有失败的任务 / 有没有出报告"。**校验发现的问题不在这里降级**：
-    # 那需要先定义"哪种 severity 才算数"，是另一个任务的范围（§5.4 第 5 条）。
+
+    # 发现编造的数字 → 给模型**一次**重写机会（§5.3 第 6 行 / §3.5.2）。
+    # "要不要重写"问 `validation.py`，因为那要知道模型怎么调，而 Orchestrator
+    # 不许 import `app.llm`（有一条 AST 测试盯着）。
+    # **`if` 而不是 `while`，这就是"只给一次"的实现**：反复重写会把模型额度烧光，
+    # 而且不收敛的报告多写一遍通常还是不收敛。
+    #
+    # 重写轮也写不出来（超时、JSON 坏、还是编数字）时，`build_report` 内部会退回
+    # **模板报告**：模板的每个数字都由代码从 `state.results` 生成，不存在编造，
+    # 用户拿到的仍是一份诚实的报告 —— 只是首段会如实改成"模型参与了规划、
+    # 正文是模板汇总的"。宁可少一段模型的解释，也不留一个查不出出处的数字。
+    if should_rewrite_report(state):
+        state.report = build_report(state, state.validation)
+        state.validation = validate(state)
+        logger.info("工作流 %s 的模型报告已重写一轮", state.workflow_id)
+
+    # 最终状态现在会多看一条：校验在报告里查出的 error 级问题（编造的数字、
+    # 不存在的列名）会让状态从 `SUCCESS` 降级为 `SUCCESS_WITH_WARNINGS`。
+    # **只降级、绝不 FAILED** —— 数字都算出来了，报告里有东西对不上不等于分析失败。
     _finish(state, _final_status(state))
 
 
@@ -294,11 +311,25 @@ def _result_for(state: WorkflowState, task_id: str) -> ToolResult | None:
 def _final_status(state: WorkflowState) -> WorkflowStatus:
     """最终状态：全绿才是 `SUCCESS`，有任何可说的东西就 `SUCCESS_WITH_WARNINGS`。
 
-    三种"有话说"：① 有任务失败；② 有任务被跳过（依赖失败）；③ 报告没出来
-    （`state.error` 记着原因）。§5.4 第 5 条只写了第一种，另外两种是同一个道理的延伸 ——
-    状态里说 `SUCCESS`，报告里却写着"有 2 项没跑出来"，那是自相矛盾。
+    四种"有话说"：① 有任务失败；② 有任务被跳过（依赖失败）；③ 报告没出来
+    （`state.error` 记着原因）；④ 校验在报告里查出了 error 级问题（编造的数字、
+    不存在的列名）。§5.4 第 5 条只写了第一种，其余三种是同一个道理的延伸 ——
+    状态里说 `SUCCESS`，报告里却写着"有 2 项没跑出来"或"这个数字没有出处"，
+    那是自相矛盾。用户看状态是为了决定"这份报告能不能直接用"，所以只要报告
+    本身有硬伤，状态就不能是干净的 `SUCCESS`。
+
+    **降级不等于失败**：校验查出问题只是说明"报告里有东西对不上"，数字其实
+    都算出来了（`state.results` 是完整的），用户翻一眼表格就能自己判断。
+    把这种情况判成 `FAILED` 会把已经拿到手的结果一起扔掉 —— 所以这里四条
+    分支返回的都只有 `SUCCESS_WITH_WARNINGS` 这一个值，**没有任何一条通往 FAILED**。
     """
     if state.report is None or state.error is not None:
+        return WorkflowStatus.SUCCESS_WITH_WARNINGS
+    # ④ 校验结果：只读 `passed` 这个结论，**不在这里重算**"什么算不通过"。
+    # `ValidationResult.passed` 的定义就是"没有 error 级 issue"（severity 是 warning
+    # 的那些不该影响状态：0 行的结果、短报告都还是诚实报告）。判定口径只留一处，
+    # 将来改口径不会出现"校验说通过了、状态说没通过"这种两头对不上的情况。
+    if state.validation is not None and not state.validation.passed:
         return WorkflowStatus.SUCCESS_WITH_WARNINGS
     if any(not result.ok for result in state.results):
         return WorkflowStatus.SUCCESS_WITH_WARNINGS
