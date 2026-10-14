@@ -307,17 +307,33 @@ def test_a2_non_terminal_states_are_never_archived(tmp_path):
         assert store.count() == 0 if store.path.exists() else True
 
 
-def test_a2_terminal_state_is_archived_and_finished_at_falls_back(tmp_path):
-    """A2 补（变异 2 的红线）：终态归档；finished_at 为 None 时兜底成 archived_at。"""
+def test_a2_terminal_state_is_archived_when_it_has_a_real_finished_at(tmp_path):
+    """A2：带真实 `finished_at` 的终态**确实入库**，三种终态都被归档。
+
+    ⚠️ 这条用例在 P2 修复时改过，改的原因值得写下来：
+
+    它原本叫 `test_a2_terminal_state_is_archived_and_finished_at_falls_back`，做法是
+    把 `state.finished_at` **手工置成 None** 再断言"兜底成 archived_at"。
+    问题是**产品代码没有任何一条路径能产出这种状态**（`finished_at` 的 4 个写入点
+    全在把状态收成终态的同一个代码块里），所以这条用例测的是一个现实中不存在的
+    输入，而它的存在**挡住了 P2 修复**：修复（终态但无 finished_at → 拒收）
+    落地时它立刻变红，我一度以为"验收用例与新行为冲突，得改回去"。
+
+    正确的读法是：**这条用例原本钉住的是"对一个不可能出现的输入如何兜底"**，
+    而 P2 的结论是"这个输入应当被拒收"。所以现在拆成两条：
+    这条钉"正常终态能入库"，拒收行为由 `tests/test_history_archive.py::
+    test_a_terminal_state_without_finished_at_is_refused_not_given_a_fake_time` 钉。
+    """
     for status in (WorkflowStatus.SUCCESS, WorkflowStatus.SUCCESS_WITH_WARNINGS,
                    WorkflowStatus.FAILED):
         state = _make_state(status, with_report=(status is not WorkflowStatus.FAILED))
-        state.finished_at = None
+        assert state.finished_at is not None, "夹具要造的是正常终态"
+
         assert archive.archive_if_terminal(state) is True, status
+
         rec = get_history_store().get(state.workflow_id)
         assert rec is not None
-        assert rec.finished_at is not None, "finished_at 必须有兜底，否则掉到列表最后"
-        assert rec.finished_at == rec.archived_at
+        assert rec.finished_at == state.finished_at, "入库的时间必须是 state 上那个真时间"
         registry.clear()
         reset_history_store_cache()
 

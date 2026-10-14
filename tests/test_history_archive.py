@@ -243,20 +243,37 @@ def test_has_report_and_llm_used_come_from_the_report_not_the_flags() -> None:
     assert record.report_text is None
 
 
-def test_finished_at_falls_back_to_archived_at() -> None:
-    """终态但 `finished_at` 为空时用 `archived_at` 兜底，**不许留 None**。
+def test_a_terminal_state_without_finished_at_is_refused_not_given_a_fake_time() -> None:
+    """终态但 `finished_at` 为空 → **拒绝归档**，而不是拿 `archived_at` 顶上。
 
-    历史列表按 `finished_at` 排序，留一个 NULL 会让这条记录掉到列表最后 ——
-    用户看到的现象是"我刚跑完的那次不见了"，而库里其实有记录。
+    ## 这条用例为什么从"兜底"改成了"拒收"（P2 修复）
+
+    原实现是 `finished_at = state.finished_at if ... else archived_at`，本用例原本
+    断言"兜底后不许留 None"。那样做的理由是"留 NULL 会掉到列表最后，用户以为记录
+    不见了"。但这个理由建立在一个**永远不会发生**的假设上 —— 修 P2 时实测：全仓
+    `finished_at` 的写入点只有 4 处（`app/agents/orchestrator.py:445` / `:459`、
+    `app/api/routes_workflows.py:518`、`app/core/background.py:76`），
+    每一处都在把状态收成终态的同一个代码块里，**没有任何一条路径能产出
+    "终态 + finished_at 为空"**。于是那句兜底的真实效果只有三条：
+
+    1. `app/data/history.py:155` 的 `ORDER BY finished_at IS NULL, ...` 里
+       "NULL 排最后"分支变成死代码 —— 无害，但注释在描述一件不会发生的事。
+    2. 一旦真的出现畸形状态（将来有人加了一条写终态却忘了写时间的路径），
+       它会被记成"**刚刚完成**"，且排在历史列表最前面，看起来最新。
+    3. 用户查历史时会看到一条时间失真的记录，而没有任何地方提示它失真。
+
+    三个后果里只有一个是"用户以为记录不见了"，且它需要先有畸形状态才谈得上。
+    换成拒收之后，**库里的每一条时间都是真的**，代价是畸形记录不入库
+    （它在内存里仍然是终态，只是进不了历史列表）。对一个自称"历史归档"的功能，
+    这个交换是划算的。
     """
     state = _state(status=WorkflowStatus.SUCCESS, finished_at=None)
 
-    assert archive.archive_if_terminal(state) is True
+    assert archive.archive_if_terminal(state) is False
 
-    record = _store().get(WORKFLOW_ID)
-    assert record is not None
-    assert record.finished_at is not None
-    assert record.finished_at == record.archived_at
+    # 不仅返回 False，而且**一个字都没写进库**。
+    assert _store().get(WORKFLOW_ID) is None
+    assert _store().count() == 0
 
 
 def test_archiving_does_not_touch_the_state() -> None:

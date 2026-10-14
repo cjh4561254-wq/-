@@ -75,19 +75,53 @@ def build_record(state: WorkflowState) -> HistoryRecord:
 def archive_if_terminal(state: WorkflowState) -> bool:
     """终态才归档；返回"这次到底写没写进去"。
 
-    四条规则（顺序就是优先级）：
+    五条规则（顺序就是优先级）：
 
     1. **不是终态 → 立刻返回 False，一个字都不写库。** 正在跑的工作流没有归档价值：
        它下一秒就可能变成另一个样子，写进去只会让历史列表里出现"还在跑"的记录。
-    2. 归档库关闭（`DB_PATH` 为空，`get_history_store()` 返回 None）→ 返回 False，
+    2. **`finished_at` 为空 → 返回 False，同样一个字都不写库。** 这是 P2 修复
+       （详见下面那段"为什么终态还要看 finished_at"）。
+    3. 归档库关闭（`DB_PATH` 为空，`get_history_store()` 返回 None）→ 返回 False，
        **这不是错误**：用户主动关掉了这个功能，生产（`DB_PATH` 有值）时才写。
-    3. 终态 → `build_record()` + `store.archive()`，成功返回 True。
-    4. **任何异常都不许往外抛**（见模块 docstring）→ warning + False。
+    4. 终态 → `build_record()` + `store.archive()`，成功返回 True。
+    5. **任何异常都不许往外抛**（见模块 docstring）→ warning + False。
 
     调用点在**收口处**（orchestrator 的 `finally`、轮询接口的超时分支），
     而不是每个 `return` 前面各写一遍 —— 分支会漏，收口不会。
+
+    ## 为什么终态还要看 `finished_at`（P2）
+
+    本地验收发现：`build_record()` 会把 `finished_at=None` 兜底成 `archived_at`，
+    于是库里**永远不出现 NULL 的 `finished_at`**。这带来两个后果：
+
+    1. `HistoryStore` 那条 `ORDER BY finished_at IS NULL, finished_at DESC` 的
+       "NULL 排最后"分支在生产路径上是**死代码** —— 没有坏处，但它是"事实被注释
+       说成另一回事"的典型：注释描述的行为没有任何一条路径能触发。
+    2. 真正有坏处的是这一条：万一出现 `status` 已终态而 `finished_at` 还为空的畸形
+       状态，它会被归档成"**刚刚完成**"（`archived_at`），时间与真相不符；
+       更糟的是它落进历史列表最前面，看起来像最新的一条。
+
+    正常产品路径产不出这种状态（实测全仓的 `finished_at` 写入点有 4 处，
+    都在把状态收成终态的同一个代码块里；见 `docs/DECISIONS.md` D-26），
+    所以这是**防御性**修复，不是已发生故障的修补。
+
+    代价要写清楚：`finished_at` 为空的终态记录现在**根本不入库**，
+    于是 `build_record()` 里那句兜底彻底变成"不可达"。
+    **代价是"少一条记录"，换来的是"库里的每一条时间都是真的"** ——
+    对一个自称"历史归档"的功能，这个交换是划算的；而且丢的是畸形数据，
+    它在内存里仍然以终态存在，只是进不了历史列表。
     """
     if state.status not in TERMINAL_STATUSES:
+        return False
+
+    # `finished_at is None` + 终态 = 畸形状态（全仓没有一条代码路径能产生它）。
+    # 宁可这条记录不进库，也不要给库里塞一个假时间。
+    if state.finished_at is None:
+        logger.warning(
+            "工作流 %s 已是终态 %s 但没有 finished_at，跳过归档（不写入假时间）",
+            state.workflow_id,
+            state.status.value,
+        )
         return False
 
     try:
