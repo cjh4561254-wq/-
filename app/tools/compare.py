@@ -57,6 +57,15 @@ def correlation(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
     `columns` 不传时用**全部数值列**。返回 `matrix`（行列顺序与 `columns` 一致，方便画热力图）
     和 `pairs`（只列上三角的每一对，方便模型直接说"销售额和利润的相关系数是 0.9872"）。
     只算 Pearson：它是这个项目里唯一一种相关系数，多给几种（spearman/kendall）只会让模型挑花眼。
+
+    `pair_count` 与 `valid_pair_count` 是**显式给出的计数**，不是让调用方去数 `pairs`：
+    报告里"共比较了 10 对"这句话里的 10，此前只能靠 `len(pairs)` 这个隐式结构计数
+    得到，而校验层的隐式计数走的是"某个键有值的条数"——`r` 恰好为 float `0.0` 时
+    （真的可能发生：两列完全无关）那个键是**假值**，计数就会比 `len(pairs)` 少，
+    于是模板自己写的那句诚实的话会被校验层判成"编造的数字"。
+    把计数变成工具输出里的**真实字段**，这个巧合就不存在了。
+    `valid_pair_count` 是 `pairs` 里 `r is not None` 的条数（某列全空时 `r` 是 None），
+    也就是 `_summarize_correlation` 说的"共比较了 N 对"里的那个 N。
     """
     columns = params.get("columns")
     if columns is None:
@@ -84,7 +93,22 @@ def correlation(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    return to_jsonable({"columns": columns, "matrix": matrix, "pairs": pairs})
+    # 上三角的每一对都进 `pairs`（包括 r 为 None 的），所以 `len(pairs)` 就是"一共
+    # 比较了多少对"；`valid_pair_count` 是其中真的算出相关系数的那些。
+    # 两个数都显式给出来，调用方不用去数列表长度 —— 数出来的长度在跨层传递时
+    # 会因为"假值算不算有值"的口径差异而变（见 docstring）。
+    pair_count = len(pairs)
+    valid_pair_count = sum(1 for pair in pairs if pair["r"] is not None)
+
+    return to_jsonable(
+        {
+            "columns": columns,
+            "matrix": matrix,
+            "pairs": pairs,
+            "pair_count": pair_count,
+            "valid_pair_count": valid_pair_count,
+        }
+    )
 
 
 def check_correlation(params: dict[str, Any], df: pd.DataFrame) -> str | None:

@@ -166,17 +166,26 @@ def test_real_report_passes_validation(basket):
     assert result.checked_numbers > 0, "得真的核对过数字，不能是空转"
 
 
-def test_checked_numbers_counts_the_numbers_in_the_sections(basket):
-    """`checked_numbers` 数的是**真的被核对过**的数字个数。
+def test_checked_numbers_counts_every_scanned_text(basket):
+    """`checked_numbers` 数的是**真的被核对过**的数字个数，范围是报告的全部文本。
 
-    它必须大于 0（说明确实扫了），且不小于报告里"看起来像数字"的 token 数 ——
-    用 `_NUMBER_RE` 独立数一遍做交叉验证。这条能抓住"正则写错导致一个数字都没抽到"：
+    它必须大于 0（说明确实扫了），且等于独立用 `_NUMBER_RE` 数一遍的结果 ——
+    用正则独立数一遍做交叉验证。这条能抓住"正则写错导致一个数字都没抽到"：
     那种情况下 `checked_numbers` 是 0、`passed` 还是 True，整条防线形同虚设。
+
+    ⚠️ 扫描范围是**三处**：`summary`、每个 `sections[].text`、`data_quality_notes`
+    （I-3，task-26）。此用例原来只数 `sections`，`checked_numbers` 却更大 ——
+    那正是 I-3 的现场：summary 与质量提示**根本不在扫描范围内**，
+    往里面编数字可以随便过。
     """
     import re
 
     state = _run("各地区的销售额最多、缺失值情况和趋势关系对比")
-    text = " ".join(section.text for section in state.report.sections)
+    report = state.report
+    texts = [report.summary or ""]
+    texts.extend(section.text for section in report.sections)
+    texts.extend(report.data_quality_notes or [])
+    text = " ".join(texts)
     independent_count = len(re.findall(r"(?<![A-Za-z_0-9])(-?\d[\d,]*(?:\.\d+)?)", text))
 
     result = validate(state)
@@ -295,6 +304,11 @@ def test_fabricated_number_is_caught(basket):
     这是 D5 验收标准里点名的那一条。它是"模型不许自己编数字"这条承诺的
     唯一执行者：规划阶段拦不住（模型完全可以在正文里写"利润率 47.5%"），
     执行阶段也拦不住（数字是报告层写的，不经过任何工具）。
+
+    ⚠️ 两个数字**都必须**被抓住。旧实现在这条上只有 `47.5` 红，
+    `3.2` 被放行 —— 因为允许集里有 `3.0`（某列统计量），而旧 `_same_number`
+    会 `round(3.2, 0) == round(3.0, 0)` → `3.0 == 3.0` 成立。
+    那是 I-4：编任何个位数，只要附近有任意一个整数就蒙混过关。
     """
     state = _run("分析不同地区的销售额")
 
@@ -358,8 +372,14 @@ def test_task_id_digits_are_not_treated_as_numbers(basket):
     它其实也在允许集里（`T1` 的 1 能对上"第一个任务"这种巧合），所以
     这条用例换个角度钉：**一段只有任务标记、没有数字的正文，核对数必须是 0**。
     正则前面那个负向后顾 `(?<![A-Za-z_0-9])` 就是为它写的。
+
+    ⚠️ I-3（task-26）之后扫描范围含 `summary` 与 `data_quality_notes`，
+    所以本用例**把这三处一起换掉**再断言，否则数到的是 summary/质量提示里的
+    真实数字（它们本来就该被核对），这条用例就测不到 `T1` 了。
     """
     state = _run("分析不同地区的销售额")
+    state.report.summary = "这一节的总结也没有任何数字。"
+    state.report.data_quality_notes = []
     state.report.sections = [
         ReportSection(heading="占位", text="这一节没有任何数字。（工具：x，任务：T1）", cites=["T1"])
     ]

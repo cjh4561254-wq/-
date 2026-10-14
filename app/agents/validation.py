@@ -188,12 +188,21 @@ def _template_report(state: WorkflowState) -> FinalReport:
         # 一个成功的任务都没有（全失败，或者计划是空的）。`FinalReport.sections`
         # 有 `min_length=1`，所以这里必须给一段 —— 而且要说清"为什么没有结果"，
         # 不能给一句空洞的"暂无数据"。
+        #
+        # ⚠️ 这一段里**不许出现计划任务数**（I-1，task-26 修）。原来写的是
+        # `f"计划里一共 {_planned_count(state)} 个任务，全部失败了。"`，而
+        # `_planned_count` 读的是 `state.plan.tasks` —— 计划**不在**任何 `ToolResult`
+        # 里，所以那个数字永远没有工具出处。实测后果：所有任务都失败时，
+        # 这句话让 `passed=False`、`unsupported=['2']`，**报告自己举报了自己**，
+        # 呈现在网页上就是"报告里有编造的数字"，而它其实是句真话。
+        # 选择"去掉数字"而不是"把计划计数并进允许集"：允许集是"数字必须有工具
+        # 出处"这条主线，为一句兜底文案开一个后门，等于让以后每个数字都能拿
+        # "计划里写着"来交差。失败原因在任务列表里逐条可见，比一个计数更有用。
         sections.append(
             ReportSection(
                 heading="没有可用的分析结果",
                 text=(
                     "这次分析没有产生任何成功的结果，因此没有可以汇总的数字。"
-                    f"计划里一共 {_planned_count(state)} 个任务，全部失败了。"
                     "每个任务失败的具体原因可以在任务列表里看到。"
                 ),
                 cites=[],
@@ -345,6 +354,13 @@ def _summarize_correlation(data: dict[str, Any]) -> str:
 
     排序也不归报告做（§3.5"不做计算"）—— 这里做的只是"挑一个已有的元素"，
     比较的是工具已经算好的 `r`，不产生任何新的数字。
+
+    "共比较了 N 对"里的 N **读工具给的 `valid_pair_count`**，不是 `len(valid)`：
+    `len(valid)` 是报告层自己数出来的隐式结构计数，而校验层的隐式计数会把
+    `r == 0.0` 的那一对算成"没有值"（0.0 是假值），两边定义不一致时模板自己
+    写的话会被判成编造。`valid_pair_count` 是 `app/tools/compare.py` 真实返回的
+    字段，两把尺子量的是同一个数。取不到该字段时（旧数据/别的调用方）退回
+    `len(valid)`，此时仍是"数出来的"，只是少了那层保险。
     """
     pairs = data.get("pairs")
     if not isinstance(pairs, list) or not pairs:
@@ -357,10 +373,14 @@ def _summarize_correlation(data: dict[str, Any]) -> str:
     # `r` 可能是负数，所以按绝对值取最大；并列时取先出现的那一对（max 的稳定性）。
     top = max(valid, key=lambda item: abs(_as_float(item.get("r"))))
 
+    counted = data.get("valid_pair_count")
+    if not isinstance(counted, int) or isinstance(counted, bool):
+        counted = len(valid)
+
     r = top.get("r")
     return (
         f"相关性最强的一对是 {top.get('x')} 与 {top.get('y')}，"
-        f"相关系数 {_num(r)}（共比较了 {len(valid)} 对）。"
+        f"相关系数 {_num(r)}（共比较了 {counted} 对）。"
     )
 
 
@@ -434,9 +454,16 @@ def _summary(
         notice = LLM_PLANNED_NOTICE if _llm_used(state) else TEMPLATE_NOTICE
 
     lines = [notice]
+    # ⚠️ 这里**只说成功几个，不说规划了几个**（I-1b，task-26 修）。
+    # `{len(tasks)}` 读的是 `state.plan.tasks` —— 计划不在任何 `ToolResult` 里，
+    # 所以那个数字永远没有工具出处。它此前一直没被抓住，纯粹因为 `summary`
+    # 不在 `_check_numbers` 的扫描范围内；扫描范围一扩（I-3），它立刻变成
+    # `UNSUPPORTED_NUMBER`。这不是"校验太严"，是这句话本来就违反
+    # "报告里每个数字都要有工具出处"这条主线 —— 修的是句子，不是尺子。
+    # 而"成功 N 个"的 N 合法：它有出处，等于成功结果条数（`_collect_numbers`
+    # 那个"某个键有值的条数"结构计数）。
     lines.append(
-        f"针对问题「{state.question}」，系统一共规划了 {len(tasks)} 个分析任务，"
-        f"成功 {len(citations)} 个。"
+        f"针对问题「{state.question}」，系统成功完成了 {len(citations)} 个分析任务。"
     )
 
     if failed or skipped:
@@ -607,12 +634,35 @@ def _clip(text: str, limit: int) -> str:
 # 反过来说，编造的数字（比如"利润率 47.5%"）也不会因为这条容差蒙混过关：
 # 它得先有一个真的数据点落在它附近才行。
 #
-# ## 为什么不校验 `report.summary`
+# ## 为什么**必须**校验 `report.summary` 与 `data_quality_notes`
 #
-# 契约（架构文档 §3.5.1 与任务书）点名的是 `sections[].text`。这也有道理：summary
-# 里的数字是"规划了几个任务、成功几个"，属于**计划层面**的计数，不来自任何一次
-# 工具调用；把它一起校验就得为它单独造一套允许集，反而模糊了"数字必须有工具出处"
-# 这条主线。sections 才是结论所在。
+# D5 当时只校验 `sections[].text`，并在上一版注释里给了理由："summary 里的数字是
+# '规划了几个任务、成功几个'，属于计划层面的计数，不来自任何一次工具调用"。
+# **那个理由只对当时的模板成立，对现在的代码是假的**（D-22 第 3 条：注释里的前提
+# 一样会骗人）。实测（`.tmp/probe_i3_scan_scope.py`）：
+#   - 往 `summary` 里注入"退货率高达 88.8%"、往 `data_quality_notes` 里注入
+#     "异常值占比 77.7%"，`passed=True`、`unsupported=[]` —— **两个字面编造的数字
+#     都放行了**，因为它们一个字都不在 `sections` 里；
+#   - 更糟的是 `summary` 并**不**只装计划计数：它装着 `TEMPLATE_NOTICE` /
+#     `LLM_PLANNED_NOTICE` / `LLM_WROTE_NOTICE` 三句诚实标记。两件事混在同一段文本里，
+#     于是"这段不用查"就变成了"这段里编的数字也不用查"。
+#   - `_summary()` 里 `f"...系统一共规划了 {len(tasks)} 个分析任务，成功 {len(citations)} 个"`
+#     之所以一直没被抓住，只是因为它落在没被扫的字段里。**一旦扫描范围扩到 summary，
+#     它立刻会变成一条 `UNSUPPORTED_NUMBER`** —— 这就是为什么 I-1 必须与本次同批修：
+#     只扩范围不修 I-1，等于让模板报告自己抓自己。
+#
+# 结论：**三处文本（summary / sections[].text / data_quality_notes）全部扫描**。
+# 校验层要回答的是"报告里每个数字有没有出处"，与它印在哪一段无关。
+#
+# 另外两处随之必须对齐（两把尺子必须同时同范围，否则会出现"数字查了、列名没查"
+# 的半吊子状态）：
+#   - `_check_columns` 同样扫这三处；
+#   - 允许集除了 `state.results` 还要收 `state.profile` —— `_quality_notes` 里的
+#     "有 5 列存在缺失值"、"有 8 行完全重复的记录"全部取自画像，而画像此前
+#     **完全不在允许集里**。实测（同一份 probe，真实 sales.csv）：只把范围扩到
+#     `data_quality_notes` 而不把画像算进出处，会当场多出 2 条红线，
+#     未找到出处的数字是 `['8','2160']` —— 8 是真实重复行数，2160 是
+#     `app/data/profiler.py:86-92` 里 `row_count - duplicate_row_count` 的展示层算术。
 # ---------------------------------------------------------------------------
 
 # 报告"短得像没写完"的判据（正文总字符数 = summary + 所有 section）。
@@ -821,10 +871,28 @@ def _check_charts(state: WorkflowState) -> list[ValidationIssue]:
     return issues
 
 
+def _scanned_texts(report: Any) -> list[tuple[str, str | None]]:
+    """报告里**所有**要扫数字与列名的文本，连同它所属的 task_id。
+
+    三处一个都不能少：`summary`、每个 `sections[].text`、`data_quality_notes`。
+    D5 只扫中间那处，等于给前两处开了两个可以随便编数字的口子（见上面注释里的实测）。
+
+    返回 `(文本, 归属 task_id)`：段落能追到 `section.cites[0]`，而 summary 与
+    quality notes 不属于任何单个任务，给 `None`。
+    """
+    texts: list[tuple[str, str | None]] = [(report.summary or "", None)]
+    for section in report.sections:
+        texts.append((section.text or "", section.cites[0] if section.cites else None))
+    for note in report.data_quality_notes or []:
+        texts.append((note or "", None))
+    return texts
+
+
 def _check_numbers(state: WorkflowState) -> tuple[int, list[str], list[ValidationIssue]]:
     """核心检查：报告正文里每个数字，都要能在工具结果里找到出处。
 
     返回 `(核对过的数字个数, 找不到出处的原始写法, 问题列表)`。
+    扫描范围是 `_scanned_texts` 给的三处文本 —— **不只是 `sections[].text`**。
     """
     report = state.report
     if report is None:
@@ -832,13 +900,12 @@ def _check_numbers(state: WorkflowState) -> tuple[int, list[str], list[Validatio
         # 这里不重复报。
         return 0, [], []
 
-    allowed = _allowed_numbers(state.results)
+    allowed = _allowed_numbers(state)
     checked = 0
     unsupported: list[str] = []
     issues: list[ValidationIssue] = []
 
-    for section in report.sections:
-        text = section.text or ""
+    for text, task_id in _scanned_texts(report):
         for raw in _NUMBER_RE.findall(text):
             value = _to_float(raw)
             if value is None:
@@ -856,25 +923,39 @@ def _check_numbers(state: WorkflowState) -> tuple[int, list[str], list[Validatio
                         f"报告里出现了 {raw}，但所有工具结果里都找不到这个数字的出处。"
                         f"这一段是：「{_clip(text, 60)}」"
                     ),
-                    task_id=section.cites[0] if section.cites else None,
+                    task_id=task_id,
                 )
             )
     return checked, unsupported, issues
 
 
-def _allowed_numbers(results: list[ToolResult]) -> set[float]:
+def _allowed_numbers(state: WorkflowState) -> set[float]:
     """把"允许出现在报告里的数字"收集成一个集合。
 
-    三类来源，缺一不可：
+    四类来源，缺一不可：
     1. `data` 里的每个数值（工具算出来的结果本身）；
     2. 字符串里嵌着的数字（期间标签 `2024-01`）；
     3. **结构计数** —— 每个 list/dict 的长度，以及"某个键有值的条数"。
        报告里的"共 6 行结果"= `len(rows)`、"共 5 列有缺失值"= `null_count` 有值的
        列数，都是这一类。它们不是算出来的，但也没有别的出处。
+    4. **画像**（`state.profile`）—— `data_quality_notes` 里
+       "有 5 列存在缺失值"、"有 8 行完全重复的记录"取自画像字段，
+       而画像不是 `ToolResult`，第 1–3 类都收不到它。少了这一类，
+       扩了扫描范围之后诚实的质量提示会立刻被自己抓成编造。
+
+    ⚠️ 结构计数（第 3 类）与工具字段的**定义差异**是已知的坑：它把
+    `r == 0.0` 这样的假值算成"没有值"。所以凡是报告要说的计数，
+    优先用工具**显式返回的计数字段**（例 `correlation` 的 `valid_pair_count`），
+    别依赖隐式计数 —— 见 `_summarize_correlation` 的注释。
     """
     allowed: set[float] = set()
-    for result in results:
+    for result in state.results:
         _collect_numbers(result.data, allowed)
+    profile = state.profile
+    if profile is not None:
+        # `model_dump()` 之后走同一条递归收集：画像字段名与语义一一对应，
+        # 没必要为它另写一套规则（另写一套 = 两把尺子会慢慢不一致）。
+        _collect_numbers(profile.model_dump(mode="json"), allowed)
     return allowed
 
 
@@ -924,23 +1005,104 @@ def _is_supported(value: float, allowed: set[float]) -> bool:
 def _same_number(report_value: float, data_value: float) -> bool:
     """两个数算不算"同一个事实的两种写法"。
 
-    三种写法都认（对应架构文档 §3.5.1 的容差规则）：
+    三种写法都认（对应架构文档 §3.5.1 的容差规则），但**每一条都要先过
+    "量级关"**（I-4，task-26 修）：
+
     1. 绝对值相等 —— 正负号不同也算，因为工具可能返回负数而报告写的是幅度；
-    2. 四舍五入到 0/1/2 位小数后相等 —— `_num` 写两位小数、`_percent` 写一位小数；
-    3. 百分比与小数互换 —— `_percent` 把 `0.0111` 写成 `1.1%`，这两个是同一个数。
+    2. 四舍五入到 1/2 位小数后相等 —— `_num` 写两位小数、`_percent` 写一位小数；
+    3. 百分比与小数互换 —— `_percent` 把 `0.0111` 写成 `1.1%`。
+
+    ## 为什么必须有量级关（实测）
+    旧实现三条规则都**无条件** round 到 0/1/2 位再比。`round(x, 0)` 会把
+    两个完全不同的数压进同一个整数桶，于是：
+        _same_number(1.0, 1.4) = True      1.0 与 1.4 只差 0.4，还算擦边
+        _same_number(0.4, 12.0) = True     0.4 与 12.0 —— 差 30 倍
+        _same_number(0.3, 40.0) = True     0.3 与 40.0 —— 差 133 倍
+        _same_number(3.2, 3.0) = True      编造的 3.2 蹭上了真实的 3.0
+    最后一条不是理论：`47.5%` 被抓住了、同一句里的 `3.2 亿` 却放行了，
+    因为允许集里恰好有个 `3.0`（某列的统计量）。"模型不许编数字"这条承诺
+    等于被捅了个洞 —— 编任何个位数，只要附近有任意一个整数就蒙混过关。
+
+    ## 量级关的定义
+    `0.999 × min <= max <= 1.001 × max`（相对差 0.1%）**且** `min > 0`。
+    取 0.1% 是因为它比"写两位小数的舍入误差"宽得多，又比"两个不同的数"窄得多：
+      - `24,871,657.00` ↔ `24871657.0`：相对差 0 → 过（这一条**必须**过，
+        它是真实报告里最常见的写法，所以不能简单粗暴地去掉 round）；
+      - `3.4999` ↔ `3.5`：相对差 0.003% → 过（四舍五入的正当容差）；
+      - `3.2` ↔ `3.0`：相对差 6.7% → 拦下；
+      - `0.4` ↔ `12.0` / `0.3` ↔ `40.0`：相对差几十上百倍 → 拦下。
+    `min == 0` 时**只有** `max == 0` 才算同一件事（0 没有任何相对容差可言；
+    旧实现里 `0.0` 与任何数都能被 `round(...,0)` 凑成 0，是 `0.4`/`0.3`
+    那两条的来源）。
+
+    ⚠️ **量级关只加在第 1、2 条上，第 3 条（百分比互换）不能加。**
+    两条原因：
+      - 换算后的两边可以差到"写出精度"那么多。`_percent(0.0083)` 写的是
+        `0.8%`，而 `0.0083×100 = 0.83` —— 相对差 3.6%，远超 0.1% 闸门。
+        百分比这一支的正当容差是**写出精度**（一位小数），不是相对量级。
+      - 第 3 条天生跨 100 倍量级（`0.0111` ↔ `1.1`），统一过闸会把它整条打死，
+        模板报告里每个 `null_ratio` 都会变成"编造的数字"。
+    所以闸门在第 1、2 条上，第 3 条靠"换算后四舍五入到 1/2 位"来把关。
     """
     if report_value == data_value or abs(report_value) == abs(data_value):
         return True
-    for digits in (0, 1, 2):
-        if round(abs(report_value), digits) == round(abs(data_value), digits):
-            return True
-    for scaled in (data_value * 100, data_value / 100):
-        if report_value == scaled or abs(report_value) == abs(scaled):
-            return True
-        for digits in (0, 1, 2):
-            if round(abs(report_value), digits) == round(abs(scaled), digits):
+    if _same_magnitude(report_value, data_value):
+        # 第 1、2 条只在同量级时才放行（`round(...,0)` 的旧漏洞就在这里堵死）。
+        # 只到 2 位小数：`_num` 写两位、`_percent` 写一位；
+        # 曾经的 0 位是 3.2↔3.0 的漏洞。
+        for digits in (1, 2):
+            if round(abs(report_value), digits) == round(abs(data_value), digits):
                 return True
+    # 第 3 条（百分比互换）**不受**量级闸门管辖，理由见 docstring。
+    return any(
+        _same_number_across_scale(report_value, scaled) for scaled in _scaled_values(data_value)
+    )
+
+
+def _scaled_values(data_value: float) -> tuple[float, float]:
+    """百分比那把尺子要试的两个换算：数据值 ×100、÷100。
+
+    `_percent` 把 `0.0111` 写成 `1.1%`（×100），也可能反过来（÷100）。
+    """
+    return (data_value * 100, data_value / 100)
+
+
+def _same_number_across_scale(report_value: float, scaled: float) -> bool:
+    """百分比互换那一支：`report_value` 与换算过的数据值比。
+
+    **不加相对量级闸门**：这一支的正当误差是"写出精度"而不是相对量级 ——
+    `_percent(0.0083)` 写 `0.8%`（一位小数），与 `0.83` 的相对差 3.6%。
+    把关的是下面的四舍五入到 1/2 位：`round(0.8, 1) == round(0.83, 1)` → 相等。
+
+    这一支仍受"四条规则"里第 1、2 条之外的保护：换算本身是 ×100/÷100 这两个
+    确定的方向，不会像旧实现的 `round(...,0)` 那样把任意两个数压进同一个桶。
+    实测旧实现 `_same_number(0.4, 12.0)=True`（12.0÷100=0.12，round 到 0 位得 0），
+    在新实现里这一支会因为 `round(0.4,1)=0.4` ≠ `round(0.12,1)=0.1` 而拦下。
+    """
+    if report_value == scaled or abs(report_value) == abs(scaled):
+        return True
+    for digits in (1, 2):
+        if round(abs(report_value), digits) == round(abs(scaled), digits):
+            return True
     return False
+
+
+# 相对容差 0.1%：比"两位小数的舍入误差"宽，比"两个不同的数"窄。
+# 这个数字是两把尺子的分界线，改动它必须重跑 tests/test_validation_numbers.py
+# 与 tests/test_validation_blindspots.py 的全部容差用例。
+_MAGNITUDE_TOLERANCE = 0.001
+
+
+def _same_magnitude(first: float, second: float) -> bool:
+    """两个数是不是同一个量级（相对差在 0.1% 以内）。
+
+    0 单独处理：`0.0` 只跟 `0.0` 同量级 —— 否则 0 会让相对差失去意义
+    （除以 0），而"0 与 0.4 差不多"显然不成立。
+    """
+    low, high = sorted((abs(first), abs(second)))
+    if low == 0.0 or high == 0.0:
+        return low == high
+    return (high - low) <= _MAGNITUDE_TOLERANCE * high
 
 
 def _check_columns(state: WorkflowState) -> list[ValidationIssue]:
