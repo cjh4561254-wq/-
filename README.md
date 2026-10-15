@@ -10,7 +10,7 @@
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
 > **图表生成**、**报告数字溯源校验**、**企业级前端工作台**（顶栏 + 侧边导航 + 6 个视图）、**端到端演示脚本**、
-> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，819 项自动化测试。
+> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，820 项自动化测试。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
 > 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
@@ -315,7 +315,7 @@ ai-data-analyst-agent/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
 │  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上
 │  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完十段（编号 0-9）、自己关掉
-├─ tests/                      # 819 项（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+├─ tests/                      # 819 条功能用例（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
 │  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）

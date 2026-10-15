@@ -1132,7 +1132,7 @@ Lead 独立复算（纯 stdlib csv 手算六地区 + 手工塞假数字 + AST �
 改名并改断言；新增一条配置为 5 时仍传 0 的用例）、`docs/ARCHITECTURE.md` §5.3。
 
 **状态**：已落地（当时实测 799 passed / 0 failed / 0 skipped；之后 D6-SQLite 补做又加了用例，
-当前全量为 **819 passed**（仓库根、`tests/` 两个入口一致；见 D-24）。
+当前全量为 **820 passed**（仓库根、`tests/` 两个入口一致；见 D-24）。
 
 ---
 
@@ -1259,7 +1259,7 @@ D-22 第 3 条早就说过"注释里的前提一样会骗人"，这一条是它�
 `docs/WORKFLOW.md`、`docs/HIGHLIGHTS.md`、`docs/INTERVIEW_QA.md`。
 **后端业务逻辑一行未改**（上传 / 分析接口 / 编排 / 报告生成 / 校验全部原样）。
 
-**状态**：已落地并提交。819 passed / 0 failed / 0 skipped；`scripts/check_docs.py` rc=0；
+**状态**：已落地并提交。820 passed / 0 failed / 0 skipped；`scripts/check_docs.py` rc=0；
 真实浏览器端到端 57 项断言通过（上传 → 提问 → 六阶段轮询 → 图表 → 报告 → 历史 → 设置，含手机视口）。
 未做：深色模式（见第 3 条，是决定）、真实前端图表库（见第 2 条，是决定）、
 "最近数据集"与报告导出（后端无对应能力，见第 4 条）。
