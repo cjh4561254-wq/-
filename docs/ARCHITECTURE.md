@@ -25,7 +25,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  ① 浏览器（单页 app/web/index.html + app.js + style.css）                      │
+│  ① 浏览器（单页 app/web/index.html + app.css + app.js）                       │
 │     输入：用户点选的 CSV/XLSX 文件（File 对象） + 中文问题（string）             │
 │     输出：fetch() 的 JSON 请求体 {question: str}；每 1 秒轮询一次状态            │
 └───────────────────────────────┬──────────────────────────────────────────────┘
@@ -196,9 +196,9 @@ ai-data-analyst-agent/
 │  │  ├─ charts.py                    [D5][BE] render_chart(ToolResult, chart_type, ...) → ChartResult
 │  │  └─ validation.py                [D5][AI] validate(state) → ValidationResult（纯代码校验，无模型）；build_report(...) → FinalReport（**调 LLM**，所以本模块算 [AI]）
 │  └─ web/
-│     ├─ index.html                   [D6][FE] 单页：上传区 / 提问区 / 状态区 / 图表区 / 报告区
-│     ├─ app.js                       [D6][FE] fetch 调用 + 1 秒轮询 + 渲染
-│     └─ style.css                    [D6][FE] 原生 CSS，不用框架
+│     ├─ index.html                   [D6][FE] 单页应用外壳：顶栏 + 侧边导航 + 6 个视图 + 内联 SVG 图标精灵
+│     ├─ app.js                       [D6][FE] fetch 调用 + 1 秒轮询 + 视图路由（hash）+ 渲染
+│     └─ app.css                      [D6][FE] 原生 CSS，设计令牌 + 组件 + 两档响应式断点
 ├─ tests/
 │  ├─ __init__.py                     (已存在) 让 tests/ 成为一个包（与 app/ 下同名测试文件不冲突）
 │  ├─ test_health.py                  (已存在) D1 不动
@@ -599,7 +599,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 
 ### 4.8 `ChartResult`（`app/schemas_tool.py`，D5）
 
-**A-2 拍板的 5 个必备字段**（接口 6 / 接口 8 / §9.1 E 区三处共用同一份定义，不许各写一份）：
+**A-2 拍板的 5 个必备字段**（接口 6 / 接口 8 / §9.1 分析报告视图三处共用同一份定义，不许各写一份）：
 
 | 字段 | 类型 | 必填 | 含义 |
 |---|---|---|---|
@@ -622,7 +622,7 @@ raise AppError(ErrorCode.SERVICE_UNAVAILABLE, "大模型未配置且无法兜底
 > **三处表述的对齐（A-2 要求写死）**：
 > 1. **接口 6**（`GET /api/workflows/{id}`）返回 `charts: list[ChartResult]`，即上面这 10 个字段的完整列表；
 > 2. **接口 8**（`GET /api/workflows/{id}/charts/{filename}`）**只认 `filename`**（正则 `^[0-9a-f]{12}\.png$` 校验后送回 PNG 二进制），它不知道也不关心 `chart_id`/`url`；
-> 3. **§9.1 E 区**（前端）只用 `ChartResult.url` 作为 `<img src>`，用 `ChartResult.title` 做图注，**不拼 URL、不猜文件名**。
+> 3. **§9.1 分析报告视图**（前端图表卡）只用 `ChartResult.url` 作为 `<img src>`，用 `ChartResult.title` 做图注，**不拼 URL、不猜文件名**。
 >
 > 换句话说：`url` 是"给前端用的地址"，`filename` 是"给后端用的钥匙"，两者都在同一个对象里，谁也不用推导谁。
 >
@@ -1077,7 +1077,7 @@ data = WorkflowStatusData.from_state(state)  # ③ from_state 里：has_report =
 
 接口 7 的 `llm_used` 字段与 `FinalReport.llm_used` 同源（第 4.10 节），前端据此在报告页显示"本次由模型生成"或"本次未使用大模型（模板汇总）"的横幅——这是第 14 节决策 1 要求的可见性。
 
-### 7.1.1 §9.1 E 区（前端图表区）的对齐写法
+### 7.1.1 §9.1 分析报告视图（前端图表卡）的对齐写法
 
 ```js
 // 唯一正确写法：url 直接用后端给的字段，不拼字符串
@@ -1321,16 +1321,52 @@ def start_analysis(req: QuestionRequest, background: BackgroundTasks) -> ApiResp
 
 ## 9. 前端方案（`app/web/`，原生 HTML + CSS + JS）
 
-### 9.1 页面区块划分（单页，从上到下）
+### 9.1 页面结构（v1.2 企业级工作台：顶栏 + 侧边导航 + 6 个视图）
 
-| 区块 | 元素 | 调用的接口 | 交互 |
+v1.1 是"单列 6 张卡片从上往下堆"（上传 → 概览 → 提问 → 进度 → 图表 → 报告），
+v1.2 把它升级成**企业级工作台**：顶部品牌栏固定，左侧导航切换视图，主内容区一次只显示一个视图。
+**6 个视图的 id 与元素全部保留 v1.1 的 17 个必需 id**（`tests/test_frontend.py:35-53` 钉住），
+所以这是一次**纯前端重组**：没有新增接口、没有改后端、没有改任何一份契约。
+
+| 视图 | `data-view` | 元素 | 调用的接口 |
 |---|---|---|---|
-| A 上传区 | `<input type="file" accept=".csv,.xlsx">` + `<button>上传</button>` + `<div id="upload-state">` | `POST /api/datasets/upload` | 选完文件点上传；成功显示"文件名 / 行数 / 列数"，并把 `dataset_id` 存进 JS 变量 `state.datasetId` |
-| B 数据概览区 | 表格 `id="preview"`、列名列表、`<span id="llm-badge">` | `GET /api/datasets/{id}` + `GET /api/datasets/{id}/profile` | 上传后自动请求一次；显示前 5 行预览、列名、以及"缺失值最多的 3 列"；**顺带展示 `/api/health` 的 `llm_configured`**，若为 false 显示灰字"未配置大模型，将使用规则模式" |
-| C 提问区 | `<textarea id="question">` + 3 个示例问题按钮 + `<button id="ask">开始分析</button>` | `POST /api/analysis` | 示例按钮：把常见问题（"各地区的销售额汇总""销售额前 5 的商品""哪些列有缺失值"）一键填进文本框，方便演示 |
-| D 状态区 | `<div id="steps">`（6 个步骤圆点 + 文字） + `<span id="elapsed">` | `GET /api/workflows/{id}`（每 1000 ms） | 把 `step` 映射成中文：profiling→"正在读取数据"、planning→"正在制定分析计划"、execution→"正在计算"、charting→"正在生成图表"、reporting→"正在撰写报告"、validation→"正在校验数字"；已完成的打勾，当前的高亮 |
-| E 图表区 | `<div id="charts">`，每个 `<img src="{ChartResult.url}">` + 标题 | 图片由 `GET /api/workflows/{id}/charts/{filename}` 直接返回 | 图不下载到本地，直接 `<img>` 指向后端 URL，省去 base64 转换 |
-| F 报告区 | `<div id="report">`：标题 + `summary` + 各 `section`（标题/正文/小表格）+ 数据质量提示 + 校验结果徽章 | `GET /api/workflows/{id}/report` | 状态进入终态后才请求一次；`validation.passed === false` 时顶部显示黄色横幅，把 `unsupported_numbers` 列出来（**这个横幅就是这个项目最有说服力的展示点**：它证明系统在自我检查） |
+| 工作台 | `workbench` | 上传卡（`label.dropzone#dropzone[for=file]` 包住 `input#file` + `button#upload` + `p#upload-state`，**支持点击与拖拽两种方式**）、数据概览卡（`p#dataset-summary` + `div#kpi-grid`）、「开始一次分析」卡、**最近分析任务**卡（`div#recent-tasks`） | `POST /api/datasets/upload`、`GET /api/health`、`GET /api/workflows/history` |
+| 数据集 | `dataset` | 字段结构 `ul#columns`、数据预览 `table#preview`、数据质量 `ul#missing-top3` + `ul#profile-warnings` + `p#dedup-note` | `GET /api/datasets/{id}` + `GET /api/datasets/{id}/profile` |
+| 市场分析 | `analysis` | `p#analysis-context`（显示本次用的数据集）、`textarea#question` + 4 个示例问题按钮、`button#ask`；执行过程卡：`ol#steps`（六阶段面板）、`span#elapsed`、`span#workflow-state`、`ul#task-list`、`div#workflow-error` | `POST /api/analysis` + `GET /api/workflows/{id}`（每 1000 ms） |
+| 分析报告 | `report` | 图表卡 `div#charts`（每个 `<img src="{ChartResult.url}">` + 标题 + `chart_type`/`point_count` 元信息）、报告卡 `div#report`（标题 + `summary` + 各 `section` + 数据质量提示 + 校验横幅） | `GET /api/workflows/{id}/report`（终态后请求一次）；图片由 `GET /api/workflows/{id}/charts/{filename}` 直接返回 |
+| 历史任务 | `history` | `div#history-list`（接口 9 的归档列表）、`span#history-meta`、`button#history-refresh`；详情卡 `section#history-detail-card`（`div#history-detail`） | `GET /api/workflows/history` + `GET /api/workflows/history/{id}` |
+| 设置（只读） | `settings` | `table#settings-health`（`/api/health` 的真实字段）+ 一张说明卡：**后端没有任何写配置接口**，所以这里不摆放点了没反应的开关 | `GET /api/health` |
+
+**导航与视图路由**：侧边导航 6 项都是 `<a href="#/xxx" data-view="xxx">`，靠 `hashchange` 切视图
+（`app.js` 的 `VIEWS` 表 + `DEFAULT_VIEW`）。用 hash 而不是 History API 的原因：
+刷新页面、前进后退、把地址粘给别人都能落到同一个视图，而**不需要服务端加任何路由**
+（`GET /` 仍然只返回 `index.html` 一个文件）。
+
+**只有真实存在的能力才做成入口**（这一条是硬约束，不是审美）：
+- **不做「最近数据集」列表** —— 后端没有 `GET /api/datasets`，数据集只存在服务进程内存里，
+  刷新页面就拿不回旧的 `dataset_id`。工作台那张卡明写了这件事，而不是放一个永远空的列表。
+- **不做报告导出** —— 后端没有导出接口，也不假装有。
+- **不做设置项的开关** —— 后端没有任何写配置的接口，配置只来自进程环境变量；
+  设置页改为列出真实的键名与改法（改完要重启服务）。
+- 归档被关掉时（`DB_PATH=""`）接口 9 返回 **HTTP 200 + `enabled=false`**，
+  前端显示中性空态并说明"归档被关掉了"，**不是**红色错误态。
+
+### 9.1.1 设计令牌与对比度（v1.2）
+
+`app/web/app.css` 的 `:root` 是一套**设计令牌**（品牌色阶 `--brand-50…900`、中性色阶 `--n-0…900`、
+语义四件套 `--ok/--warn/--err/--info` 各含 `-fg/-bg/-line`、字号 `--fs-xs…4xl`、间距 `--sp-1…10`、
+圆角 `--r-sm/md/lg/pill`、阴影 `--sh-1/2/3`、层级 `--z-*`）。组件只引用令牌，不写死色值。
+
+**对比度是算出来的，不是看出来的**：正文与背景 ≥ 4.5:1、大字与控件边框 ≥ 3:1（WCAG 2.1）。
+首版有三个色值不达标，处理方式是**改色值而不是放宽门槛**
+（`--n-400` `#a3a39e`→`#8f8f8a` 得 3.25:1 用于控件边框；`--n-500` `#7a7a75`→`#73736e` 得 4.77:1 用于最弱可读文字；
+`--n-300` 被重新归类为**装饰性分隔线**，不承担任何对比度要求）。
+
+**深色模式本期不做**（这是决定，不是遗漏），三条理由：
+① 图表是服务端 matplotlib 生成的**不透明白底 PNG**，深色页面里每张图都是一块刺眼白方块，纯前端修不了；
+② 做深色就要把上面所有对比度重新算一遍，而展示价值在"数字可核对"不在主题切换；
+③ 没有主题切换接口，只能 `prefers-color-scheme` 自动跟随，用户无法手选，体验反而更差。
+`.charts figure` 已固定白底，是留给将来的正确起点。
 
 ### 9.2 轮询逻辑（`app.js`，约 30 行）
 
@@ -1371,7 +1407,12 @@ async function pollWorkflow(workflowId) {
 
 - 不用 React/Vue/打包工具（第一版是"能看懂每一行"的展示，不需要构建链）。
 - 不在前端做任何计算或格式化数字（千分位、百分比也应尽量后端算好；如果要做，只允许纯展示格式化，绝不做统计）。
-- 不做多文件对比、不做拖拽上传、不做登录。
+- 不做多文件对比、不做登录。
+- **不做深色模式**（v1.2 决定，理由见 §9.1.1）。
+- **不做假进度**：不用前端定时器假装后台智能体在工作（进度只来自接口 6 的真实 `step` / `status`）；
+  上传也不做进度条（`fetch` 没有上传进度事件，宁可不做也不做假的）。
+- **不伪造指标**：页面上的每个数字都必须来自某个接口的真实字段；
+  接口没返回的指标（例如"去重后行数"）不显示，也不在前端自己算一个出来充数。
 - 静态文件挂载（D6）：`app.mount("/static", StaticFiles(directory=app/web), name="static")`，并且给 `GET /` 改成返回 `index.html`（现有 `/` 返回 JSON 提示，D6 时保留 `/api/health` 与 `/docs`，把 `/` 让给页面）。**注意 `data/` 目录绝不挂载**，图表一律走第 8 号接口，避免把上传的原始文件暴露成静态资源。
 
 ---
@@ -1593,7 +1634,7 @@ D1 骨架 ──▶ D2 数据层/上传 ──▶ D3 工具层 ──▶ D4 LLM+
 | # | 审核条目 | 是否已改 | 改在哪（小节） | 怎么改的（可 grep 的关键词） |
 |---|---|---|---|---|
 | 1 | **[阻塞] A-1** HTTP 状态码自相矛盾 | ✅ 已改 | §7 开头统一约定、**新增 §7.0 状态码映射表**、§7 接口表错误码列、**新增 §7.3 `ERROR_STATUS`**、§4.0 代码约定、§14.1 | 删除"业务错误一律 HTTP 200"整句；照抄 A-1 表 12 行（200/202/400/404/405/413/415/422/500/503 + `WORKFLOW_TIMEOUT`→200）；接口表每格写成 `**415** UNSUPPORTED_FILE` 形式；`POST /api/analysis` 改 **202**；补 4 条"禁止绕过统一外壳"约束 |
-| 2 | **[阻塞] A-2** `charts` 三处不一致 | ✅ 已改 | §4.8、§7 接口 6 / 接口 8、**新增 §7.1.1**、§9.1 E 区 | 写死 `ChartResult` 字段与 `url` **由后端拼好** `/api/workflows/{workflow_id}/charts/{filename}`；§7.1.1 给出前端唯一正确写法 `img.src = c.url`（不拼字符串），并说明"前端拼接会让 404 的图片链接无法被 pytest 覆盖" |
+| 2 | **[阻塞] A-2** `charts` 三处不一致 | ✅ 已改 | §4.8、§7 接口 6 / 接口 8、**新增 §7.1.1**、§9.1 分析报告视图 | 写死 `ChartResult` 字段与 `url` **由后端拼好** `/api/workflows/{workflow_id}/charts/{filename}`；§7.1.1 给出前端唯一正确写法 `img.src = c.url`（不拼字符串），并说明"前端拼接会让 404 的图片链接无法被 pytest 覆盖" |
 | 3 | **[阻塞] A-3** 目录设计冲突 | ✅ 已改 | §2 目录树、**§2.1**、§3 | 收口为 `app/data/{loader,store,profiler}.py` + `app/errors.py` + `app/api/routes_datasets.py` 一份清单；同一处（§2.1 末尾）标注"`app/datasets.py` 与 `app/security/files.py` 这两个提法已作废"（保留此说明是为了让后来者知道它们**不是**被漏掉） |
 | 4 | B-1 `WorkflowState` 定义位置分裂 | ✅ 已改 | §4.0 判据、§4.5 | 全部模型定义在 `app/schemas_workflow.py`；`app/core/registry.py` **一行模型定义都没有**；判据一句话："数据长什么样"进 `schemas_*.py`，"数据放在哪、怎么同步"进 `core/` |
 | 5 | B-2 锁说明矛盾 + 漏"登记图表" | ✅ 已改 | **新增 §8.2.1 / §8.2.2 / §8.2.3** | ① `_lock` 只保护 registry 的 dict，`state` 内部字段**不需要**加锁（附"禁止到处加锁 / 禁止返回 deepcopy"两条禁令）；② `charts.py` 不许改 `state`，由 `analysis.py` 在**同一函数体内连续两行**写文件 + `state.charts.append(chart)`，并说明"写"与"登记"分离会产生孤儿 PNG + 接口 404；③ `DatasetStore` 同属进程内，单进程限制同样适用，要一起写进 README |

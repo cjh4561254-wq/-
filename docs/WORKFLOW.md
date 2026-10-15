@@ -253,7 +253,7 @@ LLM 客户端那 3 次请求不经过 `retry_count`，它发生在 planning / re
 | 图表 PNG 不在磁盘上了 | 404 | `NOT_FOUND` | 图裂，报告仍可读 |
 | **工作流超时** | **200** | `WORKFLOW_TIMEOUT` | 状态变 `FAILED`，前端停止轮询并显示"分析超时" |
 | 未捕获异常 | 500 | `INTERNAL_ERROR` | 显示"服务器内部错误" |
-| 依赖不可用（预留） | 503 | `SERVICE_UNAVAILABLE` | 前端把它列为可重试（`app/web/app.js:37`） |
+| 依赖不可用（预留） | 503 | `SERVICE_UNAVAILABLE` | 前端把它列为可重试（`app/web/app.js:49`） |
 
 两个反直觉点值得单独记住：
 
@@ -292,7 +292,7 @@ LLM 客户端那 3 次请求不经过 `retry_count`，它发生在 planning / re
 - 上表是**没配 key、走规则兜底**的耗时。配了 key 之后 planning 与 reporting 要等模型往返，
   这两步会从"几毫秒"变成"几秒到几十秒"，其余阶段不变。
 - 表里的 20 ms 一次是我为了看清阶段而在探针里用的间隔；前端是 **1 秒**一次
-  （`app/web/app.js:50` 的 `POLL_INTERVAL_MS = 1000`）。小数据上你通常只会看到
+  （`app/web/app.js:52` 的 `POLL_INTERVAL_MS = 1000`）。小数据上你通常只会看到
   `PENDING → SUCCESS` 两三个点，中间阶段根本来不及被看到 —— 这不是卡住。
 - 阶段那么快的原因是：2168 行数据上 `groupby` 是毫秒级，出图（matplotlib 第一次 import）
   反而是最慢的一步。

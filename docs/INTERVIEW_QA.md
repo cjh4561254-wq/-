@@ -72,7 +72,7 @@
   就把 Web 层耦进编排层了）；`tests/test_contracts_d5.py:226-238` 断言校验模块里不出现
   `client.chat` / `from app.llm`，即"校验永远不问模型"。
 - *"那 `status` 什么时候算写完？"* —— 约定是**先写结果字段、最后写 `status`**，`status` 是唯一的完成信号；
-  前端只按 `status` 判断（`app/web/app.js:488-492` 进终态才去取报告）。
+  前端只按 `status` 判断（`app/web/app.js:1140-1157` 进终态才去取报告）。
 - *"`_run_safely` 又写一次 `finished_at`，不算破坏所有权？"* —— 那是**故意的重复**：
   后台线程被强杀时也得有个收尾。正常路径上它是幂等的（`app/agents/orchestrator.py:60-63` 有注释说明）。
 
@@ -115,7 +115,7 @@
 
 **答**：因为分析要几十秒，而 HTTP 请求不该挂那么久。`POST /api/analysis` 只做三件事
 （校验数据集存在 → 登记 `WorkflowState` → 排后台任务），然后立刻返回 `202 Accepted` + `workflow_id`
-（`app/api/routes_analysis.py:49-54,94-98`）。前端每秒轮询一次状态（`app/web/app.js:50`），
+（`app/api/routes_analysis.py:49-54,94-98`）。前端每秒轮询一次状态（`app/web/app.js:52`），
 `status` 进终态且 `has_report=true` 时才去取报告。
 
 选轮询不选 SSE/WebSocket：轮询的实现是"一个定时器 + 一次 GET"，20 行、可断点重试、不用学新协议；
@@ -141,7 +141,7 @@ SSE 的心跳/重连/代理缓冲问题在 7 天里是负收益。
   差的就是 `plan` / `results` / `report` 这些内部字段。
 
 **证据**：`app/api/routes_analysis.py:49-54,70-98`；`app/core/background.py:40-50`；
-`app/core/registry.py:37`；`app/web/app.js:50,442,488-492`；
+`app/core/registry.py:37`；`app/web/app.js:52,1077-1082,1140-1157`；
 `docs/ARCHITECTURE.md` §8（后台执行）、§8.2.3（单进程）、§8.3.2（已知限制）。
 
 ---
@@ -363,5 +363,5 @@ numpy   arr.std(ddof=0)    = 373100.04887096176  # ddof=0
    响应外壳 `ok=false` + `error.code=WORKFLOW_TIMEOUT`；把超时做成 5xx 会让前端把它当成"服务器崩了"去重试。
    （`app/errors.py` 的 `ERROR_STATUS`，见 `docs/ARCHITECTURE.md` §7.0 表。）
 2. **`has_report` 是现算的**，不是抄 `state.has_report`（`app/schemas_workflow.py:371`）。
-3. **`status` 是唯一的完成信号**，前端只在终态取一次报告（`app/web/app.js:488-492`），
+3. **`status` 是唯一的完成信号**，前端只在终态取一次报告（`app/web/app.js:1140-1157`），
    所以不可能出现"报告取到了但还在跑"的中间态。

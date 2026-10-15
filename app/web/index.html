@@ -4,98 +4,377 @@
   <!-- 这一行必须留：Windows 上浏览器没有它就会用 GBK 猜编码，页面里的中文全是乱码。 -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI 数据分析助手</title>
+  <title>AI 市场行情智能分析平台</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header class="page-head">
-    <h1>AI 数据分析助手</h1>
-    <p class="sub">上传 CSV / Excel → 用自然语言提问 → 真实计算 + 图表 + 可核对的报告</p>
+  <!--
+    跳转到主内容：必须是 body 的第一个可聚焦元素。
+    app.css 里 .skip-link 默认被推到视口外（left:-9999px），只有键盘 focus 时才滑回左上角。
+    ⚠️ 这个元素曾经只写了 CSS、HTML 里没有，于是那条样式成了死代码，
+    Tab 第一下落在顶栏的「接口文档」上 —— 键盘用户要按 7 下才进得了正文。
+  -->
+  <a class="skip-link" href="#content">跳到主内容</a>
+
+  <!--
+    图标精灵：内联 SVG <symbol>，不引图标库、不引图标字体（离线可演示的硬约束）。
+
+    ⚠️ 这里**绝不能写 xmlns 属性**，也不要在这个文件里写任何网址（哪怕只是举例、
+    哪怕写在注释里）：tests/test_frontend.py 的
+    test_page_links_its_own_assets_and_nothing_external 扫的是整个文件的纯文本，
+    不看 HTML 语义，注释里的绝对地址一样判红。
+    HTML5 解析器本来就会把内联 <svg> 归到 SVG 命名空间，不需要 xmlns。
+  -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M4 15v3.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V15"/></symbol>
+    <symbol id="i-dataset" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3V6"/><path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3"/></symbol>
+    <symbol id="i-analysis" viewBox="0 0 24 24"><path d="M3 21h18"/><rect x="5" y="11" width="3.5" height="7" rx="1"/><rect x="10.25" y="6" width="3.5" height="12" rx="1"/><rect x="15.5" y="14" width="3.5" height="4" rx="1"/></symbol>
+    <symbol id="i-report" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M10 12h6M10 15.5h6M10 19h3.5"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l5 5 10-11"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5 21 19.5H3z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r=".9" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9 9l6 6M15 9l-6 6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="8" r=".9" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 3.5V8h-4.5"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.5v.4"/><circle cx="12" cy="16.8" r=".9" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5l1.8 4.7L18.5 10l-4.7 1.8L12 16.5l-1.8-4.7L5.5 10l4.7-1.8z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v11m0 0l4-4M12 14l-4-4M4.5 18.5V21h15v-2.5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-8.5 8.5"/><path d="M18 14v5.5H4.5V6H10"/></symbol>
+  </svg>
+
+  <!-- ==================== 顶部品牌栏 ==================== -->
+  <header class="topbar">
+    <button class="topbar__menu" id="nav-toggle" type="button" aria-label="展开或收起导航" aria-expanded="false" aria-controls="sidebar">
+      <svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>
+    </button>
+
+    <div class="topbar__brand">
+      <span class="topbar__mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span>
+      <span class="topbar__names">
+        <span class="topbar__product">AI Market Intelligence Studio</span>
+        <span class="topbar__product-cn">AI 市场行情智能分析平台</span>
+      </span>
+    </div>
+
+    <div class="topbar__right">
+      <!-- 当前工作区：服务端是单进程、没有多工作区概念，这里如实写「本地单进程」，
+           不做一个点了没反应的工作区切换器。 -->
+      <span class="topbar__workspace" title="服务端是单进程内存态，没有多工作区概念">
+        <span class="dot dot--ok" aria-hidden="true"></span>本地单进程
+      </span>
+      <!-- 17 个必须存在的元素 id 之一。大模型配置状态来自 GET /api/health 的 llm_configured。 -->
+      <span id="llm-badge" class="badge badge--grey" role="status">正在检查大模型配置…</span>
+      <a class="topbar__link" href="/docs" title="打开 FastAPI 自带的接口文档">
+        <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>接口文档
+      </a>
+    </div>
   </header>
 
-  <main>
-    <!-- ============ A 上传区 ============ -->
-    <section class="card" id="section-upload">
-      <h2><span class="tag">A</span> 上传数据</h2>
-      <div class="row">
-        <input type="file" id="file" accept=".csv,.xlsx">
-        <button id="upload" type="button">上传</button>
-      </div>
-      <!-- 上传失败的提示就地显示在这里，不弹全局错误（§9.2.1） -->
-      <p id="upload-state" class="state" role="status"></p>
-    </section>
+  <div class="shell">
+    <!-- ==================== 左侧导航 ==================== -->
+    <aside class="sidebar" id="sidebar">
+      <nav class="nav" aria-label="主导航">
+        <p class="nav__group">分析工作区</p>
+        <a class="nav__item" href="#/workbench" data-view="workbench">
+          <svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg><span>工作台</span>
+        </a>
+        <a class="nav__item" href="#/dataset" data-view="dataset">
+          <svg class="icon" aria-hidden="true"><use href="#i-dataset"></use></svg><span>数据集</span>
+        </a>
+        <a class="nav__item" href="#/analysis" data-view="analysis">
+          <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg><span>市场分析</span>
+        </a>
+        <a class="nav__item" href="#/report" data-view="report">
+          <svg class="icon" aria-hidden="true"><use href="#i-report"></use></svg><span>分析报告</span>
+        </a>
 
-    <!-- ============ B 数据概览区 ============ -->
-    <section class="card" id="section-overview">
-      <h2><span class="tag">B</span> 数据概览</h2>
-      <p class="row">
-        <span id="dataset-summary" class="state">还没有数据</span>
-        <span id="llm-badge" class="badge badge-grey">正在检查大模型配置…</span>
-      </p>
-      <div class="two-col">
-        <div>
-          <h3>前 5 行预览</h3>
-          <div class="table-wrap"><table id="preview"><tbody><tr><td class="muted">上传后显示</td></tr></tbody></table></div>
+        <p class="nav__group">记录</p>
+        <a class="nav__item" href="#/history" data-view="history">
+          <svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg><span>历史任务</span>
+        </a>
+
+        <p class="nav__group">系统</p>
+        <!-- 设置页没有任何后端写接口。**不做成看似可用的开关**：点了进去，
+             页面会明确写清「这里只能看，不能改」以及为什么。 -->
+        <a class="nav__item" href="#/settings" data-view="settings">
+          <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg><span>设置</span>
+          <span class="nav__flag">只读</span>
+        </a>
+      </nav>
+
+      <div class="sidebar__foot">
+        <a href="/api/health">健康检查 /api/health</a>
+        <p>原始文件只存在服务端内存与上传目录，<br>不通过静态资源对外暴露。</p>
+      </div>
+    </aside>
+
+    <!-- ==================== 主内容区 ==================== -->
+    <!--
+      tabindex="-1" 是给「跳到主内容」用的：没有它，点跳转链接只会滚动页面，
+      焦点仍留在 body 上，读屏软件不会念出正文，键盘用户按下一个 Tab 又回到顶栏。
+      加了它之后 `<a href="#content">` 才能把焦点真正落到这里。
+      它不会让 main 进入正常的 Tab 顺序（-1 表示只能被脚本/锚点聚焦）。
+    -->
+    <main class="content" id="content" tabindex="-1">
+      <!-- 面包屑 + 页面标题：每个视图一份，由 app.js 切换显示 -->
+      <div class="pagehead">
+        <p class="crumb" id="crumb">工作台</p>
+        <h1 class="pagehead__title" id="page-title">Market Intelligence Workspace</h1>
+        <p class="pagehead__sub" id="page-sub">上传市场数据 → 用自然语言提问 → 真实计算 + 图表 + 可逐条核对的报告</p>
+      </div>
+
+      <!-- ---------- 视图 1：工作台 ---------- -->
+      <section class="view" id="view-workbench" data-view="workbench">
+        <div class="grid grid--main">
+          <!-- 上传 -->
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">上传数据</h2>
+              <span class="card__hint">支持 .csv / .xlsx，单文件大小上限见服务端配置</span>
+            </div>
+            <div class="card__body">
+              <label class="dropzone" id="dropzone" for="file">
+                <svg class="icon dropzone__icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+                <span class="dropzone__main">点击选择文件，或把文件拖到这里</span>
+                <span class="dropzone__sub">表格第一行会被当作列名</span>
+                <input type="file" id="file" accept=".csv,.xlsx">
+              </label>
+              <div class="row row--end">
+                <button id="upload" type="button" class="btn btn--primary">
+                  <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>上传
+                </button>
+              </div>
+              <!-- 上传失败的提示就地显示在这里，不弹全局错误 -->
+              <p id="upload-state" class="state" role="status"></p>
+            </div>
+          </section>
+
+          <!-- 数据概览 -->
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">数据概览</h2>
+              <a class="card__action" href="#/dataset">查看数据集详情
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></a>
+            </div>
+            <div class="card__body">
+              <p id="dataset-summary" class="state" role="status">还没有数据</p>
+              <div class="kpis" id="kpi-grid">
+                <!-- 指标卡由 app.js 用真实字段填充；没有数据时是空状态，不摆假数字 -->
+                <p class="empty empty--inline">
+                  <svg class="icon" aria-hidden="true"><use href="#i-dataset"></use></svg>
+                  上传数据后，这里会显示行数、字段数、重复行、缺失字段与内存占用 —— 全部来自画像接口的真实字段。
+                </p>
+              </div>
+            </div>
+          </section>
         </div>
-        <div>
-          <h3>列名</h3>
-          <ul id="columns" class="plain"><li class="muted">上传后显示</li></ul>
-          <h3>缺失值最多的 3 列</h3>
-          <ul id="missing-top3" class="plain"><li class="muted">上传后显示</li></ul>
-          <ul id="profile-warnings" class="plain warn-list"></ul>
-        </div>
-      </div>
-    </section>
 
-    <!-- ============ C 提问区 ============ -->
-    <section class="card" id="section-question">
-      <h2><span class="tag">C</span> 提问</h2>
-      <textarea id="question" rows="3" placeholder="例：各地区的销售额汇总"></textarea>
-      <div class="row">
-        <button class="example" type="button" data-question="各地区的销售额汇总">各地区的销售额汇总</button>
-        <button class="example" type="button" data-question="销售额前 5 的商品">销售额前 5 的商品</button>
-        <button class="example" type="button" data-question="哪些列有缺失值">哪些列有缺失值</button>
-      </div>
-      <div class="row">
-        <button id="ask" type="button" class="primary">开始分析</button>
-        <span id="ask-state" class="state" role="status"></span>
-      </div>
-    </section>
+        <!-- 快速开始分析 -->
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">开始一次分析</h2>
+            <span class="card__hint">进入市场分析工作区，用自然语言描述你要看的问题</span>
+          </div>
+          <div class="card__body">
+            <div class="row">
+              <a class="btn btn--primary" href="#/analysis">
+                <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg>进入市场分析
+              </a>
+              <span class="state">分析会依次经过：读取数据 → 制定计划 → 计算 → 出图 → 写报告 → 校验数字</span>
+            </div>
+          </div>
+        </section>
 
-    <!-- ============ D 状态区 ============ -->
-    <section class="card" id="section-status">
-      <h2><span class="tag">D</span> 分析进度</h2>
-      <ol id="steps" class="steps"></ol>
-      <p class="row">
-        <span id="elapsed" class="state">—</span>
-        <span id="workflow-state" class="state"></span>
-      </p>
-      <ul id="task-list" class="plain"></ul>
-      <!-- 工作流失败 / 超时的错误框：按 error.code 显示，绝不按 HTTP 状态码判断 -->
-      <div id="workflow-error" class="error-box" hidden></div>
-    </section>
+        <!-- 最近分析任务：来自真实的历史归档接口 GET /api/workflows/history -->
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">最近分析任务</h2>
+            <a class="card__action" href="#/history">全部历史
+              <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></a>
+          </div>
+          <div class="card__body">
+            <div id="recent-tasks" class="list" role="status">
+              <p class="empty empty--inline">正在读取归档库…</p>
+            </div>
+            <p class="note">这一块读的是服务端 SQLite 归档库（重启后仍在）。<strong>数据集没有列表接口</strong> —— 数据只存在服务进程内存里，所以这里不会出现「最近数据集」，刷新页面也拿不回旧的 dataset_id。</p>
+          </div>
+        </section>
+      </section>
 
-    <!-- ============ E 图表区 ============ -->
-    <section class="card" id="section-charts">
-      <h2><span class="tag">E</span> 图表</h2>
-      <!-- img 的 src 直接指向后端接口 8 的 URL，不下载、不转 base64 -->
-      <div id="charts" class="charts"><p class="muted">分析完成后显示</p></div>
-    </section>
+      <!-- ---------- 视图 2：数据集 ---------- -->
+      <section class="view" id="view-dataset" data-view="dataset" hidden>
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">字段结构</h2>
+            <span class="card__hint">列名与 pandas dtype 来自 GET /api/datasets/{id}</span>
+          </div>
+          <div class="card__body">
+            <ul id="columns" class="plain"><li class="muted">上传后显示</li></ul>
+          </div>
+        </section>
 
-    <!-- ============ F 报告区 ============ -->
-    <section class="card" id="section-report">
-      <h2><span class="tag">F</span> 分析报告</h2>
-      <div id="report"><p class="muted">分析完成后显示</p></div>
-    </section>
-  </main>
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">数据预览</h2>
+            <span class="card__hint">前 5 行，值已由服务端统一转成字符串</span>
+          </div>
+          <div class="card__body">
+            <div class="table-wrap"><table id="preview"><tbody><tr><td class="muted">上传后显示</td></tr></tbody></table></div>
+          </div>
+        </section>
 
-  <footer class="page-foot">
-    <a href="/docs">接口文档 /docs</a>
-    <span class="sep">·</span>
-    <a href="/api/health">健康检查 /api/health</a>
-    <span class="sep">·</span>
-    <span>原始文件只存在服务端内存与上传目录，不通过静态资源对外暴露</span>
-  </footer>
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">数据质量</h2>
+            <span class="card__hint">缺失比例与重复行来自画像接口 GET /api/datasets/{id}/profile</span>
+          </div>
+          <div class="card__body">
+            <h3 class="sub-title">缺失值最多的 3 列</h3>
+            <ul id="missing-top3" class="plain"><li class="muted">上传后显示</li></ul>
+            <h3 class="sub-title">画像提示</h3>
+            <ul id="profile-warnings" class="plain warn-list"></ul>
+            <p class="note" id="dedup-note" hidden></p>
+          </div>
+        </section>
+      </section>
+
+      <!-- ---------- 视图 3：市场分析 ---------- -->
+      <section class="view" id="view-analysis" data-view="analysis" hidden>
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">描述你想了解的市场问题</h2>
+            <span class="card__hint">系统会把它翻译成若干个确定性的 pandas 分析任务</span>
+          </div>
+          <div class="card__body">
+            <p class="ctx" id="analysis-context">
+              <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+              还没有选择数据集：请先在<strong>工作台</strong>上传一份表格。
+            </p>
+            <label class="field-label" for="question">分析问题</label>
+            <textarea id="question" rows="3" placeholder="例：各地区的销售额汇总"></textarea>
+
+            <p class="field-label">示例问题（点一下填进输入框）</p>
+            <div class="row" id="examples">
+              <button class="btn btn--chip example" type="button" data-question="各地区的销售额汇总">各地区的销售额汇总</button>
+              <button class="btn btn--chip example" type="button" data-question="销售额前 5 的商品">销售额前 5 的商品</button>
+              <button class="btn btn--chip example" type="button" data-question="哪些列有缺失值">哪些列有缺失值</button>
+              <button class="btn btn--chip example" type="button" data-question="销售额与利润的相关性">销售额与利润的相关性</button>
+            </div>
+
+            <div class="row row--between">
+              <span id="ask-state" class="state" role="status"></span>
+              <button id="ask" type="button" class="btn btn--primary">
+                <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg>开始分析
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">执行过程</h2>
+            <span class="card__hint">六个阶段的状态全部来自后端 step 字段，前端不用定时器假装进度</span>
+          </div>
+          <div class="card__body">
+            <ol id="steps" class="steps"></ol>
+            <p class="row">
+              <span id="elapsed" class="state">—</span>
+              <span id="workflow-state" class="state"></span>
+            </p>
+            <ul id="task-list" class="plain tasklist"></ul>
+            <!-- 工作流失败 / 超时的错误框：按 error.code 显示，绝不按 HTTP 状态码判断 -->
+            <div id="workflow-error" class="error-box" hidden></div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ---------- 视图 4：分析报告 ---------- -->
+      <section class="view" id="view-report" data-view="report" hidden>
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">图表</h2>
+            <span class="card__hint">由服务端 matplotlib 生成并落盘，前端只做展示，不在浏览器里重画</span>
+          </div>
+          <div class="card__body">
+            <!-- img 的 src 直接指向后端接口 8 的 URL，不下载、不转 base64 -->
+            <div id="charts" class="charts"><p class="empty empty--inline">分析完成后显示</p></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">分析报告</h2>
+            <span class="card__hint">正文里每个数字都能回到某次工具调用的结果</span>
+          </div>
+          <div class="card__body" id="report"><p class="empty empty--inline">分析完成后显示</p></div>
+        </section>
+      </section>
+
+      <!-- ---------- 视图 5：历史任务 ---------- -->
+      <section class="view" id="view-history" data-view="history" hidden>
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">历史任务</h2>
+            <span class="card__hint">读服务端 SQLite 归档库（GET /api/workflows/history），重启后仍在</span>
+          </div>
+          <div class="card__body">
+            <div class="row row--between">
+              <span class="state" id="history-meta"></span>
+              <button class="btn btn--ghost" id="history-refresh" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新
+              </button>
+            </div>
+            <div id="history-list" class="list" role="status"></div>
+          </div>
+        </section>
+
+        <section class="card" id="history-detail-card" hidden>
+          <div class="card__head">
+            <h2 class="card__title">归档详情</h2>
+            <button class="btn btn--ghost" id="history-close" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>关闭
+            </button>
+          </div>
+          <div class="card__body" id="history-detail"></div>
+        </section>
+      </section>
+
+      <!-- ---------- 视图 6：设置 ---------- -->
+      <section class="view" id="view-settings" data-view="settings" hidden>
+        <section class="card">
+          <div class="card__head"><h2 class="card__title">运行状态</h2></div>
+          <div class="card__body">
+            <div class="table-wrap"><table id="settings-health"><tbody></tbody></table></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card__head"><h2 class="card__title">为什么这里改不了任何东西</h2></div>
+          <div class="card__body">
+            <div class="banner banner--info">
+              <h4><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>本页只读</h4>
+              <p>后端<strong>没有</strong>任何写配置的接口 —— 没有 <code>POST /api/settings</code>，
+              也没有数据集删除、报告导出、历史清理这些接口。</p>
+              <p>所以这里不摆放开关和输入框：<strong>看起来能点、点了没反应</strong>比没有更糟。</p>
+            </div>
+            <h3 class="sub-title">配置怎么改（真实做法）</h3>
+            <ul class="plain">
+              <li>全部配置来自<strong>进程环境变量</strong>（不读 <code>.env</code> 文件）。改完要重启服务。</li>
+              <li>常见几个：<code>UPLOAD_DIR</code>、<code>MAX_UPLOAD_MB</code>、<code>MAX_ROWS</code>、<code>CHARTS_DIR</code>、<code>DB_PATH</code>、<code>LLM_API_KEY</code>。</li>
+              <li>仓库根目录有 <code>.env.example</code> 列出全部键名与默认值，照着在启动前设进环境变量即可。</li>
+              <li>三个大模型字段各认两个名字：<code>LLM_*</code> 优先，<code>DEEPSEEK_*</code> 兜底。</li>
+            </ul>
+            <h3 class="sub-title">接口文档</h3>
+            <p class="state"><a href="/docs">/docs</a> 是 FastAPI 自动生成的交互式文档，比任何手写的设置页都准。</p>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

@@ -9,7 +9,7 @@
 > 已完成：应用骨架与统一错误契约、**文件上传（CSV / xlsx）与数据画像**、
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
-> **图表生成**、**报告数字溯源校验**、**前端单页**、**端到端演示脚本**、
+> **图表生成**、**报告数字溯源校验**、**企业级前端工作台**（顶栏 + 侧边导航 + 6 个视图）、**端到端演示脚本**、
 > **SQLite 历史归档（D6-SQLite，D6 之后补做）**，817 项自动化测试。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
@@ -150,7 +150,7 @@ python -m uvicorn app.main:app --reload --port 8000
 
 | 地址 | 用途 |
 |---|---|
-| http://127.0.0.1:8000/ | **分析页面**（前端单页：上传 → 提问 → 六步进度 → 图表 → 报告） |
+| http://127.0.0.1:8000/ | **分析工作台**（前端单页：工作台 → 数据集 → 市场分析 → 分析报告 → 历史任务 → 设置，共 6 个视图） |
 | http://127.0.0.1:8000/api/health | 健康检查，返回 JSON |
 | http://127.0.0.1:8000/docs | 自动生成的接口文档（可直接点按钮试接口） |
 
@@ -255,7 +255,8 @@ ai-data-analyst-agent/
 │  │  ├─ charts.py             # 出图（中文字体 + 只摆位置、不做任何聚合）
 │  │  ├─ validation.py         # 报告数字溯源校验 + 报告拼装
 │  │  └─ orchestrator.py       # 六阶段编排：全项目唯一有权改 WorkflowState 的地方
-│  └─ web/                     # 前端单页：index.html / app.css / app.js（挂到 /static）
+│  └─ web/                     # 前端单页（挂到 /static）：index.html（外壳+内联 SVG 图标）
+│                              #   app.css（设计令牌+组件+两档响应式）/ app.js（fetch+轮询+hash 路由）
 ├─ scripts/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
 │  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上
