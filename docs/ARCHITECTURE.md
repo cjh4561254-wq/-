@@ -2148,7 +2148,7 @@ ERROR:    [Errno 13] error while attempting to bind on address ('127.0.0.1', 800
           [winerror 10013] 以一种访问权限不允许的方式做了一个访问套接字的尝试。
 ```
 
-8000 被另一个项目（`D:\deep_agent_search`）占着。`scripts/demo.py:48` 一直用的是 `PORT = 8128`，所以**自动化演示从来没撞上，只有照着 README 手敲的人会撞**。
+8000 被另一个本机项目占着（**当时**量到的是 `D:\deep_agent_search`；写这一节的几小时后再量，已经换成 `D:\data-agent` 了 —— 所以下面第 3 条专门记了「不要写死是谁占用」这个教训）。`scripts/demo.py:48` 一直用的是 `PORT = 8128`，所以**自动化演示从来没撞上，只有照着 README 手敲的人会撞**。
 
 **改了哪些地方**（同一件事的四类残留）：
 
@@ -2159,6 +2159,17 @@ ERROR:    [Errno 13] error while attempting to bind on address ('127.0.0.1', 800
 | `docs/WORKFLOW.md` §6 手工复现（7 处命令） | 同上 | 同上 |
 | `app/main.py` 的 `allow_origins` | 只有 8000 / 5500 | 补 `127.0.0.1:8128` 与 `localhost:8128` |
 | `docs/ARCHITECTURE.md` §10 第 10 条、§12 验收命令 | 只提 8000 | 同步 |
+
+**第 3 个教训：别在文档里写死"占用端口的是哪个项目"**。第一版 README 写的是
+"另一个项目（`D:\deep_agent_search`）正听着 8000" —— 那是**当时量到的真事**。
+可是写这一节之前再量一次，8000 上跑的已经是 `D:\data-agent` 了（两个都是本机在跑的
+uvicorn，各自 listen 一次）。**如果照第一版写进仓库，几小时后它就成了假信息**，
+而且和"行号会漂"是同一类病：把一个**会变的事实**写成常量。
+
+处理方式：README 只保留**不会变的那部分**（8000 是最容易被占的端口、被占时会打印
+`WinError 10013`、怎么用 `netstat` 自己查），把"具体是谁"交给读者现场跑命令去看。
+§14.11 这里则保留当时量到的名字，但**明确标注"当时"**并说明后来变了 ——
+历史记录该留痕，面向用户的文档不该埋雷。
 
 **CORS 那一条是真正的缺陷，不只是文字**：文档改了端口而白名单没改，照文档启动后**从另一个本机页面调接口会被浏览器拦掉**，而且当时没有任何测试会变红 —— `tests/test_error_format.py::test_cors_allows_local_origin_only` 只量了 8000。现在新增 `test_cors_allows_the_port_documented_in_readme`：它**不写死端口号**，而是用正则从 `README.md` 的启动命令里把端口读出来再断言，所以以后"改了文档忘了改代码"会直接红。牙齿证明：删掉 `app/main.py` 里那两行 8128，该用例 `1 failed, 5 passed`，报错是 `assert None == 'http://127.0.0.1:8128'`；还原后字节一致、6 passed。
 
