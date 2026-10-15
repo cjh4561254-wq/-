@@ -441,11 +441,17 @@ strong { color: var(--n-900); }
 }
 .btn:hover { background: var(--n-50); border-color: var(--n-500); text-decoration: none; }
 .btn:active { background: var(--n-100); }
+/* 禁用态**不用 opacity**。
+   opacity 不是"把颜色调暗"，它把整个元素和背后的页面做 alpha 混合。
+   主按钮的字色是白色（--n-0），一旦背景被这条通用规则压成浅色，
+   白字压白底 = 对比度 1.00，按钮会渲染成一个空白白框（看起来像渲染坏了）。
+   所以禁用态改成显式配色：文字和底色都换掉，色值按 WCAG 4.5:1 挑。
+   这也符合「状态不靠颜色单独承载」—— 还有 cursor: not-allowed 和 title。 */
 .btn:disabled, .btn[aria-disabled="true"] {
-  opacity: .5;
   cursor: not-allowed;
-  background: var(--n-0);
+  background: var(--n-100);
   border-color: var(--n-300);
+  color: var(--n-600);
 }
 
 .btn--primary {
@@ -455,6 +461,14 @@ strong { color: var(--n-900); }
 }
 .btn--primary:hover { background: var(--brand-700); border-color: var(--brand-700); color: var(--n-0); }
 .btn--primary:active { background: var(--brand-800); }
+/* 主按钮的禁用态单独给一套品牌色，而不是退化成灰按钮：
+   它仍然是这一页的主操作，只是现在不可用。放在 :hover/:active 之后，
+   因为选择器权重与它们相同（都是 0-2-0），靠源码顺序取胜。 */
+.btn--primary:disabled, .btn--primary[aria-disabled="true"] {
+  background: var(--brand-100);
+  border-color: var(--brand-200);
+  color: var(--brand-700);
+}
 
 .btn--ghost { border-color: var(--n-200); color: var(--n-700); }
 .btn--ghost:hover { border-color: var(--n-400); }
@@ -469,8 +483,12 @@ strong { color: var(--n-900); }
 }
 .btn--chip:hover { background: var(--brand-50); border-color: var(--brand-300); color: var(--brand-700); }
 
-/* 加载中的按钮：转圈 + 文案由 JS 给，不靠动画传达信息 */
-.btn[data-loading="true"] { pointer-events: none; opacity: .75; }
+/* 加载中的按钮：转圈 + 文案由 JS 给，不靠动画传达信息。
+   这里同样**不用 opacity**：加载中按钮带着 disabled 属性，
+   会吃到上面那套禁用配色，再乘一个 .75 就把对比度压到 4.5 以下
+   （实测次按钮 2.70、主按钮 4.36）。转圈和文案已经是足够的信号，
+   不需要再调暗一档。 */
+.btn[data-loading="true"] { pointer-events: none; }
 .btn[data-loading="true"]::before {
   content: "";
   width: 12px;

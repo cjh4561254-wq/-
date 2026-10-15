@@ -423,3 +423,98 @@ def test_topbar_brand_truncates_politely_and_yields_at_320px() -> None:
     assert "llm-badge" not in narrow.group(1)
     # 设置视图里那条同能力的入口必须还在，否则"能力没丢"就是空话。
     assert "接口文档" in _read("index.html")
+
+
+# ------------------------------------------------ 按钮禁用态的可读性（防止改回 opacity）
+
+
+def _css_tokens(css: str) -> dict[str, str]:
+    """把 `:root` 里的 `--name: #rrggbb` 读成字典。"""
+    root = re.search(r":root\s*\{(.*?)\n\}", css, re.S)
+    assert root is not None, "app.css 里找不到 :root"
+    return {name: value for name, value in re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6})", root.group(1))}
+
+
+def _css_rule(css: str, selector: str) -> str:
+    """取某条规则的正文。同选择器出现多次时取**最后一条**（源码顺序里生效的那条）。"""
+    hits = re.findall(re.escape(selector) + r"\s*\{([^}]*)\}", css, re.S)
+    assert hits, f"app.css 里找不到规则：{selector}"
+    return hits[-1]
+
+
+def _declared_color(block: str, prop: str, tokens: dict[str, str]) -> str:
+    """从规则正文里取某个颜色属性，`var(--x)` 会顺着令牌表解析成 hex。"""
+    match = re.search(rf"(?:^|;)\s*{prop}\s*:\s*var\(--([\w-]+)\)", block)
+    assert match is not None, f"规则里没有写 {prop}：{block.strip()!r}"
+    name = match.group(1)
+    assert name in tokens, f"用了未定义的令牌 --{name}"
+    return tokens[name]
+
+
+def _relative_luminance(hex_color: str) -> float:
+    """WCAG 2.1 相对亮度。"""
+    raw = hex_color.lstrip("#")
+    channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(fg: str, bg: str) -> float:
+    """两个 hex 颜色的对比度。"""
+    a, b = _relative_luminance(fg), _relative_luminance(bg)
+    hi, lo = max(a, b), min(a, b)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_disabled_buttons_stay_readable() -> None:
+    """禁用态按钮必须**真的能看清**，而且不许用 `opacity` 实现。
+
+    这是一个真实缺陷的回归锁。原来的写法是：
+
+        .btn:disabled { opacity: .5; background: var(--n-0); border-color: var(--n-300); }
+
+    主按钮 `.btn--primary` 的字色是白色（`--n-0`），而这条通用规则
+    **没有覆盖 `color`**，于是禁用态变成「白字压白底」——
+    实测对比度 **1.00**，按钮渲染成一个空白白框，看起来像页面坏了。
+
+    为什么连"用 opacity 变暗"这个手法本身也要禁掉：
+    `opacity` 不是"把颜色调暗"，它把整个元素与背后的页面做 alpha 混合，
+    静态读 CSS 令牌**算不出**最终对比度。缺陷正是藏在这个盲区里
+    （我原本那份对比度脚本只比对令牌，因此全程报绿，直到截图才看出来）。
+    所以现在改成显式配色：文字和底色都换掉，色值可以静态算准。
+
+    算出来的对比度必须 ≥ 4.5（WCAG 2.1 AA 正文标准）。
+    """
+    css = _read("app.css")
+    tokens = _css_tokens(css)
+
+    cases = (
+        ('.btn:disabled, .btn[aria-disabled="true"]', "通用禁用态", 4.5),
+        ('.btn--primary:disabled, .btn--primary[aria-disabled="true"]', "主按钮禁用态", 4.5),
+    )
+    for selector, label, needed in cases:
+        block = _css_rule(css, selector)
+        assert "opacity" not in block, (
+            f"{label}用了 opacity —— 静态算不出最终对比度，"
+            "上一个空白白框就是这么来的。请改成显式 color/background 配色。"
+        )
+        fg = _declared_color(block, "color", tokens)
+        bg = _declared_color(block, "background", tokens)
+        ratio = _contrast(fg, bg)
+        assert ratio >= needed, (
+            f"{label}对比度只有 {ratio:.2f}（需要 ≥{needed}）：{fg} on {bg}。"
+            "禁用态也要能读，别让它退化成看不清的浅灰。"
+        )
+
+    # 加载中的按钮带着 disabled 属性，会吃到上面那套配色；
+    # 它不能再乘一个 opacity，否则对比度会被压到 4.5 以下（实测次按钮 2.70）。
+    loading = _css_rule(css, '.btn[data-loading="true"]')
+    assert "opacity" not in loading, (
+        "加载态按钮又加了 opacity —— 它同时是 disabled 状态，"
+        "两者叠加会把文字对比度压到 4.5 以下。转圈和文案已经够表意了。"
+    )
+
+    # 顺带确认没把常态改坏：主按钮常态仍然是白字压品牌色。
+    primary = _css_rule(css, ".btn--primary")
+    normal = _contrast(_declared_color(primary, "color", tokens), _declared_color(primary, "background", tokens))
+    assert normal >= 4.5, f"主按钮常态对比度只有 {normal:.2f}"

@@ -10,7 +10,7 @@
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
 > **图表生成**、**报告数字溯源校验**、**企业级前端工作台**（顶栏 + 侧边导航 + 6 个视图）、**端到端演示脚本**、
-> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，820 项自动化测试。
+> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，821 项自动化测试。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
 > 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
@@ -209,6 +209,12 @@ v1.2 把它从"单列 6 张卡片从上往下堆"改成了**企业级工作台**
   **不**说"已核对"——因为后端校验从来没有比较过这两个值。
 - **深色模式本期不做**，这是决定不是遗漏：图表是服务端 matplotlib 生成的**不透明白底 PNG**，
   深色页面里每张图都是一块刺眼白方块，纯前端修不了。三条理由写在 `app.css` 文件末尾。
+- **禁用态按钮不用 `opacity` 变暗**：`opacity` 不是"把颜色调暗"，它把整个元素和背后的
+  页面做 alpha 混合 —— 主按钮的字色是白的，一旦背景被压成浅色就变成**白字压白底**
+  （对比度 1.00），按钮渲染成一个空白白框。所以禁用态改成显式配色，色值按 WCAG 4.5:1 挑，
+  由 `tests/test_frontend.py::test_disabled_buttons_stay_readable` 钉住。
+  这条也说明一个坑：**只比对 CSS 令牌的对比度脚本算不出 `opacity` 的最终效果**，
+  所以当时那份脚本全程报绿，是截图才看出来的。
 - **窄屏真的测过**：1440 / 834 / 390 / 320 四档宽度都用真实浏览器量过几何
   （不是只截图看桌面），表格在容器内横向滚动而不是把页面撑破，长文件名和长单词都不溢出。
 
@@ -219,12 +225,12 @@ v1.2 把它从"单列 6 张卡片从上往下堆"改成了**企业级工作台**
 python -m pytest
 ```
 
-预期：**820 passed**（819 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**821 passed**（820 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
 （`pytest.ini` 里开了 `--doctest-modules`，`testpaths = tests app`）。
-**在仓库根和 `cd tests` 跑都应为 820 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
+**在仓库根和 `cd tests` 跑都应为 821 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
 为什么要跑它：docstring 里写着"输入这个会输出那个"，那就是承诺；不跑的话，
 代码改了而注释没改，注释会一直骗人。
 
@@ -315,7 +321,7 @@ ai-data-analyst-agent/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
 │  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上
 │  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完十段（编号 0-9）、自己关掉
-├─ tests/                      # 819 条功能用例（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+├─ tests/                      # 820 条功能用例（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
 │  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）
