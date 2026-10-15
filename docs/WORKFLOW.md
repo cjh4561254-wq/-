@@ -305,14 +305,14 @@ LLM 客户端那 3 次请求不经过 `retry_count`，它发生在 planning / re
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python -m uvicorn app.main:app --port 8000
+python -m uvicorn app.main:app --port 8128
 ```
 
 另开一个窗口，**第 1 步**上传示例数据（`curl.exe` 而不是 `Invoke-WebRequest`：
 PowerShell 5.1 的那个 cmdlet 不支持 `-Form`）：
 
 ```powershell
-curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets/upload
+curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8128/api/datasets/upload
 ```
 
 预期：`ok=true`，`data.dataset_id` 是 32 位十六进制，`row_count` 是 2168，`column_count` 是 9。
@@ -327,7 +327,7 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets
 $id = "<把 dataset_id 粘这里>"
 $body = '{"dataset_id":"' + $id + '","question":"按地区分组汇总销售额","max_steps":6}'
 Set-Content -Path .tmp\body.json -Value $body -Encoding UTF8
-curl.exe -s -w "`nHTTP %{http_code}`n" -X POST -H "Content-Type: application/json" -d "@.tmp/body.json" http://127.0.0.1:8000/api/analysis
+curl.exe -s -w "`nHTTP %{http_code}`n" -X POST -H "Content-Type: application/json" -d "@.tmp/body.json" http://127.0.0.1:8128/api/analysis
 ```
 
 （`Set-Content -Encoding UTF8` 在 PowerShell 5.1 上会写成"带 BOM"的 UTF-8，本机实测服务端
@@ -340,7 +340,7 @@ curl.exe -s -w "`nHTTP %{http_code}`n" -X POST -H "Content-Type: application/jso
 ```powershell
 $wf = "<把 workflow_id 粘这里>"
 do {
-  $s = Invoke-RestMethod "http://127.0.0.1:8000/api/workflows/$wf"
+  $s = Invoke-RestMethod "http://127.0.0.1:8128/api/workflows/$wf"
   "{0}  {1}  step_index={2}  charts={3}" -f $s.data.status, $s.data.step, $s.data.step_index, @($s.data.charts).Count
   Start-Sleep -Seconds 1
 } while ($s.data.status -notin @("SUCCESS", "SUCCESS_WITH_WARNINGS", "FAILED"))
@@ -352,12 +352,12 @@ do {
 
 ```powershell
 # 报告（含校验结果）
-Invoke-RestMethod "http://127.0.0.1:8000/api/workflows/$wf/report" |
+Invoke-RestMethod "http://127.0.0.1:8128/api/workflows/$wf/report" |
   ForEach-Object { $_.data.report.summary; $_.data.report.sections[0].text; "校验: passed=$($_.data.validation.passed) checked=$($_.data.validation.checked_numbers) issues=$(@($_.data.validation.issues).Count)"; "llm_used=$($_.data.llm_used)" }
 
 # 图表（把 url 原样拼在服务地址后面，不要自己拼路径）
-$url = (Invoke-RestMethod "http://127.0.0.1:8000/api/workflows/$wf").data.charts[0].url
-curl.exe -s -o .tmp\chart.png -w "HTTP %{http_code}  %{content_type}  %{size_download} bytes`n" "http://127.0.0.1:8000$url"
+$url = (Invoke-RestMethod "http://127.0.0.1:8128/api/workflows/$wf").data.charts[0].url
+curl.exe -s -o .tmp\chart.png -w "HTTP %{http_code}  %{content_type}  %{size_download} bytes`n" "http://127.0.0.1:8128$url"
 Start-Process .tmp\chart.png   # 打开看看，中文标题不是方框
 ```
 

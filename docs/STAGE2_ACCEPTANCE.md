@@ -252,7 +252,8 @@ Get-FileHash data\samples\sales.csv -Algorithm MD5   # 期望 910D67236708A573F8
 & ".\.venv\Scripts\python.exe" scripts\make_sample_data.py
 Get-FileHash data\samples\sales.csv -Algorithm MD5   # 必须与上面相同
 
-# 2. 起服务
+# 2. 起服务（本文件是第二阶段的历史记录，当时用的就是 8000；
+#    今天照抄请把端口换成 8128 —— 8000 在本机被别的项目占着，见 README）
 & ".\.venv\Scripts\python.exe" -m uvicorn app.main:app --port 8000
 
 # 3. 另开一个窗口，走一遍上传 → 详情 → 画像（见 README「手动跑一遍」）

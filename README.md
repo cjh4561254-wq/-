@@ -52,7 +52,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 # 解法 B：不激活，每条命令直接用虚拟环境的 python
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8128
 ```
 
 需要"一字不差复现这台机器上验证过的那组版本"时，用同目录的 `requirements.lock.txt`
@@ -143,20 +143,40 @@ setx DEEPSEEK_API_KEY "sk-你的密钥" /M
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8128
 ```
 
 启动后访问：
 
 | 地址 | 用途 |
 |---|---|
-| http://127.0.0.1:8000/ | **分析工作台**（前端单页：工作台 → 数据集 → 市场分析 → 分析报告 → 历史任务 → 设置，共 6 个视图，详见下面的「界面说明」） |
-| http://127.0.0.1:8000/api/health | 健康检查，返回 JSON |
-| http://127.0.0.1:8000/docs | 自动生成的接口文档（可直接点按钮试接口） |
+| http://127.0.0.1:8128/ | **分析工作台**（前端单页：工作台 → 数据集 → 市场分析 → 分析报告 → 历史任务 → 设置，共 6 个视图，详见下面的「界面说明」） |
+| http://127.0.0.1:8128/api/health | 健康检查，返回 JSON |
+| http://127.0.0.1:8128/docs | 自动生成的接口文档（可直接点按钮试接口） |
 
-页面用的 CSS / JS 由 `/static/*` 提供（挂载的是 `app/web/` 目录，见 `app/main.py:79`）。
+页面用的 CSS / JS 由 `/static/*` 提供（挂载的是 `app/web/` 目录，见 `app/main.py`
+里的 `app.mount("/static", ...)` 那一行）。
+
+> 这里**故意不写 `main.py` 的行号**：以前写的是 `app/main.py:79`，后来代码长了几行，
+> 那个数字就指向了无关的异常处理代码，而**没有任何测试会发现**。引用符号名不会漂移。
 
 `--reload` 表示改代码后自动重启，方便开发；正式跑的时候去掉这个参数。
+
+**为什么是 8128 而不是 8000**：8000 是最容易被别的项目占掉的端口。
+本机实测就撞上了 —— 另一个项目（`D:\deep_agent_search`）正听着 8000，
+这时启动本服务会失败并打印：
+
+```
+ERROR:    [Errno 13] error while attempting to bind on address ('127.0.0.1', 8000):
+          [winerror 10013] 以一种访问权限不允许的方式做了一个访问套接字的尝试。
+```
+
+`8128` 与 `scripts/demo.py:48` 的 `PORT = 8128` 是同一个端口，所以
+`python scripts/demo.py` 和手动启动**不会互相打架**，也不用记两个号。
+真想换端口就改 `--port` 后面的数字（换完地址栏里的端口也要跟着改）。
+
+> 端口被占用时**不要**去杀别人的进程：先用 `netstat -ano | findstr :8128`
+> 看是谁在用，再决定换端口还是停掉那个服务。
 
 ## 界面说明
 
@@ -199,12 +219,12 @@ v1.2 把它从"单列 6 张卡片从上往下堆"改成了**企业级工作台**
 python -m pytest
 ```
 
-预期：**819 passed**（818 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**820 passed**（819 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
 （`pytest.ini` 里开了 `--doctest-modules`，`testpaths = tests app`）。
-**在仓库根和 `cd tests` 跑都应为 819 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
+**在仓库根和 `cd tests` 跑都应为 820 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
 为什么要跑它：docstring 里写着"输入这个会输出那个"，那就是承诺；不跑的话，
 代码改了而注释没改，注释会一直骗人。
 
@@ -405,17 +425,17 @@ ai-data-analyst-agent/
 '@ | Set-Content -Path "$env:TEMP\sales.csv" -Encoding UTF8
 
 # 2. 上传（PowerShell 5.1 的 Invoke-WebRequest 不支持 -Form，用 curl.exe）
-curl.exe -s -F "file=@$env:TEMP\sales.csv" http://127.0.0.1:8000/api/datasets/upload
+curl.exe -s -F "file=@$env:TEMP\sales.csv" http://127.0.0.1:8128/api/datasets/upload
 ```
 
 响应里的 `data.dataset_id` 复制出来，接着：
 
 ```powershell
 # 3. 看详情（含前 5 行预览）
-curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>
+curl.exe -s http://127.0.0.1:8128/api/datasets/<把 id 粘这里>
 
 # 4. 看数据画像（缺失值、重复行、语义类型、五数概括）
-curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>/profile
+curl.exe -s http://127.0.0.1:8128/api/datasets/<把 id 粘这里>/profile
 ```
 
 画像里的数字全部由 pandas 真实算出。上面这个 3 行的小数据是为了**能手算核对**：
@@ -426,7 +446,7 @@ curl.exe -s http://127.0.0.1:8000/api/datasets/<把 id 粘这里>/profile
 想看"真实规模的数据长什么样"，直接传仓库里那份示例数据（2168 行 × 9 列）：
 
 ```powershell
-curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8000/api/datasets/upload
+curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8128/api/datasets/upload
 ```
 
 这份数据是 `scripts/make_sample_data.py` 用固定随机种子生成的，**故意**含有缺失值、

@@ -112,3 +112,31 @@ def test_cors_allows_local_origin_only():
 
     bad = client.get("/api/health", headers={"Origin": "https://evil.example.com"})
     assert "access-control-allow-origin" not in bad.headers
+
+
+def test_cors_allows_the_port_documented_in_readme():
+    """README 里写明的启动端口必须真的被放行。
+
+    这条是为了钉住一次真实的不一致：README 的启动命令从 8000 改成 8128
+    （8000 在本机被别的项目占着，绑不上）之后，`allow_origins` 里**没有**
+    8128 —— 照文档启动、再从另一个本机页面调接口就会被浏览器拦掉，
+    而当时没有任何测试会发现（`test_cors_allows_local_origin_only` 只量了 8000）。
+    测试**不写死端口号**，而是从 README 的启动命令里把端口读出来再断言，
+    这样以后改文档而忘记改代码，这条会直接变红。
+    """
+    import re
+    from pathlib import Path
+
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    ports = set(re.findall(r"uvicorn app\.main:app[^\n]*--port (\d+)", readme.read_text(encoding="utf-8")))
+    assert ports, "README 里没找到启动命令，这条测试的前提没了，先修它"
+
+    for port in ports:
+        origin = f"http://127.0.0.1:{port}"
+        resp = client.get("/api/health", headers={"Origin": origin})
+        assert resp.headers.get("access-control-allow-origin") == origin, (
+            f"README 写的启动端口 {port} 不在 CORS 白名单里："
+            f"照文档启动后，本机其它页面调接口会被浏览器拦掉。"
+            f"请把 http://127.0.0.1:{port} 加进 app/main.py 的 allow_origins。"
+        )
+

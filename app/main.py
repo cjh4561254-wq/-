@@ -88,9 +88,14 @@ app = FastAPI(
 
 # 允许本机前端页面跨域调用。
 # 只用 127.0.0.1 / localhost，不使用 "*"，避免把接口暴露给任意网站。
+# 端口为什么列了 8000 又列 8128：README 里文档化的启动端口是 8128
+# （8000 在本机被另一个项目占着，实测绑不上），但 8000 仍是历史文档与
+# 早期验收记录里写的端口，所以两个都留着 —— 多一个本机来源不放宽任何安全边界。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://127.0.0.1:8128",
+        "http://localhost:8128",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
         "http://127.0.0.1:5500",  # VS Code Live Server 常用端口

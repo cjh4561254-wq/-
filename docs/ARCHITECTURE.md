@@ -1522,7 +1522,7 @@ def test_unexpected_error_response_has_no_local_path(client):
     assert body["ok"] is False
     assert "D:" not in r.text and "C:\\Users" not in r.text
 ```
-| 10 | CORS 收紧 | 已经只允许 127.0.0.1 / localhost 的 8000 与 5500，`allow_credentials=False`。**不要为了图省事改成 `["*"]`** | `main.py`（已做） |
+| 10 | CORS 收紧 | 只允许 127.0.0.1 / localhost 的本机端口（`8128`、`8000`、`5500`），`allow_credentials=False`。**不要为了图省事改成 `["*"]`** | `main.py`（已做） |
 | 11 | 上传文件不执行 | 绝不把上传目录放到 Python 的 import 路径上，也不用 `pandas.read_pickle` / `read_json`（pickle 反序列化能执行任意代码）。只允许 `read_csv` / `read_excel` | `loader.py` |
 | 12 | Excel 炸弹与超宽表 | 行数上限与列数上限超过即 `BAD_REQUEST`。**具体数值以 `app/config.py` 为准**（`max_rows=200000`、`max_columns=200`，v1.1 已加），实现细节见第 10 节第 2b 条（读前 `nrows=max_rows+1` 判行、读后判列）。公式不计算（`openpyxl` 读值不读公式）；避免 `read_excel` 把整个工作簿所有 sheet 都读进来（只读第一个 sheet 或指定 sheet） | `loader.py` |
 
@@ -1567,9 +1567,13 @@ def test_unexpected_error_response_has_no_local_path(client):
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -m pytest -q
-python -m uvicorn app.main:app --reload --port 8000
-Invoke-RestMethod http://127.0.0.1:8000/api/health | ConvertTo-Json -Depth 5
+python -m uvicorn app.main:app --reload --port 8128
+Invoke-RestMethod http://127.0.0.1:8128/api/health | ConvertTo-Json -Depth 5
 ```
+
+> 端口 `8128` 是 D6 之后统一的文档端口（`8000` 在本机被别的项目占着，绑不上；
+> 见 README「为什么是 8128 而不是 8000」）。本节下面那张表里 D1–D6 的验收记录
+> 写的是当时真实用过的端口，**不改写历史**，但命令请一律用 `8128`。
 
 | 天 | 目标 | 负责人（主 / 协） | 可并行的部分 | 验收标准（命令可验） |
 |---|---|---|---|---|
@@ -2056,6 +2060,37 @@ B. app/ 下未出现在树里的 .py: 无
 10. **附录 B**：`app/config.py` 行由"已在的 **15 个**"改成"**16 个**"并列出 `db_path`，末尾"若 D6 做 SQLite 再追加 `db_path`"（已完成）改成陈述句；`app/main.py` 行补一句"D6-SQLite 落地时 `main.py` 没有再改"。
 
 **行号口径**：本节与 §8.3 / §7 一律改用**章节名 + 函数名/接口编号**引用，**不写 `文件:行号`** —— 因为这次插入内容后所有后续行号都推移了，而"行号会漂移"正是本仓库已经有 `scripts/check_docs.py` 专门防腐烂的原因。凡确需行号的场合（如 `app/api/routes_workflows.py` 的"必须声明在 `get_workflow` 之前"）都改成了**语义描述 + 守护用例名**（`tests/test_history_api.py`）。
+
+---
+
+### 14.11 文档化端口 8000 → 8128 的同步（README 的启动命令在本机跑不起来）
+
+**怎么发现的**：不是读代码读出来的，是**照 README 原样敲了一遍**。`README.md` 的启动命令写的是 `--port 8000`，本机执行直接失败：
+
+```
+ERROR:    [Errno 13] error while attempting to bind on address ('127.0.0.1', 8000):
+          [winerror 10013] 以一种访问权限不允许的方式做了一个访问套接字的尝试。
+```
+
+8000 被另一个项目（`D:\deep_agent_search`）占着。`scripts/demo.py:48` 一直用的是 `PORT = 8128`，所以**自动化演示从来没撞上，只有照着 README 手敲的人会撞**。
+
+**改了哪些地方**（同一件事的四类残留）：
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| `README.md` 启动命令（2 处） | `--port 8000` | `--port 8128` |
+| `README.md` 手动跑一遍的 4 条 `curl`/`Invoke-RestMethod` | `127.0.0.1:8000` | `127.0.0.1:8128` |
+| `docs/WORKFLOW.md` §6 手工复现（7 处命令） | 同上 | 同上 |
+| `app/main.py` 的 `allow_origins` | 只有 8000 / 5500 | 补 `127.0.0.1:8128` 与 `localhost:8128` |
+| `docs/ARCHITECTURE.md` §10 第 10 条、§12 验收命令 | 只提 8000 | 同步 |
+
+**CORS 那一条是真正的缺陷，不只是文字**：文档改了端口而白名单没改，照文档启动后**从另一个本机页面调接口会被浏览器拦掉**，而且当时没有任何测试会变红 —— `tests/test_error_format.py::test_cors_allows_local_origin_only` 只量了 8000。现在新增 `test_cors_allows_the_port_documented_in_readme`：它**不写死端口号**，而是用正则从 `README.md` 的启动命令里把端口读出来再断言，所以以后"改了文档忘了改代码"会直接红。牙齿证明：删掉 `app/main.py` 里那两行 8128，该用例 `1 failed, 5 passed`，报错是 `assert None == 'http://127.0.0.1:8128'`；还原后字节一致、6 passed。
+
+**同时修掉一处早就漂了的行号引用**：`README.md` 与 `docs/ARCHITECTURE.md` 都写着"`app/main.py:79` 挂载 `app/web/`"，而 `app.mount("/static", ...)` 当时在 **113** 行（改端口后是 118），79 行是一段异常处理代码。**这不是本次改端口造成的**（`git show HEAD:app/main.py` 里就已经是 113），是历史漂移。改法是**引用符号名而不是行号**（"见 `app/main.py` 里的 `app.mount("/static", ...)` 那一行"）—— 行号会漂，符号名不会。这也是为什么 §14.10 已经定过"本节一律不写 `文件:行号`"。
+
+**历史文档不改写**：`docs/STAGE2_ACCEPTANCE.md` 与 `docs/ARCHITECTURE.md` §12 的 D1–D6 验收表里保留当时的 8000（那是**当时真实用过**的端口），只在命令旁加一句"今天照抄请换成 8128"。把历史记录改成今天的数字，等于伪造当时的证据。
+
+**本轮实测**：全量 `python -m pytest -q` → **820 passed in 96.94s**（仓库根）与 **820 passed in 103.50s**（`cd tests` 入口），两处一致；`scripts/check_docs.py` rc=0；`GET http://127.0.0.1:8128/api/health` 在真服务上返回 `ok=true`、`llm_configured=true`。
 
 ---
 
