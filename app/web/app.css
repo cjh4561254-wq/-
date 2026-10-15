@@ -218,22 +218,32 @@ strong { color: var(--n-900); }
   place-items: center;
   width: 30px;
   height: 30px;
+  flex: none;
   border-radius: var(--r-md);
   background: var(--brand-600);
   color: var(--n-0);
   font-size: var(--fs-lg);
 }
 .topbar__names { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+/* 品牌名在窄屏会被挤 —— 但**必须挤得有礼貌**：
+   加省略号，而不是从中间硬切（320px 下实测会被无声裁成
+   「AI Market Intellige」，看起来像渲染坏了）。
+   min-width:0 是让 flex 子项真的能收缩（默认 min-width:auto 会拒绝收缩）。 */
 .topbar__product {
   font-size: var(--fs-lg);
   font-weight: 600;
   letter-spacing: .01em;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .topbar__product-cn {
   font-size: var(--fs-xs);
   color: var(--brand-200);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar__right {
@@ -242,6 +252,7 @@ strong { color: var(--n-900); }
   align-items: center;
   gap: var(--sp-3);
   font-size: var(--fs-sm);
+  flex: none;
 }
 .topbar__workspace {
   display: inline-flex;
@@ -505,6 +516,7 @@ textarea:focus, input[type="text"]:focus {
 
 /* 上传区：label 包住 input，所以点整块都能选文件 */
 .dropzone {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -522,14 +534,32 @@ textarea:focus, input[type="text"]:focus {
 .dropzone__icon { font-size: 26px; color: var(--brand-600); margin-bottom: var(--sp-2); }
 .dropzone__main { font-size: var(--fs-md); font-weight: 600; color: var(--n-800); }
 .dropzone__sub { font-size: var(--fs-xs); color: var(--n-500); }
+
+/* 文件输入本体在视觉上隐藏 —— 但**不能**用 display:none / visibility:hidden。
+   原因：外面那个 <label> 本身不可聚焦，键盘用户唯一的入口就是这个 input；
+   一旦它退出 tab 序列，不用鼠标就再也选不了文件。
+   所以用标准的 sr-only 裁剪法：仍在 tab 序列里、屏幕阅读器仍能读到、
+   但肉眼看不见（原生控件那个「Choose File / No file chosen」按钮
+   和整块企业级拖拽区放在一起非常突兀）。
+   选了哪个文件由 #upload-state 那行文字反馈，信息没有丢。 */
 .dropzone input[type="file"] {
-  width: auto;
-  margin-top: var(--sp-3);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
   padding: 0;
   border: 0;
-  background: transparent;
-  font-size: var(--fs-sm);
-  color: var(--n-600);
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* 焦点落在那个隐藏 input 上时，把焦点环画在整块拖拽区上 ——
+   否则键盘用户看不到自己在哪。 */
+.dropzone:focus-within {
+  border-color: var(--brand-500);
+  border-style: solid;
+  box-shadow: 0 0 0 3px var(--brand-100);
 }
 
 /* ================================================================ 徽章 / 横幅 */
@@ -870,7 +900,6 @@ ul.plain li.muted { color: var(--n-500); }
   .topbar__product { font-size: var(--fs-md); }
   .topbar__product-cn { display: none; }
   .topbar__workspace { display: none; }
-
   .shell { grid-template-columns: minmax(0, 1fr); }
 
   .sidebar {
@@ -899,6 +928,18 @@ ul.plain li.muted { color: var(--n-500); }
   #report { max-width: none; }
   /* 宽表格在窄屏横向滚动，而不是把列挤成豆腐块 */
   .table-wrap { -webkit-overflow-scrolling: touch; }
+}
+
+/* 超窄屏（≤480px，典型 320/360 的安卓机与 iPhone SE 一代）：
+   顶栏只剩「汉堡键 + 品牌 + 状态徽章」三样。
+   实测 320px 时顶栏右侧三件套要吃掉 173px，品牌名只剩 49px —— 会被截成「AI M…」，
+   那已经不是省略而是看不清了。这里让「接口文档」这一条退出顶栏：
+   它是**工具链链接、不是业务动作**，而且 设置 视图里还有同一条（index.html 的
+   「接口文档」小节写着 `/docs` 是 FastAPI 自带文档），能力没有丢，只是不再占顶栏。
+   品牌名因此从 49px 回到 132px，省略成「AI Market Intelli…」，这才叫体面。
+   注意：**不是**用 display:none 藏业务功能，业务入口一个都没动。 */
+@media (max-width: 480px) {
+  .topbar__link { display: none; }
 }
 
 /* 尊重系统的「减少动效」设置 */

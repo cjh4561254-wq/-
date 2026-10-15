@@ -10,7 +10,7 @@
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
 > **图表生成**、**报告数字溯源校验**、**企业级前端工作台**（顶栏 + 侧边导航 + 6 个视图）、**端到端演示脚本**、
-> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，817 项自动化测试。
+> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，819 项自动化测试。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
 > 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
@@ -150,13 +150,47 @@ python -m uvicorn app.main:app --reload --port 8000
 
 | 地址 | 用途 |
 |---|---|
-| http://127.0.0.1:8000/ | **分析工作台**（前端单页：工作台 → 数据集 → 市场分析 → 分析报告 → 历史任务 → 设置，共 6 个视图） |
+| http://127.0.0.1:8000/ | **分析工作台**（前端单页：工作台 → 数据集 → 市场分析 → 分析报告 → 历史任务 → 设置，共 6 个视图，详见下面的「界面说明」） |
 | http://127.0.0.1:8000/api/health | 健康检查，返回 JSON |
 | http://127.0.0.1:8000/docs | 自动生成的接口文档（可直接点按钮试接口） |
 
 页面用的 CSS / JS 由 `/static/*` 提供（挂载的是 `app/web/` 目录，见 `app/main.py:79`）。
 
 `--reload` 表示改代码后自动重启，方便开发；正式跑的时候去掉这个参数。
+
+## 界面说明
+
+页面是**手写的三个文件**（`app/web/index.html` / `app.css` / `app.js`，挂到 `/static`），
+没有 React / Vue，没有打包器，**不引用任何 CDN**（离线也能跑，由 `tests/test_frontend.py` 钉住）。
+v1.2 把它从"单列 6 张卡片从上往下堆"改成了**企业级工作台**：顶部品牌栏 + 左侧导航 + 主内容区。
+
+| 视图 | 地址 | 看什么 | 数据来自 |
+|---|---|---|---|
+| 工作台 | `#/workbench` | 上传区（点击或拖拽）、数据概览指标卡、「开始一次分析」入口、最近分析任务 | `POST /api/datasets/upload`、`GET /api/health`、`GET /api/workflows/history` |
+| 数据集 | `#/dataset` | 字段结构与 dtype、前 5 行预览、缺失值最多的 3 列、画像提示 | `GET /api/datasets/{id}` + `GET /api/datasets/{id}/profile` |
+| 市场分析 | `#/analysis` | 分析问题输入框 + 4 个示例问题、六阶段执行面板、任务时间线 | `POST /api/analysis` + `GET /api/workflows/{id}`（每 1000 ms 轮询） |
+| 分析报告 | `#/report` | 图表卡、报告正文、数字溯源校验横幅 | `GET /api/workflows/{id}/report` |
+| 历史任务 | `#/history` | 归档列表与详情（重启后仍在） | `GET /api/workflows/history` |
+| 设置 | `#/settings` | `/api/health` 的真实字段 + 怎么改环境变量 | `GET /api/health` |
+
+几个刻意做成这样的地方，理由都写在代码注释里：
+
+- **进度不是前端定时器装的**：六阶段面板（读取和检查数据 → 制定分析计划 → 执行统计计算 →
+  生成图表 → 编写分析报告 → 校验关键结果）的状态全部来自后端 `step` 字段，
+  前端只做映射。等待 / 进行中 / 已完成 / 失败 / 未执行五态**同时改边框、底色和文字**，
+  不靠颜色单独承载信息（色盲用户也能分辨）。
+- **不按 HTTP 状态码判断成败**：工作流超时的状态码仍然是 `200`，失败信息在响应体的
+  `error.code` 里。所以每个请求都先解析响应体再看 `ok` 字段 —— 这条踩过坑，注释里写着。
+- **只有真实存在的能力才做成入口**：不做「最近数据集」列表（后端没有数据集列表接口，
+  数据只在进程内存里）、不做报告导出（后端没有导出接口）、设置页不摆点了没反应的开关。
+- **前端不算后端没给的数**：`DatasetProfile` 里没有「去重后行数」这个字段，
+  所以界面上不会出现 `row_count - duplicate_row_count` 这种前端自己算出来的数字
+  （那等于凭空造数）；图表下方的数据点数只写"本图 N 个数据点"，**不**与总行数比较、
+  **不**说"已核对"——因为后端校验从来没有比较过这两个值。
+- **深色模式本期不做**，这是决定不是遗漏：图表是服务端 matplotlib 生成的**不透明白底 PNG**，
+  深色页面里每张图都是一块刺眼白方块，纯前端修不了。三条理由写在 `app.css` 文件末尾。
+- **窄屏真的测过**：1440 / 834 / 390 / 320 四档宽度都用真实浏览器量过几何
+  （不是只截图看桌面），表格在容器内横向滚动而不是把页面撑破，长文件名和长单词都不溢出。
 
 ## 测试
 
@@ -165,12 +199,12 @@ python -m uvicorn app.main:app --reload --port 8000
 python -m pytest
 ```
 
-预期：**817 passed**（816 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**819 passed**（818 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
 （`pytest.ini` 里开了 `--doctest-modules`，`testpaths = tests app`）。
-**在仓库根和 `cd tests` 跑都应为 817 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
+**在仓库根和 `cd tests` 跑都应为 819 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
 为什么要跑它：docstring 里写着"输入这个会输出那个"，那就是承诺；不跑的话，
 代码改了而注释没改，注释会一直骗人。
 
@@ -261,7 +295,7 @@ ai-data-analyst-agent/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
 │  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上
 │  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完十段（编号 0-9）、自己关掉
-├─ tests/                      # 817 项（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+├─ tests/                      # 819 项（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
 │  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）

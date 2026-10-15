@@ -348,3 +348,78 @@ def test_web_directory_has_no_stray_files() -> None:
     names = sorted(path.name for path in WEB_DIR.iterdir())
     assert names == ["app.css", "app.js", "index.html"], names
     assert Path(WEB_DIR / "index.html").is_file()
+
+
+# ------------------------------------------------ 两处窄屏修复（防止改回去）
+
+
+def test_file_input_stays_reachable_by_keyboard() -> None:
+    """文件输入框必须**视觉隐藏但仍在 tab 序列里**。
+
+    它外面包着 `<label class="dropzone">`，而 label 本身不可聚焦 ——
+    键盘用户唯一的入口就是这个 input。一旦有人图省事改成
+    `display:none` 或 `visibility:hidden`（原生控件那个
+    「Choose File / No file chosen」按钮确实难看），
+    不用鼠标就再也选不了文件，而且**页面上完全看不出来**。
+
+    正确写法是 sr-only 裁剪：1×1 + clip-path，肉眼看不见、Tab 走得到。
+    """
+    css = _read("app.css")
+    block = re.search(r"\.dropzone input\[type=\"file\"\]\s*\{(.*?)\}", css, re.S)
+    assert block is not None, "找不到 .dropzone input[type=file] 的样式块"
+    body = block.group(1)
+
+    for banned in ("display: none", "display:none", "visibility: hidden", "visibility:hidden"):
+        assert banned not in body, (
+            f"文件输入框被 {banned} 藏掉了 —— 键盘用户将无法选择文件。"
+            "请改用 1px + clip-path 的 sr-only 写法。"
+        )
+    # 裁剪法的三件套：尺寸压到 1px、裁掉可见区域、绝对定位不占位。
+    assert "clip-path" in body, "缺少 clip-path，1×1 的控件仍可能被看见"
+    assert "position: absolute" in body
+
+    # 焦点落在隐藏 input 上时，焦点环必须画在整块拖拽区上，否则键盘用户不知道自己在哪。
+    assert ".dropzone:focus-within" in css, (
+        "缺少 .dropzone:focus-within —— 键盘用户 Tab 到文件输入框时看不到焦点位置"
+    )
+
+
+def test_topbar_brand_truncates_politely_and_yields_at_320px() -> None:
+    """顶栏品牌名：挤的时候要**省略**，而且不能让到只剩几个字母。
+
+    这条是两个真实缺陷的回归锁：
+
+    1. `.topbar__product` 曾经有 `white-space:nowrap` 却没有 `text-overflow`，
+       320px 下被硬切成「AI Market Intellige」——看起来像渲染坏了。
+       所以现在必须同时有 `overflow:hidden` + `text-overflow:ellipsis`。
+    2. **只补省略号是不够的**：补完之后 320px 只剩 49px，
+       截出来是「AI M…」，有省略号但看不清。所以 ≤480px 时
+       「接口文档」要退出顶栏，把宽度让给品牌名。
+
+    为什么让的是「接口文档」而不是状态徽章：前者是**工具链链接**，
+    而且设置视图里有同一条（能力没丢）；后者反映"本次分析能不能走大模型"，
+    属于业务状态，任何宽度都得留着。
+    """
+    css = _read("app.css")
+    block = re.search(r"\.topbar__product\s*\{(.*?)\}", css, re.S)
+    assert block is not None, "找不到 .topbar__product 的样式块"
+    body = block.group(1)
+    for needed in ("text-overflow: ellipsis", "overflow: hidden", "min-width: 0"):
+        assert needed in body, (
+            f".topbar__product 缺少 {needed}："
+            "窄屏会被硬切，而不是显示省略号（min-width:0 是让 flex 子项真的能收缩）"
+        )
+
+    # 超窄屏必须有一条"让出顶栏链接"的规则，否则 320px 又回到「AI M…」。
+    narrow = re.search(r"@media \(max-width: 480px\)\s*\{(.*?)\n\}", css, re.S)
+    assert narrow is not None, "缺少 max-width: 480px 的断点"
+    assert ".topbar__link" in narrow.group(1), (
+        "480px 断点里没有让出 .topbar__link —— 320px 下品牌名会被挤到看不清"
+    )
+    assert "display: none" in narrow.group(1)
+
+    # 让的是顶栏那条链接，**不能**顺手把徽章也藏了（它是业务状态）。
+    assert "#llm-badge" not in narrow.group(1)
+    assert "llm-badge" not in narrow.group(1)
+    # 设置视图里那条同能力的入口必须还在，否则"能力没丢"就是空话。
+    assert "接口文档" in _read("index.html")
