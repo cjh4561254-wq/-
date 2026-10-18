@@ -9,8 +9,9 @@
 > 已完成：应用骨架与统一错误契约、**文件上传（CSV / xlsx）与数据画像**、
 > **7 个白名单分析工具 + 5 类校验**、**大模型接入（没配 key 时自动走规则兜底，
 > 报告里会写明 `llm_used=false`）**、**六阶段多智能体编排**（唯一状态所有者 + 重试上限）、
-> **图表生成**、**报告数字溯源校验**、**企业级前端工作台**（顶栏 + 侧边导航 + 6 个视图）、**端到端演示脚本**、
-> **SQLite 历史归档（D6-SQLite，D6 之后补做）**，821 项自动化测试。
+> **图表生成**、**报告数字溯源校验**、**战略指挥中心前端**（左侧栏 3 组 6 项 + 顶部命令条，8 个视图键，首屏是「战略态势带」）、
+> **端到端演示脚本**、**SQLite 历史归档（D6-SQLite，D6 之后补做）**，941 项自动化测试（以 `pytest -q` 实跑为准）。
+> 前端这一版为什么这么长、口径怎么定的：[docs/COMMAND_CENTER_MIGRATION.md](docs/COMMAND_CENTER_MIGRATION.md)。
 > 一次提问在系统里到底怎么走：[docs/WORKFLOW.md](docs/WORKFLOW.md)；
 > 亮点与踩过的坑：[docs/HIGHLIGHTS.md](docs/HIGHLIGHTS.md)；
 > 面试里最可能被问的 12 个问题：[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
@@ -150,7 +151,7 @@ python -m uvicorn app.main:app --reload --port 8128
 
 | 地址 | 用途 |
 |---|---|
-| http://127.0.0.1:8128/ | **分析工作台**（前端单页：工作台 → 数据集 → 市场分析 → 分析报告 → 历史任务 → 设置，共 6 个视图，详见下面的「界面说明」） |
+| http://127.0.0.1:8128/ | **指挥中心单页应用**（左侧栏 6 项：战略态势 → 数据资产 → 发起分析 → Agent 运行 → 分析报告 → 历史记录；首屏是「战略态势带」，详见下面的「界面说明」） |
 | http://127.0.0.1:8128/api/health | 健康检查，返回 JSON |
 | http://127.0.0.1:8128/docs | 自动生成的接口文档（可直接点按钮试接口） |
 
@@ -185,18 +186,47 @@ ERROR:    [Errno 13] error while attempting to bind on address ('127.0.0.1', 800
 
 ## 界面说明
 
-页面是**手写的三个文件**（`app/web/index.html` / `app.css` / `app.js`，挂到 `/static`），
-没有 React / Vue，没有打包器，**不引用任何 CDN**（离线也能跑，由 `tests/test_frontend.py` 钉住）。
-v1.2 把它从"单列 6 张卡片从上往下堆"改成了**企业级工作台**：顶部品牌栏 + 左侧导航 + 主内容区。
+页面是**手写的文件**（主界面 `app/web/index.html` + `app.css` + `app.js`，登录页 `login.html` + `login.css` + `login.js`，
+设计令牌 `tokens.css` 被两个页面共用；全部挂到 `/static`，**没有 React / Vue，没有打包器，不引用任何 CDN**，
+离线也能跑，由 `tests/test_frontend.py` 按文件名白名单+ 排序全等钉住）。
+v1.2 把它从"单列 6 张卡片从上往下堆"改成了企业级工作台（顶部品牌栏 + 左侧导航 + 主内容区），随后又加了
+**服务端真实认证**（登录页 + 受保护路由）、设计令牌体系与图表视觉改造；
+**本轮（方案 01「高端企业战略指挥中心」）把外框换成了左侧栏 + 顶部命令条，首屏换成了战略态势带**，
+完整记录与全部取舍见 [docs/COMMAND_CENTER_MIGRATION.md](docs/COMMAND_CENTER_MIGRATION.md)。
+`app/web/*` 的行数**不在这里写死**：没有任何测试钉行数，写进 README 就是一份会过期的收据；
+要当下的实测值自己跑 `wc -l app/web/*`。
+
+外框与导航（本轮之后）：
+
+- **左侧栏 240px = 唯一导航主轴**：3 组 6 项 —— 指挥（战略态势 / 数据资产）、分析（发起分析 / Agent 运行）、
+  成果（分析报告 / 历史记录）。当前项靠 `aria-current="page"` + 3px 竖标区分，两项带真实计数徽标
+  （数据集总数来自 `GET /api/datasets` 的 `total`；运行中那一格是**本次会话正在轮询的那一条**，
+  后端没有"全部运行中"的统计接口，前端不编）。
+- **顶部命令条不是导航**：里面没有 `<nav>`、没有全局搜索框，只放视图标题、服务健康点、大模型配置徽章、
+  接口文档入口、「发起新分析」主按钮和账户菜单（**设置页的唯一入口就在这个菜单里**）。
+- **视图键共 8 个**（`app.js` 的 `VIEWS`）：`command`（新，首屏）/ `workbench` / `dataset` / `analysis` /
+  `runs`（新，从原分析视图里拆出的执行过程）/ `report` / `history` / `settings`。
+  键名一个都没改：改键名会同时打断深链、`applyDeepLink` 和所有测试，收益为零。
+  不在侧栏的两项：`settings` 走账户菜单，`workbench`（上传 + 概览 + 最近任务）保留但降级为二级视图。
 
 | 视图 | 地址 | 看什么 | 数据来自 |
 |---|---|---|---|
-| 工作台 | `#/workbench` | 上传区（点击或拖拽）、数据概览指标卡、「开始一次分析」入口、最近分析任务 | `POST /api/datasets/upload`、`GET /api/health`、`GET /api/workflows/history` |
-| 数据集 | `#/dataset` | 字段结构与 dtype、前 5 行预览、缺失值最多的 3 列、画像提示 | `GET /api/datasets/{id}` + `GET /api/datasets/{id}/profile` |
-| 市场分析 | `#/analysis` | 分析问题输入框 + 4 个示例问题、六阶段执行面板、任务时间线 | `POST /api/analysis` + `GET /api/workflows/{id}`（每 1000 ms 轮询） |
-| 分析报告 | `#/report` | 图表卡、报告正文、数字溯源校验横幅 | `GET /api/workflows/{id}/report` |
-| 历史任务 | `#/history` | 归档列表与详情（重启后仍在） | `GET /api/workflows/history` |
-| 设置 | `#/settings` | `/api/health` 的真实字段 + 怎么改环境变量 | `GET /api/health` |
+| 战略态势（首屏） | `#/command` | **战略态势带**（最多 3 行：业务问题原话 / 报告首段结论 / 取数调用次数 / 打开归档详情）+ 4 格 hairline 指标（数据集总数、运行中、已出报告数、失败数——后两格必须标注样本口径） | `GET /api/workflows/history?limit=12`、逐条 `GET /api/workflows/history/{id}`（最坏 4 个 GET，全部只读）、`GET /api/datasets`、`GET /api/health` |
+| 工作台 | `#/workbench` | 上传区（点击或拖拽）、数据概览、最近上传、最近分析任务、统计条（每块都标了接口来源） | `GET /api/datasets`、`GET /api/workflows/history`、`POST /api/datasets/upload`、`GET /api/health` |
+| 数据资产 | `#/dataset` | **真实列表**（文件名 / 类型 / 大小 / 上传时间 / 行列数与缺失值，全部来自接口）、排序、分页、「第 X–Y 条，共 N 条」、`q` 文件名搜索；选中后看字段结构、前 5 行、缺失值最多的列 | `GET /api/datasets`（支持 `q`/`sort`/`order`/`limit`/`offset`）、`GET /api/datasets/{id}`、`/profile` |
+| 发起分析 | `#/analysis` | 数据集选择（只列你自己的真实数据集）、自然语言问题 + 4 个示例问题、`max_steps` 上限 | `POST /api/analysis`（**202**）+ 轮询 `GET /api/workflows/{id}` |
+| Agent 运行 | `#/runs` | **六阶段阶梯 + 任务明细**（状态来自后端 `step`/`step_index`/`tasks`，前端没有定时器假装进度）、整条任务的真实耗时 | `GET /api/workflows/{id}`（每 1000 ms 轮询） |
+| 分析报告 | `#/report`、`#/report/{id}` | 核心指标、图表卡（服务端 matplotlib 渲染的 PNG）、`article.doc` 报告正文、cites 角标与证据区一一对应、数字溯源校验横幅；**深链接可直接打开并渲染** | `GET /api/workflows/{id}`、`/{id}/report`、`/{id}/charts/{filename}` |
+| 历史记录 | `#/history`、`#/history/{id}` | 归档列表（真实名称 / 状态 / 时间 / 有没有报告 / 用的哪种模板）+ **真实分页** + 详情页（态势带的「查看报告」就落在这里） | `GET /api/workflows/history`、`/history/{workflow_id}` |
+| 设置 | `#/settings` | 当前账号与会话（显示名、当前会话、有效期）、**修改自己的密码**、**这个账号在哪些会话里登录着**、`/api/health` 的真实字段 | `GET /api/auth/me`、`POST /api/auth/password`、`GET /api/auth/sessions`、`GET /api/health` |
+
+首屏那四列的取值口径是**唯一规定**，写在 [docs/COMMAND_CENTER_MIGRATION.md](docs/COMMAND_CENTER_MIGRATION.md) §4
+（问题 = `history.items[].question` 原样、结论 = `sections[0].text`、证据数 = 去重后的 `citations.length`、
+时间 = `finished_at`；命令条写「数据资产更新于」而不是"数据截至"）。
+
+登录页是**独立的三个文件**（`app/web/login.html` + `login.css` + `login.js`），挂在 `/login`，
+首次部署时自动进入「创建第一个账号」模式；主界面三件套通过 `/app` 提供（未登录 303 跳 `/login`）。
+品牌面板的主张句是中文「把市场数据，变成能追溯的决策依据」，英文产品名降为次要行。
 
 几个刻意做成这样的地方，理由都写在代码注释里：
 
@@ -222,6 +252,13 @@ v1.2 把它从"单列 6 张卡片从上往下堆"改成了**企业级工作台**
   所以当时那份脚本全程报绿，是截图才看出来的。
 - **窄屏真的测过**：1440 / 834 / 390 / 320 四档宽度都用真实浏览器量过几何
   （不是只截图看桌面），表格在容器内横向滚动而不是把页面撑破，长文件名和长单词都不溢出。
+  媒体查询**沿用存量断点**：主档是 480 / 760 / 1080（`app.css` 里另有两条历史遗留的 `479px` 规则）。
+  方案文档里写的 768 **没有被引入**——8px 差没有视觉后果，而新增一档会连带改动把窄屏规则钉住的测试
+  （取舍理由见 [docs/COMMAND_CENTER_MIGRATION.md](docs/COMMAND_CENTER_MIGRATION.md) §5 的 D-2）。
+- **首屏不自绘业务趋势图**：真实图表只有一种来源，就是后端 matplotlib 渲染出来的 PNG。
+  前端自己画一条"近 6 季度趋势"需要后端没有的聚合口径（后端只在一次工作流内部做聚合），
+  画出来就是假数据。同理，态势带**不显示"数据截至"**、**不显示升降 delta**：
+  归档链路里没有 `dataset_id`，也没有任何同比字段能撑起这两个数字。
 
 ## 测试
 
@@ -230,12 +267,16 @@ v1.2 把它从"单列 6 张卡片从上往下堆"改成了**企业级工作台**
 python -m pytest
 ```
 
-预期：**821 passed**（820 条功能测试 + 1 条 doctest）。测试用 FastAPI 的 `TestClient`，
+预期：**941 passed**（940 条功能用例 + 1 条 doctest；`--collect-only -q` 同为 941）。测试用 FastAPI 的 `TestClient`，
 **不需要先启动服务，也不占用端口**（后台任务是在同一个进程里跑的，`TestClient` 会等它跑完）。
+
+> 这个数字**以你实跑一次为准**。它会随测试模块增减而变，而 `check_docs.py` 并不核对 README 里的计数
+> （它只核对 `docs/HISTORY_ROBUSTNESS.md`，见下一节）。方案 01 前端重构期间新增了
+> `tests/test_frontend_command_center.py` 这一支指挥中心守卫（37 条），总数因此从 902 变成 941。
 
 其中那条 doctest 来自 `app/errors.py` 里 `sanitize_detail` 的 docstring
 （`pytest.ini` 里开了 `--doctest-modules`，`testpaths = tests app`）。
-**在仓库根和 `cd tests` 跑都应为 821 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
+**在仓库根和 `cd tests` 跑都应为 941 passed**（两个入口都会收集到 `app/errors.py` 那条 doctest）。
 为什么要跑它：docstring 里写着"输入这个会输出那个"，那就是承诺；不跑的话，
 代码改了而注释没改，注释会一直骗人。
 
@@ -273,6 +314,17 @@ python -m pytest
 > 它防腐烂，**不防遗漏**：只核对文档里写了的东西。判断性叙述（「为什么修」）
 > 无法机械复核；代码锚点与文档引用**同谋地一起改错**它也看不出来。
 > 设计边界与探针有效性证明见该文档第 ⑦ 节。
+
+**它管的文件范围**（这一点容易误读，写清楚）：脚本里写死了 `DOC = docs/HISTORY_ROBUSTNESS.md`，
+代码侧只从 `app/`、`scripts/` 下的 `*.py` 收集 `# **:NNN**` 形式的锚点声明。所以：
+
+- **`app/web/*` 的行号锚点完全不在它的管辖内** —— 它不读 `.css` / `.js` / `.html`，
+  `docs/refactor/*`、`docs/design-system.md` 里那些 `app.js:117`、`app.css:456` 之类的引用**没有任何守卫**。
+  这类数字都是**写作时点的快照**，前端一改就漂。本轮实测漂移情况与处置口径见
+  [docs/COMMAND_CENTER_MIGRATION.md](docs/COMMAND_CENTER_MIGRATION.md) §6。
+- 因此本项目的新文档**优先引用符号名**（函数名、类名、令牌名、CSS 选择器），
+  行号只在"必须有行号才讲得清"的历史取证里出现，并且要标出测量时点。
+- 别为了"让 check_docs 管住前端"去改这个脚本：它的设计边界就是那一份台账文档。
 
 ## 目录结构
 
@@ -320,13 +372,17 @@ ai-data-analyst-agent/
 │  │  ├─ charts.py             # 出图（中文字体 + 只摆位置、不做任何聚合）
 │  │  ├─ validation.py         # 报告数字溯源校验 + 报告拼装
 │  │  └─ orchestrator.py       # 六阶段编排：全项目唯一有权改 WorkflowState 的地方
-│  └─ web/                     # 前端单页（挂到 /static）：index.html（外壳+内联 SVG 图标）
-│                              #   app.css（设计令牌+组件+两档响应式）/ app.js（fetch+轮询+hash 路由）
+│  └─ web/                     # 前端单页（挂到 /static）：index.html（侧栏+命令条外壳+内联 SVG 图标精灵）
+│                              #   tokens.css（设计令牌唯一入口，两个页面共用）
+│                              #   app.css（令牌兼容层副本 + 侧栏/命令条/态势带/阶梯/报告等组件 + 存量断点的响应式）
+│                              #   app.js（fetch + 轮询 + hash 路由，8 个视图键，态势带取数只走只读接口）
+│                              #   login.html / login.css / login.js（独立登录页：中文主张句 + 三形态）
 ├─ scripts/
 │  ├─ make_sample_data.py      # 生成示例数据集（固定 seed，可重复）
-│  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上
+│  ├─ check_docs.py            # 核对 docs/HISTORY_ROBUSTNESS.md 的断言与仓库现状是否还对得上（只管这一个文档）
 │  └─ demo.py                  # 端到端演示：自己起服务、走真实 HTTP 跑完十段（编号 0-9）、自己关掉
-├─ tests/                      # 820 条功能用例（37 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+├─ tests/                      # 940 条功能用例（42 个测试模块），覆盖数据层 / 工具层 / 编排 / 接口 / 安全 / 前端
+│                              #   前端两支：test_frontend.py（v1.2 存量守卫）+ test_frontend_command_center.py（指挥中心 37 条）
 ├─ data/
 │  ├─ uploads/                 # 上传文件落地目录（内容不进 git）
 │  ├─ charts/                  # 生成的 PNG（可重新生成，不进 git）
@@ -341,6 +397,7 @@ ai-data-analyst-agent/
 │  ├─ DECISIONS.md             # 决策记录：每条都写了"为什么"
 │  ├─ DEMO.md                  # scripts/demo.py 的真实运行输出
 │  ├─ HISTORY_ROBUSTNESS.md    # 历史归档健壮性：坏数据降级、边界取证、文档自检与变异证据
+│  ├─ COMMAND_CENTER_MIGRATION.md # 方案 01「战略指挥中心」重构的正式记录：选型、裁定、前后对照、数据口径、已知偏差
 │  └─ STAGE2_ACCEPTANCE.md     # 第二阶段的验收说明（交付物、怎么自己跑一遍）
 ├─ .env.example                # 环境变量清单（应用不读它；只有键名与占位值，无真实密钥）
 ├─ .gitattributes              # 行尾策略：示例 CSV 钉成 LF，保证克隆后字节一致
@@ -379,17 +436,26 @@ ai-data-analyst-agent/
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/` | **分析页面**（返回 `app/web/index.html`） |
+| GET | `/` | **分析页面**（返回 `app/web/index.html`，与 `/app` 同一个单页应用） |
+| GET | `/login` | 登录页（`app/web/login.html`；首次部署时是「创建第一个账号」模式） |
+| GET | `/app` | 工作台入口（**未登录时 303 跳 `/login`** —— 这是服务端保护，不是前端隐藏） |
 | GET | `/static/*` | 页面用的 CSS / JS（挂载 `app/web/` 目录） |
-| GET | `/api/health` | 服务状态与配置自检 |
-| POST | `/api/datasets/upload` | 上传 CSV / xlsx，落盘 + 解析 + 登记 |
-| GET | `/api/datasets/{dataset_id}` | 数据集详情（含前 5 行预览） |
+| GET | `/api/health` | 服务状态与配置自检（**公开**，登录页靠它区分"服务挂了"和"密码错了"） |
+| POST | `/api/auth/bootstrap` | 创建第一个账号（**只在账号库为空时可用**，非空返回 403） |
+| POST | `/api/auth/login` | 登录：校验凭据 → 签发会话 cookie（`mis_session`）；失败文案不区分用户名/密码 |
+| POST | `/api/auth/logout` | 退出：服务端销毁会话 + 客户端删 cookie（**幂等**，不要求带会话） |
+| GET | `/api/auth/me` | 当前会话身份（**公开**：登录页用它判断是否需要首次初始化） |
+| POST | `/api/auth/password` | 改密码：必须提供当前密码，改完踢掉该账号全部旧会话并给当前设备重签 |
+| GET | `/api/auth/sessions` | 当前账号的会话元信息（库里只存 token 的 SHA-256，接口不回传 token） |
+| POST | `/api/datasets/upload` | 上传 CSV / xlsx，落盘 + 解析 + 登记（记录归属用户） |
+| GET | `/api/datasets` | **数据集列表**（只返回自己的）：`limit`(1-200 默认 50)、`offset`、`sort`(`uploaded_at`/`filename`/`rows`)、`order`、`q`(文件名子串)；非法取值 **422** |
+| GET | `/api/datasets/{dataset_id}` | 数据集详情（含前 5 行预览）；**不是自己的 → 404，文案与"不存在"逐字相同** |
 | GET | `/api/datasets/{dataset_id}/profile` | 数据画像（首次调用时计算，之后走缓存） |
-| POST | `/api/analysis` | **提交分析问题，返回 202 + `workflow_id`**（立刻返回，不等算完） |
+| POST | `/api/analysis` | **提交分析问题，返回 202 + `workflow_id`**（立刻返回，不等算完；`dataset_id` 必须是自己的） |
 | GET | `/api/workflows/{workflow_id}` | 轮询状态：13 个小字段，**故意不含报告** |
 | GET | `/api/workflows/{workflow_id}/report` | 完整报告 + 校验结果（`report` / `validation` / `results` / `llm_used`） |
 | GET | `/api/workflows/{workflow_id}/charts/{filename}` | 图表 PNG（`filename` 形如 `a1b2c3d4e5f6.png`） |
-| GET | `/api/workflows/history` | **历史归档列表**（只读 SQLite 库，新→旧；分页 `limit` 1-100 默认 20、`offset` ≥0 默认 0） |
+| GET | `/api/workflows/history` | **历史归档列表**（只读 SQLite 库，新→旧，**只返回自己的**；分页 `limit` 1-100 默认 20、`offset` ≥0 默认 0） |
 | GET | `/api/workflows/history/{workflow_id}` | **历史归档详情**（归档记录 + 还原的报告正文；没归档报告时 `report` 为 `null`） |
 | GET | `/docs` | Swagger 接口文档（FastAPI 自动生成） |
 
@@ -398,7 +464,13 @@ ai-data-analyst-agent/
 - **只读**：它们只查库、不查内存，**也不提供"继续运行"** —— 拿着历史 `workflow_id` 去调
   **状态 / 报告 / 图表**三个接口，仍然是 `404 NOT_FOUND`。
 - **只覆盖终态工作流**：跑到终态才写库，重启时**正在运行**的工作流不会被恢复，也不会被标成失败。
-- **没有鉴权**：归档列表里的任何一条都能被任何人查到（本地单机工具，不开放到公网）。
+- **有归属隔离（本轮升级已改）**：归档记录带 `owner_user_id`，列表/详情只返回**当前登录用户**的；
+  拿别人的 `workflow_id` 查详情、报告、图表一律 `404 NOT_FOUND`，且**文案与"真的不存在"逐字相同**
+  （不泄露"存在但不属于你"）。改动前这里是"任何一条谁都能查"，已不存在。
+  Lead 的独立装置实测 `.tmp/lead_iso/verify_isolation.py` → **21/21 PASS**。
+  遗留边界（如实说明）：**没有自助注册接口**，第二个账号只能由运维用 `UserStore.create_user()` 建；
+  数据集元信息仍在服务进程内存里（重启即空），**所以本项目不宣称已完成多租户隔离** ——
+  完整的限制清单见 [docs/limitations.md](docs/limitations.md)。
 - **归档关掉时返回 200**：`DB_PATH=""` → `enabled=false` + 空列表，不是 4xx。
 - **声明顺序有讲究**：`/api/workflows/history` 与 `/api/workflows/{workflow_id}` 路径形状相同，
   所以历史路由**必须声明在前**，否则会被后者当成 `workflow_id="history"` 吞掉而 404
@@ -505,6 +577,45 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8128/api/datasets
 - 错误响应里的 `detail` 会清洗掉本机绝对路径与用户名（`app/errors.py` 的 `sanitize_detail`）。
 - 全项目不使用 `eval` / `exec` / `compile` / `__import__`，不执行任何模型生成的代码。
 
+## 认证与登录（本轮升级新增，已实测）
+
+真实的服务端认证，**不是前端假登录**：会话由服务端签发与销毁，受保护接口由服务端校验身份。
+
+| 项 | 实现位置 | 实测事实 |
+|---|---|---|
+| 账号库 | `app/data/users.py` + `data/db/auth.db` | 与归档库 `app.db` **分开存**：`DB_PATH=""` 关掉归档不会连带挪走账号 |
+| 密码存储 | `app/core/auth.py` | PBKDF2-HMAC-SHA256 + 每账号独立随机盐 + 240000 次迭代；**库里没有明文密码**（对 `auth.db` 做字节扫描实测搜不到） |
+| 会话 | 同左 | 43 字符随机 token，库里只存它的 SHA-256；cookie 名 `mis_session`，实测响应头为 `HttpOnly; Max-Age=28800; Path=/; SameSite=lax` |
+| 登录限流 | 同左 | 同一用户名连续失败 5 次后锁 300 秒；第 6 次返回 **429 + `Retry-After`**（实测状态码序列 `[401,401,401,401,401,429]`、`Retry-After=301`） |
+| 防用户名枚举 | 同左 | "用户名不存在"与"密码错误"返回**逐字相同**的文案（`用户名或密码不正确`），失败原因只进服务端日志 |
+| 改密码 | 同左 | 必须提供当前密码；改完踢掉该账号**全部**旧会话，并给当前设备重签（实测旧 token 立即 401、新密码可登录） |
+
+路由与保护范围（`app/main.py`）：
+
+- `/login` 登录页；`/app` 工作台（未登录时 303 跳 `/login`）；`/` 返回同一个单页应用。
+- **受保护**：`/api/datasets/*`、`/api/analysis`、`/api/workflows/*` —— 在 `include_router(...)` 处**集中**挂 `Depends(require_user)`。
+  为什么不逐个接口挂：漏写一个接口就是裸奔，集中在一处才能一眼看全。
+- **公开**：`/api/health`（登录页要靠它区分"服务挂了"和"密码错了"）、`/api/auth/me`（登录页靠它判断是否需要首次初始化）。
+- **首次部署没有默认账号**：账号库为空时登录页进入"首次部署"模式，通过 `POST /api/auth/bootstrap` 创建第一个账号；
+  账号库非空后该接口返回 **403**（否则任何人都能反复重置管理员）。**代码里不写死任何账号密码。**
+
+认证相关环境变量（和别的配置一样只认**进程环境变量**，不读 `.env`）：
+
+| 变量 | 默认 | 什么时候需要改 |
+|---|---|---|
+| `AUTH_DB_PATH` | `data/db/auth.db` | 换账号库存放位置 |
+| `AUTH_COOKIE_NAME` | `mis_session` | 本机同时跑多个项目时防 cookie 撞名 |
+| `AUTH_COOKIE_SECURE` | `0`（关） | **部署到 HTTPS 必须设 1**；本机 `http://127.0.0.1` 必须保持 0（带 `Secure` 的 cookie 浏览器不会回传，表现为"登录成功下一秒又变未登录"） |
+| `AUTH_SESSION_SECONDS` | `28800`（8 小时） | 调会话有效期（上限 30 天） |
+| `AUTH_MAX_FAILED_ATTEMPTS` / `AUTH_LOCKOUT_SECONDS` | `5` / `300` | 调登录失败限流 |
+
+**本期明确没有的能力（登录页上也不会出现对应入口，不假装有）**：
+
+- 没有自助注册、没有"忘记密码 / 邮件重置"（项目里没有任何邮件配置）；
+- 没有"记住登录"：会话固定 8 小时，不做续期；
+- **单机 / 单人定位**：可以建多个账号，但数据集与工作流都是**进程内内存**的（见下面的已知限制），
+  账号维度的归属隔离正在落地，真实边界以 `docs/limitations.md` 为准 —— **不要把本项目当多租户产品使用或对外宣称。**
+
 ## 七天计划与当前进度
 
 | 阶段 | 内容 | 状态与提交 |
@@ -517,6 +628,7 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8128/api/datasets
 | 第 6 天 | 网页交互：上传 / 概览 / 提问 / 六步进度 / 图表 / 报告校验，前后端联调 | ✅ 完成（`a703364`，前端由 `tests/test_frontend.py` 钉住） |
 | 第 7 天 | 端到端演示脚本与真实输出（[docs/DEMO.md](docs/DEMO.md)）、完整测试、三份交付文档（[WORKFLOW](docs/WORKFLOW.md) / [INTERVIEW_QA](docs/INTERVIEW_QA.md) / [HIGHLIGHTS](docs/HIGHLIGHTS.md)）、README 与架构文档收尾 | ✅ 完成（`a677425` + 本次文档提交） |
 | 第 7 天之后 | **D6-SQLite 补做**：把第 6 天拍板、当天没做完的 SQLite 历史归档落地（标准库 `sqlite3`、零新依赖）+ 两个只读历史接口 | ✅ 完成，决策记录见 [docs/DECISIONS.md](docs/DECISIONS.md) D-24（**如实记：这条是拍板在 D6、D6 没做、之后才补上的**） |
+| 第 7 天之后 | **方案 01 前端重构（战略指挥中心）**：10 套方案里选定 01，外框改成左侧栏 + 命令条、首屏改成战略态势带、登录页改版，并新增 37 条前端守卫 | ✅ 完成，正式记录（含 12 条主控裁定与全部已知偏差）见 [docs/COMMAND_CENTER_MIGRATION.md](docs/COMMAND_CENTER_MIGRATION.md)；过程文档在 `docs/refactor/` |
 
 ## 已知限制（用之前先看这一节）
 
@@ -530,5 +642,7 @@ curl.exe -s -F "file=@data/samples/sales.csv" http://127.0.0.1:8128/api/datasets
 - **仍然必须单进程**：`uvicorn --workers 4` 会让上传落在一个进程、查询落到另一个进程，
   表现就是"刚传完就 404"。**SQLite 归档没有改变这一点** —— 进程内的 dict 依然是唯一的运行态
   事实来源，多进程下它们仍然各自分裂。
-- **历史接口没有鉴权**：本地单机工具，归档列表谁都能查；不要直接暴露到公网。
+- ~~**历史接口没有鉴权**~~ → **本轮升级已改**：`/api/workflows/*`、`/api/datasets/*`、`/api/analysis`
+  现在都要求有效会话，未登录一律 401（见上面「认证与登录」一节）。但**仍然不要直接暴露到公网**：
+  本机开发默认 `AUTH_COOKIE_SECURE=0`，部署到 HTTPS 必须显式设成 1。
 - 归档**可以被关掉**（`DB_PATH=""`）：历史列表返回 200 + `enabled=false` + 空列表；历史详情因无归档记录返回 404 `NOT_FOUND`。

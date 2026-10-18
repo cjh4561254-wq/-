@@ -21,17 +21,26 @@
 
 import hashlib
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from app import config
+from app.api.ownership import require_owned_dataset
+from app.core.auth import SessionUser, require_user
 from app.data.loader import load_dataframe
 from app.data.profiler import build_profile
 from app.data.store import build_stored_filename, store
 from app.errors import AppError
 from app.schemas import ApiResponse, ErrorCode
-from app.schemas_dataset import ALLOWED_EXTENSIONS, Dataset, DatasetProfile
+from app.schemas_dataset import (
+    ALLOWED_EXTENSIONS,
+    Dataset,
+    DatasetListData,
+    DatasetListItem,
+    DatasetProfile,
+)
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -113,12 +122,17 @@ def _remove_quietly(path: Path) -> None:
 @router.post("/upload", response_model=ApiResponse[Dataset], summary="上传 CSV / Excel")
 async def upload_dataset(
     file: UploadFile = File(..., description="csv 或 xlsx 文件"),
+    user: SessionUser = Depends(require_user),
 ) -> ApiResponse[Dataset]:
     """接收一个文件，落盘、解析、登记，返回元信息与前 5 行预览。
 
     七步的顺序不能换（docs/DECISIONS.md D-09）：前两步是安全，第三步是容量，
     后面是"先有文件、再解析、最后才登记"。每一步的位置都对应一个具体的失败场景，
     顺序写反了就会在磁盘上留下垃圾，或者留下"有元信息、却没文件"的假记录。
+
+    `user` 参数只用来做一件事：把这份数据**登记成他的**（第 ⑦ 步）。
+    归属在登记的那一刻就定下来、之后不再改变 —— "谁上传的就是谁的"，
+    没有"转让数据集"这种操作，所以不需要任何后续修改归属的接口。
     """
     settings = config.get_settings()  # 配置在函数里现取，见 docs/ARCHITECTURE.md §4.0
 
@@ -182,8 +196,82 @@ async def upload_dataset(
         file_ext=ext,
         size_bytes=len(raw_bytes),
         sha256=sha256,
+        owner_user_id=user.id,
+        owner_username=user.username,
     )
     return ApiResponse[Dataset](ok=True, data=dataset, error=None)
+
+
+@router.get("", response_model=ApiResponse[DatasetListData], summary="我的数据集列表")
+def list_datasets(
+    limit: int = Query(50, ge=1, le=200, description="每页条数，1–200，默认 50"),
+    offset: int = Query(0, ge=0, description="从第几条开始，从 0 起"),
+    sort: Literal["uploaded_at", "filename", "rows"] = Query(
+        "uploaded_at", description="排序字段：上传时间 / 文件名 / 行数"
+    ),
+    order: Literal["asc", "desc"] = Query("desc", description="asc 升序，desc 降序"),
+    q: str | None = Query(
+        None, max_length=200, description="按文件名做子串筛选（大小写不敏感；不传=不筛）"
+    ),
+    user: SessionUser = Depends(require_user),
+) -> ApiResponse[DatasetListData]:
+    """分页列出**当前用户**的数据集，支持排序与文件名筛选。
+
+    六条设计决定，都要写清楚：
+
+    1. **路径是 `""` 而不是 `"/"`**：router 已经有 `prefix="/datasets"`，
+       再写 `"/"` 会得到 `/api/datasets/`，而前端（和大多数人）请求的是
+       `/api/datasets`。FastAPI 的 `redirect_slashes` 会把后者 307 到前者，
+       但 307 会让"带 cookie 的 GET"多一次往返，且某些客户端不跟随重定向 ——
+       直接声明成 `""` 就没有这个问题。
+    2. **归属在数据层过滤**（`store.list_owned`），不是取出来再筛：
+       后者会把别人的数据读进内存，任何一个忘了筛的分支就是越权。
+    3. **排序也全在数据层做**（顺序参数一路传到 `store.list_owned`）：
+       路由层此时手里只有切好片的一页，在这一页内部再排一次只会"看起来对"，
+       翻到第 2 页就露馅。所以是"全量排序 → 再切页"，不是"切页 → 再排序"。
+    4. **筛选 `q` 同样在数据层做**，且 `total` 要用同一个 `q` 去数：
+       只在 `items` 上筛、`total` 却算全量，前端会算出"有 3 页但只能翻到 1 页"。
+    5. **非法 `sort` / `order` 由 FastAPI 返回 422**（`Literal` 类型校验），
+       不自己写校验分支：这样 OpenAPI 文档里会把三个合法值和两个方向都列出来，
+       前端不用看源码就知道能传什么。docs/ARCHITECTURE.md 的接口表记的就是这一约定。
+       `q` 用 `max_length=200` 限长（它只做子串匹配，没必要接受超长输入）。
+    6. **`missing_cells` 只读画像缓存**：见 `schemas_dataset.DatasetListItem` 的说明。
+       没算过画像就是 `null`，前端显示"—"，而不是让服务端为了一次列表全表扫描。
+
+    `total` 是**过滤后的**总数（当前用户 + 当前 `q` 命中的数据集条数），
+    不是这一页的条数：前端靠它算页数。
+    """
+    owned = store.list_owned(user.id, sort=sort, order=order, query=q)
+    page = owned[offset : offset + limit]
+
+    items: list[DatasetListItem] = []
+    for item in page:
+        profile = store.get_profile(item.dataset_id)
+        items.append(
+            DatasetListItem(
+                **item.model_dump(),
+                # task 要求的字段名（`row_count` 的别名），两个都返回。
+                rows=item.row_count,
+                # 画像没算过时是 None（不是 0）：0 会被前端显示成"没有缺失值"，
+                # 那是**错误的信息**，而 null 表示"还没算，不知道"。
+                missing_cells=(
+                    sum(column.null_count for column in profile.columns)
+                    if profile is not None
+                    else None
+                ),
+            )
+        )
+
+    return ApiResponse[DatasetListData](
+        ok=True,
+        data=DatasetListData(
+            items=items,
+            total=store.count_owned(user.id, query=q),
+            limit=limit,
+            offset=offset,
+        ),
+        error=None,
+    )
 
 
 # 下面两个接口用同步 def（不是 async def）：FastAPI 会把同步函数放进线程池执行。
@@ -193,41 +281,49 @@ async def upload_dataset(
 
 
 @router.get("/{dataset_id}", response_model=ApiResponse[Dataset], summary="数据集详情")
-def get_dataset(dataset_id: str) -> ApiResponse[Dataset]:
-    """按 id 取元信息（含前 5 行预览）。没登记过 → 404。"""
-    dataset = store.get(dataset_id)
-    if dataset is None:
-        raise AppError(
-            ErrorCode.NOT_FOUND,
-            "数据集不存在",
-            # detail 里**不回显** dataset_id：它是 URL 里来的、长度不受控，
-            # 回显等于把用户的输入原样写进我们的响应体，没必要。
-            detail="这个 dataset_id 没有登记过。数据存在服务进程的内存里，服务重启后全部丢失。",
-        )
+def get_dataset(
+    dataset_id: str, user: SessionUser = Depends(require_user)
+) -> ApiResponse[Dataset]:
+    """按 id 取元信息（含前 5 行预览）。没登记过、**或不属于当前用户** → 404。
+
+    两类 404 走同一个函数（`require_owned_dataset`），响应逐字相同：
+    "不存在"与"是别人的"必须无法区分，否则 403/404 的差异就能被用来枚举
+    系统里存在哪些 dataset_id。理由见 `app/api/ownership.py` 的模块 docstring。
+    """
+    dataset = require_owned_dataset(store.get(dataset_id), user.id)
     return ApiResponse[Dataset](ok=True, data=dataset, error=None)
 
 
 @router.get("/{dataset_id}/profile", response_model=ApiResponse[DatasetProfile], summary="数据画像")
-def get_dataset_profile(dataset_id: str) -> ApiResponse[DatasetProfile]:
+def get_dataset_profile(
+    dataset_id: str, user: SessionUser = Depends(require_user)
+) -> ApiResponse[DatasetProfile]:
     """按需（惰性）计算画像，算完缓存起来，之后直接返回缓存。
 
     为什么不在上传时就算：上传接口要让用户马上看到预览，而画像是全表扫描
     （20 万行 × 200 列不便宜）。谁需要谁付这个钱 —— 不点"生成画像"就不算。
     缓存能安全地做，是因为 store 里 `_profiles` 和 `Dataset.has_profile` 是
     一起改的，前端据此就能区分"还没算"（has_profile=false）和"算完了"（true）。
+
+    归属先判、再算：**不能**先算好画像再判归属 —— 那等于替别人的数据白干一次
+    全表扫描（拿一个不属于自己的 id 不断请求，就能让服务器持续做重活）。
     """
-    cached = store.get_profile(dataset_id)
+    dataset = require_owned_dataset(store.get(dataset_id), user.id)
+
+    cached = store.get_profile(dataset.dataset_id)
     if cached is not None:
         return ApiResponse[DatasetProfile](ok=True, data=cached, error=None)
 
-    frame = store.get_frame(dataset_id)
+    frame = store.get_frame(dataset.dataset_id)
     if frame is None:
+        # 走到这里说明"元信息在、DataFrame 不在"，属于内部不一致（正常路径不会出现：
+        # 两者是同一处登记的）。仍然按不存在处理 —— 对外只暴露一种"没有"。
         raise AppError(
             ErrorCode.NOT_FOUND,
             "数据集不存在",
             detail="没法为不存在的 dataset_id 生成画像。数据存在内存里，服务重启后全部丢失。",
         )
 
-    profile = build_profile(frame, dataset_id)
-    store.set_profile(dataset_id, profile)
+    profile = build_profile(frame, dataset.dataset_id)
+    store.set_profile(dataset.dataset_id, profile)
     return ApiResponse[DatasetProfile](ok=True, data=profile, error=None)

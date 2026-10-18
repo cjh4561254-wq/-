@@ -34,6 +34,7 @@ from app import config
 from app.api.routes_analysis import start_analysis
 from app.core import background as background_module
 from app.core import registry
+from app.core.auth import SessionUser
 from app.core.background import _run_safely, submit
 from app.main import app
 from app.schemas import ErrorCode
@@ -43,6 +44,12 @@ from app.schemas_workflow import (
     WorkflowState,
     WorkflowStatus,
 )
+from tests import auth_support
+
+# 发请求的客户端（`client` 夹具）就是 `tests/auth_support.py` 造的 test-admin，
+# 它在测试账号库里的 id 是 1（bootstrap 建的第一个账号）。直接调路由函数时要自己
+# 把这个"当前用户"传进去 —— `Depends(require_user)` 只在走 HTTP 时才生效。
+CURRENT_USER = SessionUser(id=1, username=auth_support.TEST_USERNAME, display_name="测试管理员")
 
 # 示例数据集的真实路径。分析链路跑的就是它（2168 行 × 9 列）。
 SAMPLE_CSV = config.PROJECT_ROOT / "data" / "samples" / "sales.csv"
@@ -246,6 +253,11 @@ def test_endpoint_does_not_wait_for_the_analysis(monkeypatch):
         ① 调用本身在 1 秒内返回（真的没等）；
         ② 那个很慢的后台函数**一次都没被执行**（`BackgroundTasks` 只是登记）；
         ③ 返回的是 PENDING，且状态已经登记进 registry（前端马上轮询得到）。
+
+    这里直接调路由函数（不走 HTTP），所以 `user` 依赖不会生效，必须自己传
+    `CURRENT_USER` —— 不传的话 `require_owned_dataset(store.get(...), user.id)`
+    拿到的是 `Depends` 对象，报 `AttributeError: 'Depends' object has no attribute 'id'`。
+    归属判定那一关仍然是真跑的：`dataset_id` 是上面用同一个用户上传的。
     """
     ran: list[str] = []
     slept = 2.0
@@ -264,6 +276,7 @@ def test_endpoint_does_not_wait_for_the_analysis(monkeypatch):
     accepted = start_analysis(
         QuestionRequest(dataset_id=dataset_id, question="各地区销售额对比"),
         tasks,
+        CURRENT_USER,
     )
     elapsed = time.perf_counter() - started
 

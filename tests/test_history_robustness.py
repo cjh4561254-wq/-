@@ -23,7 +23,8 @@ task-38 时该缺陷**已修复**（Lead 改的产品代码，本文件负责把
      （含前导/尾随空格、空串）；
   2. `error_code` 空串透出为 `""`，与 `None`（无错误）**语义不同**，必须区分；
   3. 同页合法行**一条不少**（1 坏 + N 合法 -> N+1 行）；
-  4. `total` 仍是 `store.count()`（**全库行数，含坏行**），坏行不能让分页错位；
+  4. `total` 仍是 `store.count(owner_user_id=...)`（**该用户的全部行数，含坏行**；
+     task-11 起归档库按归属隔离，『全库』已经没有意义），坏行不能让分页错位；
   5. 两处构造（`:154` / `:159`）**必须同批修**，只修一处对"双坏行"零效果。
 
 范围与前提（为什么毒行只能来自跨版本）
@@ -68,6 +69,46 @@ _EXPECT_DETAIL_BAD_ROW = 200
 
 _BAD_ID = "f" * 32
 
+#: 毒行探针的归属人（要和发 HTTP 请求的登录用户一致）。
+#: 这些用例直接写库造『老版本留下的行』，如果不给归属，行就是 `owner_user_id = NULL`，
+#: 而接口一律按归属过滤 -> 列表空、详情 404，看起来像『修复失效』，其实是隔离生效。
+#:
+#: ⚠️ 这里**故意没有** `OWNER_ID = 1` 这样的常量（2026-10-16 踩到）：
+#: 归属人必须走下面的 `_owner_id()` 现取，**不能写死 1**。原因是账号库
+#: **跨进程持久**（裸跑 `scripts/check_docs.py` 时用的是 `AUTH_DB_PATH` 指的那个库，
+#: 那里早已有账号），`tests/auth_support.py` 优先复用已存在的 `test-admin`，
+#: 它的 id 完全可能是 2、3……写死 1 的后果实测过：行确实写进去了
+#: （同一路径、11 行、owner 全是 1），但请求里的 `user.id` 是 2 ——
+#: `rows_for_owner=0 rows_total=11`，表现为"隔离把数据全挡了"，
+#: 看起来像产品坏了，其实是探针喂错了人。
+#: 留一个常量只会引诱下一个人再去写死它，所以干脆不留。
+
+#: 这个库自己的账号库路径（裸跑时就是 `AUTH_DB_PATH` 指的那个）。
+_AUTH_DB_PATH_ENV = "AUTH_DB_PATH"
+
+
+def _owner_id() -> int:
+    """当前会话里那个用户的真实 id（= `_client()` 发请求时的 `user.id`）。
+
+    同时保证账号**已经存在**：`ensure_test_user()` 是幂等的
+    （存在就返回它的 id，不存在才建），所以这里不会有"探针自己造出一个账号"
+    的副作用；它返回的 id 就是待会儿 HTTP 请求里 `require_user` 给出的那个 id。
+    """
+    import os
+
+    from app.data.users import AuthStore, reset_auth_store_cache
+    from tests import auth_support
+
+    configured = os.environ.get(_AUTH_DB_PATH_ENV, "").strip()
+    if configured:
+        # 与产品代码同一套解析规则（相对路径按 PROJECT_ROOT 展开）。
+        store = AuthStore(config.PROJECT_ROOT / configured)
+    else:
+        store = None
+    user_id = auth_support.ensure_test_user(store)
+    reset_auth_store_cache()
+    return user_id
+
 
 @pytest.fixture(autouse=True)
 def _isolate_db(tmp_path, monkeypatch):
@@ -105,8 +146,8 @@ def _insert_raw(workflow_id: str, status: str, minutes_ago: int = 0,
     conn.execute(
         "INSERT INTO workflow_history (workflow_id, question, status, created_at,"
         " finished_at, has_report, llm_used, report_text, error_code, schema_version,"
-        " archived_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (workflow_id, question, status, fin, fin, 0, 0, None, None, 1, fin),
+        " archived_at, owner_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (workflow_id, question, status, fin, fin, 0, 0, None, None, 1, fin, _owner_id()),
     )
     conn.commit()
     conn.close()
@@ -117,8 +158,22 @@ def _legal_id(i: int) -> str:
 
 
 def _client():
-    """把服务端异常翻成 500 响应体，而不是让异常冒到测试里。"""
-    return TestClient(app, raise_server_exceptions=False)
+    """把服务端异常翻成 500 响应体，而不是让异常冒到测试里。
+
+    ⚠️ 这里**显式**补一条真实会话，不能只靠 conftest 的 `TestClient` 补丁：
+    本模块同时被 `scripts/check_docs.py` 以**裸 Python 子进程**执行
+    （`_record_acceptance_status()` 就在下面），那条路径里 conftest.py 根本
+    不会被加载，补丁也就不存在 —— 结果是业务路由全部 401，脚本判镜像基线不绿，
+    `tests/test_check_docs.py` 的 12 个变异用例连锁 ERROR（实测踩到）。
+
+    走 `tests/auth_support.py` 而不是硬编码 cookie：它在被调用的那一刻
+    按当前配置（含镜像自己的 `AUTH_DB_PATH`）建账号、签真会话，两种执行方式都对。
+    """
+    from tests import auth_support
+
+    return auth_support.attach_session_cookie(
+        TestClient(app, raise_server_exceptions=False)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -458,7 +513,7 @@ def test_the_bad_row_is_reachable_through_the_detail_endpoint():
     _insert_raw(_BAD_ID, "RUNNING", minutes_ago=0)
 
     # 库层：这行确实存在（get() 不经过枚举转换，读得出来）
-    assert history.HistoryStore(_db_path()).get(_BAD_ID) is not None
+    assert history.HistoryStore(_db_path()).get_for_user(_BAD_ID, _owner_id()) is not None
 
     with _client() as client:
         listed = client.get("/api/workflows/history")
@@ -579,12 +634,12 @@ def test_the_store_layer_reads_bad_rows_fine():
     _insert_raw(_BAD_ID, "RUNNING", minutes_ago=0)
 
     store = history.HistoryStore(_db_path())
-    rec = store.get(_BAD_ID)
-    print("\n[P3] store.get() -> status=%r（原样读出，不抛）" % rec.status)
+    rec = store.get_for_user(_BAD_ID, _owner_id())
+    print("\n[P3] store.get_for_user() -> status=%r（原样读出，不抛）" % rec.status)
     assert rec is not None
     assert rec.status == "RUNNING"
-    assert store.count() == 1
-    assert len(store.list_recent(limit=10)) == 1
+    assert store.count(owner_user_id=_owner_id()) == 1
+    assert len(store.list_recent(limit=10, owner_user_id=_owner_id())) == 1
 
     with _client() as client:
         r = client.get("/api/workflows/history")
@@ -632,8 +687,8 @@ def _insert_raw_error_code(workflow_id: str, status: str, error_code: str | None
     conn.execute(
         "INSERT INTO workflow_history (workflow_id, question, status, created_at,"
         " finished_at, has_report, llm_used, report_text, error_code, schema_version,"
-        " archived_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (workflow_id, question, status, fin, fin, 0, 0, None, error_code, 1, fin),
+        " archived_at, owner_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (workflow_id, question, status, fin, fin, 0, 0, None, error_code, 1, fin, _owner_id()),
     )
     conn.commit()
     conn.close()
@@ -744,7 +799,7 @@ def test_null_error_code_rows_are_unaffected():
         r = client.get("/api/workflows/history")
 
     print("\n[P3-error_code] 5 条 error_code 全 NULL -> %d, total=%s"
-          % (r.status_code, r.json().get("data", {}).get("total")))
+          % (r.status_code, r.json().get("data", {}).get("total", -1)))
     assert r.status_code == 200, "NULL 是合法取值（无错误），不得因此报错：%s" % r.text
     body = r.json()
     assert body["data"]["total"] == 5
@@ -765,7 +820,7 @@ def test_ten_legal_plus_one_bad_error_code_row_returns_nothing():
     _insert_raw_error_code(_legal_id(99), "FAILED", "TIMEOUT_LEGACY", minutes_ago=0)
 
     store = history.HistoryStore(_db_path())
-    assert store.count() == 11, "库里确实是 11 行（10 合法 + 1 非法）"
+    assert store.count(owner_user_id=_owner_id()) == 11, "库里确实是 11 行（10 合法 + 1 非法）"
 
     with _client() as client:
         r = client.get("/api/workflows/history")
@@ -776,7 +831,7 @@ def test_ten_legal_plus_one_bad_error_code_row_returns_nothing():
 
     items, total = _listing_health(r, 11)
     assert total == 11
-    assert total == store.count(), "total 必须等于全库行数（含坏行）"
+    assert total == store.count(owner_user_id=_owner_id()), "total 必须等于该用户的行数（含坏行）"
     legal_ids = {_legal_id(i) for i in range(10)}
     assert {it["workflow_id"] for it in items} == legal_ids | {_legal_id(99)}
     assert _item_of(r, _legal_id(99))["error_code"] == "TIMEOUT_LEGACY"
@@ -897,12 +952,14 @@ def test_the_store_layer_reads_bad_error_codes_fine():
     _insert_raw_error_code(_legal_id(1), "FAILED", "TIMEOUT_LEGACY", minutes_ago=0)
 
     store = history.HistoryStore(_db_path())
-    rec = store.get(_legal_id(1))
-    print("\n[P3-error_code] store.get() -> error_code=%r（原样读出，不抛）" % rec.error_code)
+    # task-11 起归档库按归属隔离：读一条归档必须说明"以谁的身份读"，
+    # 所以 get() 变成了 get_for_user()，多一个 owner_user_id 参数。
+    rec = store.get_for_user(_legal_id(1), _owner_id())
+    print("\n[P3-error_code] store.get_for_user() -> error_code=%r（原样读出，不抛）" % rec.error_code)
     assert rec is not None
     assert rec.error_code == "TIMEOUT_LEGACY"
-    assert store.count() == 1
-    assert len(store.list_recent(limit=10)) == 1
+    assert store.count(owner_user_id=_owner_id()) == 1
+    assert len(store.list_recent(limit=10, owner_user_id=_owner_id())) == 1
 
 
 def test_normal_product_paths_cannot_write_an_invalid_error_code():
@@ -914,8 +971,13 @@ def test_normal_product_paths_cannot_write_an_invalid_error_code():
     `state.error` 是 `app/schemas.py:39` 的 `ApiError`，其 `code` 字段类型是
     **`ErrorCode`**（pydantic 保证），`.value` 取出来的必是枚举成员或 None。
 
-    运行时：把 8 个 `ErrorCode` 成员逐个放进 `state.error` 调 `build_record()`，
-    断言产出永远是合法值 —— 期望值写死，不写"要么合法要么非法"。
+    运行时：把**每一个** `ErrorCode` 成员逐个放进 `state.error` 调
+    `build_record()`，断言产出永远是合法值 —— 期望值写死，不写"要么合法要么非法"。
+
+    数量断言写成 `len(list(ErrorCode))`，不再写死 8：登录功能上线时枚举从 8 个
+    扩到 11 个（多了 UNAUTHORIZED / FORBIDDEN / RATE_LIMITED），写死数字的写法
+    会在**每次扩枚举**时误报。断言强度没降 —— 下面仍然逐个成员走一遍，
+    并且要求产出集合与枚举取值集合**完全相等**（少一个多一个都红）。
     """
     from app.schemas import ApiError, ErrorCode
 
@@ -935,8 +997,13 @@ def test_normal_product_paths_cannot_write_an_invalid_error_code():
         rec = archive.build_record(state)
         produced.append(rec.error_code)
 
-    print("\n[P3-error_code] 8 个 ErrorCode 成员 -> build_record 产出 %r" % produced)
-    assert len(produced) == len(list(ErrorCode)) == 8
+    print("\n[P3-error_code] %d 个 ErrorCode 成员 -> build_record 产出 %r"
+          % (len(list(ErrorCode)), produced))
+    assert len(produced) == len(list(ErrorCode))
+    assert set(produced) == legal_values, (
+        "逐个枚举成员过一遍 build_record，产出的 error_code 集合必须与 ErrorCode 取值集合相等；"
+        "实际差异：%r" % (set(produced) ^ legal_values)
+    )
     assert all(v in legal_values for v in produced), (
         "正常路径产出了非法 error_code：%r" % [v for v in produced if v not in legal_values]
     )
@@ -1134,8 +1201,9 @@ def _insert_raw_report(workflow_id: str, report_text: str | None,
     conn.execute(
         "INSERT INTO workflow_history (workflow_id, question, status, created_at,"
         " finished_at, has_report, llm_used, report_text, error_code, schema_version,"
-        " archived_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (workflow_id, "report_text 毒行探针", status, fin, fin, 1, 1, report_text, None, 1, fin),
+        " archived_at, owner_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (workflow_id, "report_text 毒行探针", status, fin, fin, 1, 1, report_text, None, 1, fin,
+         _owner_id()),
     )
     conn.commit()
     conn.close()
@@ -1276,7 +1344,7 @@ def test_a_bad_report_text_row_does_not_poison_its_page():
     这是 task-37 那条"混页"断言的**正向版本**（Lead 明确要求保留、不许删）。
     它同时钉住两件事：
       1. 坏报告**不会**牵连同页的其他记录（区别于 `status`/`error_code` 的整页 0 行）；
-      2. `total` 仍是 `store.count()`（全库行数，含坏行）。
+      2. `total` 仍是 `store.count(owner_user_id=...)`（该用户的行数，含坏行）。
     """
     _seed_schema()
     bad = _legal_id(0xE020)
@@ -1350,7 +1418,7 @@ def test_a_healthy_report_still_round_trips_through_the_detail_endpoint():
 
 
 def test_the_store_layer_reads_a_bad_report_text_fine():
-    """⑤ `:237` 的锅在 API 层：`HistoryStore.get()` 对坏 `report_text` 原样读出，不抛。
+    """⑤ `:237` 的锅在 API 层：`HistoryStore.get_for_user()` 对坏 `report_text` 原样读出，不抛。
 
     与 `154`/`159` 的取证方式一致 —— 数据层不背锅。
     """
@@ -1359,11 +1427,11 @@ def test_the_store_layer_reads_a_bad_report_text_fine():
     _insert_raw_report(wid, "not json")
 
     store = history.HistoryStore(_db_path())
-    rec = store.get(wid)
+    rec = store.get_for_user(wid, _owner_id())
     print("\n[P3-report store] rec.report_text=%r" % (rec.report_text,))
     assert rec is not None
     assert rec.report_text == "not json"
-    assert store.count() == 1
+    assert store.count(owner_user_id=_owner_id()) == 1
 
 
 def test_the_report_path_no_longer_reaches_the_fallback_handler():

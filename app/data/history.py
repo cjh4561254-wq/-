@@ -111,9 +111,29 @@ CREATE TABLE IF NOT EXISTS {_TABLE_NAME} (
     report_text    TEXT,
     error_code     TEXT,
     schema_version INTEGER NOT NULL,
-    archived_at    TEXT NOT NULL
+    archived_at    TEXT NOT NULL,
+    owner_user_id  INTEGER,
+    owner_username TEXT
 )
 """
+
+#: 归属两列是**后加的**（数据隔离改造）。老库（本次改造之前建的）里没有它们，
+#: `ensure_schema()` 会用 `ALTER TABLE ADD COLUMN` 补上 —— 见 `_ADD_OWNER_COLUMNS_SQL`
+#: 与 `_ensure_owner_columns()`。这就是为什么 `HISTORY_SCHEMA_VERSION` **不加一**：
+#: 加两列是纯增量、不改变已有列的含义，老代码读新库也只是少看到两列，
+#: 而"版本号 +1"会让所有已存在的库直接拒绝服务（版本检查是精确相等比对），
+#: 代价是用户的历史功能突然 500，收益只是"版本号看起来更整齐"。
+#:
+#: 三列的 NOT NULL 情况要分清（写错了会很痛）：
+#: - `owner_user_id` / `owner_username` **故意可空**：老行补列时只能填 NULL，
+#:   而"给老数据编一个归属"是伪造数据 —— NULL 的语义是"没有归属 → 谁也不给看"。
+#: - 新写入的行由代码保证一定带 owner（`archive()` 的参数里就有）。
+_ADD_OWNER_COLUMNS_SQL: tuple[str, ...] = (
+    f"ALTER TABLE {_TABLE_NAME} ADD COLUMN owner_user_id INTEGER",
+    f"ALTER TABLE {_TABLE_NAME} ADD COLUMN owner_username TEXT",
+)
+
+_OWNER_COLUMNS: tuple[str, ...] = ("owner_user_id", "owner_username")
 
 # 列表按 finished_at 倒序，所以索引建在它上面（升序索引也能反着扫）。
 _CREATE_INDEX_SQL = f"""
@@ -127,8 +147,9 @@ CREATE INDEX IF NOT EXISTS idx_{_TABLE_NAME}_finished_at
 _UPSERT_SQL = f"""
 INSERT INTO {_TABLE_NAME} (
     workflow_id, question, status, created_at, finished_at,
-    has_report, llm_used, report_text, error_code, schema_version, archived_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    has_report, llm_used, report_text, error_code, schema_version, archived_at,
+    owner_user_id, owner_username
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(workflow_id) DO UPDATE SET
     question       = excluded.question,
     status         = excluded.status,
@@ -139,12 +160,15 @@ ON CONFLICT(workflow_id) DO UPDATE SET
     report_text    = excluded.report_text,
     error_code     = excluded.error_code,
     schema_version = excluded.schema_version,
-    archived_at    = excluded.archived_at
+    archived_at    = excluded.archived_at,
+    owner_user_id  = excluded.owner_user_id,
+    owner_username = excluded.owner_username
 """
 
 _SELECT_COLUMNS = (
     "workflow_id, question, status, created_at, finished_at, "
-    "has_report, llm_used, report_text, error_code, archived_at"
+    "has_report, llm_used, report_text, error_code, archived_at, "
+    "owner_user_id, owner_username"
 )
 
 # 排序：`finished_at IS NULL` 升序（0 在前、1 在后）→ 没跑完的排最后；
@@ -171,6 +195,22 @@ class HistoryRecord:
     数据层只认这个结构：它不知道 `WorkflowState`、不知道 `FinalReport`，
     也不知道 `status` 的取值是怎么来的（调用方传 `WorkflowStatus.value`，
     例如 `"success"` / `"failed"`）。
+
+    ## `owner_user_id` 为什么**必填**，而 `owner_username` 可空
+
+    归属是数据隔离的**唯一依据**。把它写成带默认值的字段，等于允许
+    "忘记传 owner"的代码写出来并且不报错 —— 而那种记录会变成看不见的孤儿
+    （NULL owner 谁也不给看），排查起来只能靠翻库。所以它是必填的：
+    所有构造点都必须显式回答"这条记录是谁的"，漏了当场 `TypeError`。
+
+    类型是 `int | None`，不是 `int`：**老库里的行没有归属**（改造之前没有"用户"
+    这个概念），它们读出来就是 `None`。写入口径上仍然是"必须显式传"
+    （没有默认值）；只有"从库里读出来"这一条路径能产生 `None`，
+    而它会被查询层的 `WHERE owner_user_id = ?` 自动过滤掉，永远到不了接口。
+
+    `owner_username` 只是**展示用的冗余字段**（前端要显示"谁跑的"，
+    而不必为了一个名字再去查一次账号库）。它不参与任何判定 ——
+    用户名可以改，用户 id 不会。所以它可以为空（库里存的老记录没有它）。
     """
 
     workflow_id: str
@@ -183,6 +223,8 @@ class HistoryRecord:
     report_text: str | None
     error_code: str | None
     archived_at: datetime
+    owner_user_id: int | None
+    owner_username: str | None = None
 
 
 class HistoryStore:
@@ -226,6 +268,7 @@ class HistoryStore:
         with self._connection() as conn:
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
+            self._ensure_owner_columns(conn)
             # "库里已有数据的版本号以表里存的为准"：查的是**实际的行**，
             # 而不是某个元数据表（空库 = 没有行 = 没有版本，直接放行）。
             versions = {
@@ -241,6 +284,33 @@ class HistoryStore:
                 "请人工确认后再处理。"
             )
 
+    def _ensure_owner_columns(self, conn: sqlite3.Connection) -> None:
+        """给老库补上归属两列（幂等）。**调用方必须已经持有 `_WRITE_LOCK`。**
+
+        为什么这一步是"允许的迁移"，而这个模块的 docstring 又写着"不做迁移"：
+        两句话不矛盾，界线是**会不会丢/改用户的数据**。
+
+        - `ALTER TABLE ADD COLUMN` 只加列，已有行在**新列上是 NULL**，
+          其余列一个字节都不动；老代码（不认识这两列）读新库照样能读。
+        - "把 `schema_version` 不符的库删掉重建" 才是不许做的事 ——
+          那会丢历史记录。
+
+        用 NULL 想表达什么，说得再明确一点：**这些行没有归属**（改造之前
+        没有"用户"这个概念）。它们不会因此变成"公共数据"—— 查询一律带
+        `owner_user_id = ?`，NULL **永远不等于任何 int**（SQL 里 NULL 的比较结果是
+        NULL，不是 TRUE），所以老记录对所有用户都不可见。
+        "不删用户的数据"和"不给任何人看"同时成立。
+        """
+        existing = {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({_TABLE_NAME})").fetchall()
+        }
+        for column, statement in zip(
+            _OWNER_COLUMNS, _ADD_OWNER_COLUMNS_SQL, strict=True
+        ):
+            if column not in existing:
+                conn.execute(statement)
+
     # ---- 写 ----------------------------------------------------------------
 
     def archive(self, record: HistoryRecord) -> None:
@@ -248,6 +318,10 @@ class HistoryStore:
 
         重复归档同一条工作流是**正常情况**，不是错误：orchestrator 跑完归档一次，
         超时轮询可能又归档一次（状态从 executing 变成 failed），最后一次胜出。
+
+        归属两列**一起写**（不是"先写一半、稍后补"）：`owner_user_id` 是隔离依据，
+        它和记录本体必须是同一次写入 —— 分成两步的话，中间任何失败都会留下
+        一条谁也看不见的记录。
         """
         params = (
             record.workflow_id,
@@ -261,6 +335,8 @@ class HistoryStore:
             record.error_code,
             HISTORY_SCHEMA_VERSION,
             _to_db_time(record.archived_at),
+            record.owner_user_id,
+            record.owner_username,
         )
         with _WRITE_LOCK:
             self._ensure_schema_locked()
@@ -269,18 +345,34 @@ class HistoryStore:
 
     # ---- 读 ----------------------------------------------------------------
 
-    def get(self, workflow_id: str) -> HistoryRecord | None:
-        """按 id 取一条；没有就返回 `None`（不是异常：查不到是正常的）。"""
+    def get_for_user(self, workflow_id: str, owner_user_id: int) -> HistoryRecord | None:
+        """按 id 取一条**属于这个用户的**记录；没有（或不属于他）返回 `None`。
+
+        为什么过滤条件写在 SQL 里，而不是"先查出来再在路由层比一下 owner"：
+        后者会把别人的记录读进内存，任何一个忘了比的调用点就是越权；
+        而且 `None` 的含义要单一 —— 只有一种"没有"，路由层就只会写一条 404 分支，
+        两条分支的文案也就不可能漂移（见 `app/api/ownership.py`）。
+
+        NULL owner 的老记录**永远不会**被匹配上：SQL 里 `NULL = ?` 的结果是 NULL
+        （不是 TRUE），这正是我们要的"谁也不给看"。
+        """
         self.ensure_schema()
         with self._connection() as conn:
             row = conn.execute(
-                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} WHERE workflow_id = ?",
-                (workflow_id,),
+                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                "WHERE workflow_id = ? AND owner_user_id = ?",
+                (workflow_id, owner_user_id),
             ).fetchone()
         return None if row is None else _row_to_record(row)
 
-    def list_recent(self, limit: int = 20, offset: int = 0) -> list[HistoryRecord]:
-        """最近完成的一批（没完成过的排最后），带分页。
+    def list_recent(
+        self, limit: int = 20, offset: int = 0, *, owner_user_id: int
+    ) -> list[HistoryRecord]:
+        """这个用户最近完成的一批（没完成过的排最后），带分页。
+
+        `owner_user_id` 是**关键字必填**：这个方法以前是"列出所有人的记录"，
+        那种默认行为在加了隔离之后就成了漏洞 —— 所以这里连默认值都不给，
+        少传一个参数就当场 `TypeError`，而不是悄悄返回别人的数据。
 
         负数是编程错误而不是"用户输入"（这个方法只被我们自己的代码调用），
         所以直接抛 `ValueError`；否则 SQLite 会把 `LIMIT -1` 当"不限制"，
@@ -291,16 +383,24 @@ class HistoryStore:
         self.ensure_schema()
         with self._connection() as conn:
             rows = conn.execute(
-                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} {_ORDER_BY_SQL} LIMIT ? OFFSET ?",
-                (limit, offset),
+                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                f"WHERE owner_user_id = ? {_ORDER_BY_SQL} LIMIT ? OFFSET ?",
+                (owner_user_id, limit, offset),
             ).fetchall()
         return [_row_to_record(row) for row in rows]
 
-    def count(self) -> int:
-        """总行数。"""
+    def count(self, *, owner_user_id: int) -> int:
+        """这个用户的归档条数（列表接口的 `total`）。
+
+        与 `list_recent` 同理，`owner_user_id` 必填。**尤其不能退回全表 COUNT**：
+        那个数字会直接泄露"系统里一共有多少条别人的分析记录"。
+        """
         self.ensure_schema()
         with self._connection() as conn:
-            row = conn.execute(f"SELECT COUNT(*) AS n FROM {_TABLE_NAME}").fetchone()
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM {_TABLE_NAME} WHERE owner_user_id = ?",
+                (owner_user_id,),
+            ).fetchone()
         return int(row["n"])
 
     # ---- 连接 --------------------------------------------------------------
@@ -358,7 +458,18 @@ def _from_db_time(value: str | None) -> datetime | None:
 
 
 def _row_to_record(row: sqlite3.Row) -> HistoryRecord:
-    """一行 → `HistoryRecord`。`INTEGER` 存的两个布尔要转回 `bool`，不能漏。"""
+    """一行 → `HistoryRecord`。`INTEGER` 存的两个布尔要转回 `bool`，不能漏。
+
+    归属列可能是 NULL（老行补列时留下的）。**不要**在这里给 NULL 编一个默认
+    owner（比如 0 或"第一个用户"）：编出来的归属会让老数据对某个人突然可见，
+    而这正是隔离要防的事。NULL 原样读出来，交给查询层自然过滤掉。
+
+    `owner_user_id` 的类型在"有值"时一定是 int（我们写进去的就是 int），
+    所以这里 `int(row["owner_user_id"])` 只在非空分支执行 ——
+    写成 `int(row["owner_user_id"] or 0)` 会把 NULL 悄悄变成 0 号用户，
+    那是一个真实存在的用户 id 的风险（0 一般不出现，但"一般不"不是保证）。
+    """
+    raw_owner = row["owner_user_id"]
     return HistoryRecord(
         workflow_id=row["workflow_id"],
         question=row["question"],
@@ -370,6 +481,8 @@ def _row_to_record(row: sqlite3.Row) -> HistoryRecord:
         report_text=row["report_text"],
         error_code=row["error_code"],
         archived_at=_from_db_time(row["archived_at"]),
+        owner_user_id=int(raw_owner) if raw_owner is not None else None,
+        owner_username=row["owner_username"],
     )
 
 

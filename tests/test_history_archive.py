@@ -16,6 +16,7 @@
 """
 
 import logging
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -34,6 +35,12 @@ from app.schemas_workflow import (
 )
 
 WORKFLOW_ID = "0123456789abcdef0123456789abcdef"
+
+#: 本文件所有"正常"记录的归属人（task-11 多用户改造后，归档库按归属隔离）。
+#: 归档是"给某个用户存的历史"，所以夹具默认带上归属 —— 不带的话记录会写成
+#: `owner_user_id = NULL`（"改造之前的老库"那种形态），按归属一查就是空的。
+OWNER_ID = 1
+OWNER_NAME = "u1"
 
 # 非终态：这些状态下**一个字都不该写库**。
 NON_TERMINAL_STATUSES = [
@@ -88,12 +95,21 @@ def _make_report(llm_used: bool = False) -> FinalReport:
 
 
 def _state(**overrides) -> WorkflowState:
-    """造一条状态，默认"刚创建、还没跑"。用例只覆盖自己关心的字段。"""
+    """造一条状态，默认"刚创建、还没跑"。用例只覆盖自己关心的字段。
+
+    默认**带归属**（`owner_user_id` / `owner_username`）：这一组用例考的是
+    "归档该不该发生、字段对不对"，如果夹具不给归属，记录会以 NULL 归属入库，
+    而读接口一律按 `owner_user_id = ?` 过滤 —— 于是每个断言都变成
+    "库里什么都没有"，红得莫名其妙（`NULL = 1` 在 SQL 里是 NULL，不是 TRUE）。
+    专门考"无归属"场景的用例自己传 `owner_user_id=None`。
+    """
     fields: dict = {
         "workflow_id": WORKFLOW_ID,
         "dataset_id": "d" * 32,
         "question": "按地区看销售额",
         "created_at": datetime.now(timezone.utc),
+        "owner_user_id": OWNER_ID,
+        "owner_username": OWNER_NAME,
     }
     fields.update(overrides)
     return WorkflowState(**fields)
@@ -107,7 +123,7 @@ def test_a_running_workflow_is_not_archived(status: WorkflowStatus) -> None:
     state = _state(status=status)
 
     assert archive.archive_if_terminal(state) is False
-    assert _store().count() == 0, "非终态不该在库里留下任何记录"
+    assert _store().count(owner_user_id=OWNER_ID) == 0, "非终态不该在库里留下任何记录"
 
 
 # ---------------- 规则 2：每个终态都归档 ----------------
@@ -119,10 +135,10 @@ def test_every_terminal_status_is_archived(status: WorkflowStatus) -> None:
 
     assert archive.archive_if_terminal(state) is True
 
-    record = _store().get(WORKFLOW_ID)
+    record = _store().get_for_user(WORKFLOW_ID, OWNER_ID)
     assert record is not None
     assert record.status == status.value
-    assert _store().count() == 1
+    assert _store().count(owner_user_id=OWNER_ID) == 1
 
 
 def test_archiving_the_same_workflow_twice_keeps_one_row() -> None:
@@ -132,7 +148,7 @@ def test_archiving_the_same_workflow_twice_keeps_one_row() -> None:
     assert archive.archive_if_terminal(state) is True
     assert archive.archive_if_terminal(state) is True
 
-    assert _store().count() == 1
+    assert _store().count(owner_user_id=OWNER_ID) == 1
 
 
 # ---------------- 规则 3：归档关闭 = 静默返回 False ----------------
@@ -166,7 +182,7 @@ def test_store_failure_is_swallowed_and_logged(monkeypatch, caplog) -> None:
         result = archive.archive_if_terminal(state)
 
     assert result is False
-    assert _store().count() == 0
+    assert _store().count(owner_user_id=OWNER_ID) == 0
     messages = [record.getMessage() for record in caplog.records]
     assert any("归档失败" in message for message in messages), messages
     assert any(WORKFLOW_ID in message for message in messages), "日志要带 workflow_id 才查得动"
@@ -207,7 +223,7 @@ def test_record_fields_match_the_state() -> None:
 
     assert archive.archive_if_terminal(state) is True
 
-    record = _store().get(WORKFLOW_ID)
+    record = _store().get_for_user(WORKFLOW_ID, OWNER_ID)
     assert record is not None
     assert record.workflow_id == WORKFLOW_ID
     assert record.question == "按地区看销售额"
@@ -236,7 +252,7 @@ def test_has_report_and_llm_used_come_from_the_report_not_the_flags() -> None:
 
     assert archive.archive_if_terminal(state) is True
 
-    record = _store().get(WORKFLOW_ID)
+    record = _store().get_for_user(WORKFLOW_ID, OWNER_ID)
     assert record is not None
     assert record.has_report is False
     assert record.llm_used is False
@@ -272,8 +288,8 @@ def test_a_terminal_state_without_finished_at_is_refused_not_given_a_fake_time()
     assert archive.archive_if_terminal(state) is False
 
     # 不仅返回 False，而且**一个字都没写进库**。
-    assert _store().get(WORKFLOW_ID) is None
-    assert _store().count() == 0
+    assert _store().get_for_user(WORKFLOW_ID, OWNER_ID) is None
+    assert _store().count(owner_user_id=OWNER_ID) == 0
 
 
 def test_archiving_does_not_touch_the_state() -> None:
@@ -304,8 +320,76 @@ def test_orchestrator_early_failure_is_archived_at_the_exit() -> None:
     assert state.status is WorkflowStatus.FAILED
     assert state.error is not None and state.error.code is ErrorCode.NOT_FOUND
 
-    record = _store().get(WORKFLOW_ID)
+    record = _store().get_for_user(WORKFLOW_ID, OWNER_ID)
     assert record is not None, "早退分支也必须被 finally 里的收口归档"
     assert record.status == "FAILED"
     assert record.error_code == "NOT_FOUND"
     assert record.finished_at is not None
+
+
+# ---------------- 归属：写进去、并且按归属隔离（P0 那次的守护） ----------------
+#
+# 这一节是**回归守护**，对着一个真实发生过的缺陷写：
+#
+#   多用户改造把 `HistoryRecord.owner_user_id` 做成必填（无默认值，注释写着
+#   "漏了当场 TypeError"），但 `app/core/archive.py:build_record()` 当时没传这个
+#   参数 → 归档每次都抛 `TypeError` → 而归档是**旁路**、异常被吞成一行 warning
+#   → 用户看到的是"分析跑完了、报告能看，历史任务永远为空"。
+#
+# 更难发现的是：当时这一节里**没有**任何用例能让这个缺陷变红 —— 夹具不给归属、
+# `build_record()` 也不给，两个 None 恰好对上，测试全绿（acceptance 队友在真实
+# 链路里挖出来的）。所以下面两条的写法是刻意的：
+#   - 第一条先把归属**染上色**（非 None），再断言它被原样写进库；
+#   - 第二条把"没有归属"也钉住：库里必须是 NULL，且**任何**用户都查不到 ——
+#     这是 `NULL = ?` 的语义（NULL 不是 TRUE），也是"老库的行不给任何人看"的依据。
+
+
+def test_archiving_carries_the_owner_from_the_state() -> None:
+    """归属必须**原样**从 state 抄进库：`build_record()` 漏传就当场红。"""
+    state = _state(status=WorkflowStatus.SUCCESS, finished_at=datetime.now(timezone.utc))
+
+    built = archive.build_record(state)
+    assert built.owner_user_id == OWNER_ID, (
+        "build_record() 没把 owner_user_id 从 state 抄过来 —— 漏了会让归档抛 TypeError，"
+        "而归档的异常被吞成 warning，用户那侧表现为「历史任务永远为空」"
+    )
+    assert built.owner_username == OWNER_NAME
+
+    assert archive.archive_if_terminal(state) is True
+
+    record = _store().get_for_user(WORKFLOW_ID, OWNER_ID)
+    assert record is not None
+    assert record.owner_user_id == OWNER_ID
+    assert record.owner_username == OWNER_NAME
+
+
+def test_a_record_without_an_owner_is_written_as_null_and_stays_invisible(
+    tmp_path,
+) -> None:
+    """没有归属的记录：库里存 NULL，**任何**用户按归属都查不到。
+
+    为什么这条比"查不到"更严：这里直接用**原始 sqlite3** 读那一行，
+    确认 NULL 真的落了盘（而不是"写失败了所以查不到"）—— 用被测对象自己证明自己
+    "什么都没写"是不够的，两种情况的表现一模一样。
+    """
+    state = _state(
+        status=WorkflowStatus.SUCCESS,
+        finished_at=datetime.now(timezone.utc),
+        owner_user_id=None,
+        owner_username=None,
+    )
+
+    assert archive.archive_if_terminal(state) is True
+
+    store = _store()
+    with sqlite3.connect(store.path) as conn:
+        rows = conn.execute(
+            "SELECT workflow_id, owner_user_id, owner_username FROM workflow_history"
+        ).fetchall()
+    assert rows == [(WORKFLOW_ID, None, None)], "无归属必须写成 NULL，不许补 0 或空串"
+
+    assert store.get_for_user(WORKFLOW_ID, OWNER_ID) is None
+    assert store.get_for_user(WORKFLOW_ID, 999) is None
+    assert store.count(owner_user_id=OWNER_ID) == 0
+    assert store.count(owner_user_id=999) == 0
+    assert store.list_recent(owner_user_id=OWNER_ID) == []

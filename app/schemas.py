@@ -35,6 +35,14 @@ class ErrorCode(str, Enum):
     WORKFLOW_TIMEOUT = "WORKFLOW_TIMEOUT"  # 工作流超时（HTTP 仍是 200，见 errors.py 的说明）
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
+    # ---------------- 认证与权限 ----------------
+    # 这三个是 401 / 403 / 429，与"参数不合法"在语义上是两回事，所以不能复用 BAD_REQUEST：
+    # 前端对 401 的动作是**弹登录页**，对 400 的动作是**标红那个输入框**。
+    # 混在一起的话，一个会话过期的用户会看到"请检查你的输入"，然后永远查不出问题。
+    UNAUTHORIZED = "UNAUTHORIZED"  # 没登录 / 会话过期（HTTP 401）
+    FORBIDDEN = "FORBIDDEN"  # 登录了，但不允许做这件事（HTTP 403）
+    RATE_LIMITED = "RATE_LIMITED"  # 登录尝试过于频繁（HTTP 429）
+
 
 class ApiError(BaseModel):
     """失败时的错误信息。message 面向用户，detail 面向开发者排查。"""

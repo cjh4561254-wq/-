@@ -56,6 +56,15 @@ ERROR_STATUS: dict[ErrorCode, int] = {
     ErrorCode.SERVICE_UNAVAILABLE: 503,  # 依赖不可用（例：没配大模型密钥）
     ErrorCode.WORKFLOW_TIMEOUT: 200,   # 工作流超时不是"请求失败"，见下方说明
     ErrorCode.INTERNAL_ERROR: 500,     # 服务器内部错误
+    # 认证三兄弟。为什么必须是不同的状态码（而不是一律 400）：
+    #   401 —— 浏览器和前端框架**认识**这个码，会触发"该登录了"的分支；
+    #         把它伪装成 400 就得靠解析 error.code 才知道该弹登录页。
+    #   403 —— 与 401 的区别是"我知道你是谁"。前端据此显示"无权限"而不是"去登录"，
+    #         否则一个已登录用户会被反复丢回登录页，怎么登都进不去。
+    #   429 —— 带 `Retry-After` 才有意义，见下方登录限流的说明。
+    ErrorCode.UNAUTHORIZED: 401,
+    ErrorCode.FORBIDDEN: 403,
+    ErrorCode.RATE_LIMITED: 429,
 }
 
 # 为什么 WORKFLOW_TIMEOUT 是 200 而不是 5xx？
@@ -79,6 +88,9 @@ DEFAULT_MESSAGE: dict[ErrorCode, str] = {
     ErrorCode.SERVICE_UNAVAILABLE: "服务暂时不可用，请稍后重试",
     ErrorCode.WORKFLOW_TIMEOUT: "分析超时",
     ErrorCode.INTERNAL_ERROR: "服务器内部错误",
+    ErrorCode.UNAUTHORIZED: "请先登录",
+    ErrorCode.FORBIDDEN: "没有权限执行这个操作",
+    ErrorCode.RATE_LIMITED: "尝试过于频繁，请稍后再试",
 }
 
 
@@ -91,6 +103,15 @@ class AppError(Exception):
         detail    给开发者排查用的话。可以塞异常原文，但会先被清洗掉本机路径
         status_code  一般不用传。只有"同一个错误码需要不同状态码"时才传
                      （例：模型未配置导致无法分析 → BAD_REQUEST 但想返回 503）
+        headers   要挂在响应上的头。极少数情况才需要 —— 目前只有两处：
+                     ① 401 的 `WWW-Authenticate`（RFC 7235 要求）；
+                     ② 429 的 `Retry-After`（告诉客户端"过几秒再来"，
+                        没有它前端只能瞎猜重试间隔）。
+                  它存在的理由是 `StarletteHTTPException` 的处理器**已经**在转发
+                  头了（见 app/main.py 里那句 "exc.headers 必须转发"），
+                  而业务代码走的是 `AppError` 这条路径 —— 如果这里不转发，
+                  同一个状态码经由两条路径会得到不同的响应头，这种不一致最难查。
+                  默认 `None`，绝大多数 AppError 不设它。
 
     为什么继承 Exception 而不是直接 return 错误响应？
         raise 可以在**任意深度**的代码里抛出（工具函数、加载器、Agent 里），
@@ -104,11 +125,13 @@ class AppError(Exception):
         message: str | None = None,
         detail: str | None = None,
         status_code: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.code = code
         self.message = message or DEFAULT_MESSAGE.get(code, "请求失败")
         self.detail = detail
         self.status_code = status_code or ERROR_STATUS.get(code, 500)
+        self.headers = headers
         super().__init__(self.message)
 
 

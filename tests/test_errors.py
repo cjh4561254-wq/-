@@ -78,6 +78,14 @@ def test_error_status_table_is_exactly_as_designed():
 
     如果哪天有人把 FILE_TOO_LARGE 改成 400，这条测试会立刻失败并说明原因，
     而不是等到前端或面试官发现"上传超大文件返回的状态码看不懂"。
+
+    白名单在登录功能上线时**同步扩了三个名字**（UNAUTHORIZED 401 /
+    FORBIDDEN 403 / RATE_LIMITED 429），因为认证确实需要这三个语义：
+      * 401 未登录（并带 WWW-Authenticate）；
+      * 403 已登录但没权限（例：库非空时再调 bootstrap）；
+      * 429 登录失败次数过多（并带 Retry-After）。
+    这里仍然是**排序无关的全等断言**，不是 `>=` 那种恒真写法：多一个码、
+    少一个码、或任何一个码改了数字，都必须红。
     """
     assert ERROR_STATUS == {
         ErrorCode.BAD_REQUEST: 400,
@@ -88,6 +96,9 @@ def test_error_status_table_is_exactly_as_designed():
         ErrorCode.SERVICE_UNAVAILABLE: 503,
         ErrorCode.WORKFLOW_TIMEOUT: 200,
         ErrorCode.INTERNAL_ERROR: 500,
+        ErrorCode.UNAUTHORIZED: 401,
+        ErrorCode.FORBIDDEN: 403,
+        ErrorCode.RATE_LIMITED: 429,
     }
 
 

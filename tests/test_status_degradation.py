@@ -71,7 +71,7 @@ def _report() -> FinalReport:
     return FinalReport(
         report_id="r1",
         title="分析报告：分析不同地区的销售额",
-        summary="本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总",
+        summary="本次未使用大模型，以下结论为工具结果的直接汇总",
         sections=[
             ReportSection(
                 heading="按地区汇总销售额",

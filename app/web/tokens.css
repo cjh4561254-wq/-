@@ -1,0 +1,684 @@
+/* =====================================================================
+ * tokens.css —— AI Market Intelligence Studio 设计令牌层（唯一来源）
+ * =====================================================================
+ * 这个文件**只声明 CSS 自定义属性**，一行组件样式都不写。
+ * 组件样式在 app.css（现有页面）与 login.css（登录页）里，改样式不许改这里。
+ *
+ * 引用顺序（硬规则）：tokens.css 永远排在页面样式表**之前**。
+ *   index.html    <link rel="stylesheet" href="/static/tokens.css">  → app.css
+ *   login.html    <link rel="stylesheet" href="/static/tokens.css">  → login.css
+ *   为什么顺序重要：① 同权重（都是 :root）声明按源码顺序决胜负，令牌层在前，
+ *   页面样式表里的同名覆盖（含响应式覆盖）才能生效；② 将来做主题切换时，
+ *   主题覆盖块必须能盖住令牌层，顺序反了会静默失效。
+ *   注意别误传：CSS 变量是运行时解析的，顺序**不会**让 var() 取不到值。
+ *
+ * 为什么只有一个 :root 块（而不是按段拆成好几个）：
+ *   任何「取第一个 :root 块」的解析器——包括 tests/test_frontend.py 里
+ *   `_css_tokens()` 那个 `:root\s*\{(.*?)\n\}` 正则——都能一次拿到全部令牌名。
+ *   将来测试从「只认 app.css」升级成「先读 tokens.css 再读 app.css」时，
+ *   不会出现「用了未定义的令牌」这种假红灯。文件的段落划分交给注释横幅。
+ *
+ * 命名分两段（这是本文件的核心结构决定）：
+ *   第一段「兼容层」= 现状命名（--brand-600 / --n-400 / --fs-md ...），
+ *     名字和值都跟 app.css:18-105 的现状**逐字一致**。它的存在是为了让
+ *     app.css 的瘦身可以分步做：今天切过来零视觉变化，明天再逐个改组件。
+ *   第二段「品牌层」= --ds-* 语义命名。组件应当引用这一层（例如
+ *     `color: var(--ds-color-ink)` 而不是 `var(--n-800)`）：值仍是同一批，
+ *     但「为什么是这个颜色」被写在名字里。等第二阶段把 app.css 瘦身完，
+ *     换主题只需要重定义兼容层，组件 CSS 一个字节都不用动。
+ *   铁律：品牌层里每一个颜色令牌的值**必须是 var(--现状名)**，不许另写 hex。
+ *     hex 只允许出现在第一段兼容层——那是唯一的口径来源，两处写死必然漂移。
+ *   段 1B/1C（Wave A 新增）：1B = 方案 01 扩展色阶（全部是**新增**令牌，
+ *     现有兼容令牌一个值都没改）；1C = 把品牌层历史上写过的裸 hex（原 2.8b/2.16/
+ *     ink-subtle 共 12 处）**迁登记**到兼容层，品牌层令牌名与解析值逐字不变。
+ *     映射关系与待决策见 docs/refactor/01-token-contract.md。
+ *
+ * 深色模式：**故意不在这里启用**（没有 @media (prefers-color-scheme: dark)）。
+ *   理由见 app.css 末尾那段注释：图表是后端 matplotlib 生成的浅底 PNG，
+ *   深色模式会让图区变成一块块白斑；而且本项目的展示价值在「数字可核对」。
+ *   暗色方案已按同一套令牌结构做过实测评审（.tmp/design/contrast_report.txt），
+ *   结论与候选值记录在 docs/design-system.md 附录 A，本期不落地。
+ *
+ * 对比度：本文件每个颜色的对比度都是算出来的，不是眼估的。
+ *   正文/次要文字 ≥ 4.5:1，大字与非文本 UI ≥ 3:1（WCAG 2.1 AA）。
+ *   实测表：.tmp/design/contrast_report.txt（脚本 .tmp/design/contrast_check.py）。
+ *
+ * 硬约束：本文件不得出现任何绝对网址（协议前缀 + 域名），注释里也不行——
+ *   前端三件套的测试会对源码做纯文本扫描；也不要用 @import、不要引外部字体。
+ * ===================================================================== */
+
+/* ==================================================================
+ * Wave E（2026-10）：方案 05「Stripe 金融科技流体」落地。
+ * 兼容层色值整体切换为 Stripe 色板（品牌紫 #635BFF / 深墨 #0A2540 /
+ * 画布 #F6F9FC / 边框 #E6EBF1），令牌名与两段结构不动；
+ * 1B 的 navy 阶保留名字、值对齐 Stripe 深墨阶，避免任何消费方引用失效。
+ * ===================================================================== */
+
+:root {
+  /* ==================================================================
+   * 第 1 段：兼容层 —— 现状命名，值必须与 app.css:18-105 逐字一致
+   * ==================================================================
+   * 迁移状态（第二/第三阶段用）：
+   *   现在 app.css 的 :root 与这一段是**同值副本**，谁先谁后都不改变渲染结果。
+   *   等 app.css 瘦身完（见 docs/design-system.md「app.css 瘦身分步指引」），
+   *   这一段就是唯一来源，app.css 里的 :root 整块删除。
+   *   在删掉之前，任何令牌改值必须**两边同时改**，否则口径立刻分叉。
+   */
+
+  /* 品牌色阶：深海军蓝。50 是最浅底、900 是最深底。 */
+  --brand-50: #f5f4ff;
+  --brand-100: #ebe9fe;
+  --brand-200: #d5d1ff;
+  --brand-300: #b3acff;
+  --brand-400: #8f86ff; /* 目前无消费方，保留给 hover 高亮与图表强调 */
+  --brand-500: #7a6fff; /* 焦点环与输入框聚焦边框（实测值见对比度报告） */
+  --brand-600: #635bff; /* 主操作色 */
+  --brand-700: #5145e5;
+  --brand-800: #3d33c4;
+  --brand-900: #0a2540; /* 顶栏底色 */
+
+  /* 中性色阶：暖白 → 石墨。页面底色用 50，卡片用 0。 */
+  --n-0: #ffffff;
+  --n-25: #fafcfe;
+  --n-50: #f6f9fc;
+  --n-100: #eef2f7;
+  --n-150: #e6ebf1;
+  --n-200: #e0e6ee; /* 常规边框 */
+  --n-300: #cfd7e3; /* 分隔线（装饰） */
+  --n-400: #8792a2; /* 控件边框（3.25:1，过 WCAG 1.4.11） */
+  --n-500: #697386; /* 最弱的可读文字（4.77:1） */
+  --n-600: #5a6779; /* 次级文字 */
+  --n-700: #424c60;
+  --n-800: #1a1f36; /* 正文 */
+  --n-900: #0a2540; /* 标题 */
+
+  /* 语义色：每个都是「前景 / 浅底 / 边框」三件套。
+     绿=成功、琥珀=警告、红=失败、蓝=信息（蓝复用品牌 600 值，但语义独立）。 */
+  --ok-fg: #0b7a46;
+  --ok-bg: #e9f8f0;
+  --ok-line: #b7e7cd;
+  --warn-fg: #8a5b12;
+  --warn-bg: #fdf7e8;
+  --warn-line: #ecd9a9;
+  --err-fg: #c0281f;
+  --err-bg: #fdeceb;
+  --err-line: #f2c4c0;
+  --info-fg: #1565c0;
+  --info-bg: #eaf2fd;
+  --info-line: #c2d8f5;
+
+  /* 字体：纯系统栈，中文字体排在最前（Windows 上是微软雅黑）。
+     为什么不用网络字体：离线可演示 + 不许引外部资源，系统栈是唯一稳的选择。 */
+  --font: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", system-ui,
+    -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+
+  /* 字号阶梯。8 档，相邻档差 ≥1px 且不连续两档同字重，
+     这样层级靠「字号 + 字重 + 颜色」三重区分，不靠颜色单独承载。 */
+  --fs-xs: 12px;  /* 元信息、面包屑、脚注 */
+  --fs-sm: 13px;  /* 标签、按钮、表格单元格 */
+  --fs-md: 14px;  /* 正文（body 基准） */
+  --fs-lg: 15px;  /* 卡片标题、摘要正文 */
+  --fs-xl: 17px;  /* 小节标题 */
+  --fs-2xl: 20px; /* 报告主标题 */
+  --fs-3xl: 25px; /* 页面标题（每页一个 h1） */
+  --fs-4xl: 31px; /* 展示型标题（登录页字标） */
+
+  /* 间距阶梯，4px 基准。命名是倍率不是像素值，换基准只改这一处。 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* 圆角。控件 6px、容器 10px、装饰 4px、徽章 999px（胶囊）。 */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  /* 阴影：只有三档，且都很克制。高级感靠留白和对齐，不靠阴影堆叠。 */
+  --sh-1: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .04);
+  --sh-2: 0 1px 2px rgba(16, 24, 40, .05), 0 8px 24px -6px rgba(10, 37, 64, .12);
+  --sh-3: 0 2px 6px rgba(10, 37, 64, .06), 0 16px 40px -12px rgba(10, 37, 64, .20);
+
+  /* 过渡 */
+  --ease: cubic-bezier(.2, .6, .3, 1);
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+
+  /* 层级。这是 app.css 现状的全部层：导航 20、顶栏 30、跳转链接 40、
+     用户下拉 45、会话门 50。新增浮层一律用品牌层 --ds-z-*（见 2.13）。 */
+  --z-nav: 20;
+  --z-topbar: 30;
+  --z-skip: 40;
+  --z-pop: 45;
+  --z-gate: 50;
+
+  /* 尺寸 */
+  --topbar-h: 56px;
+  --sidebar-w: 224px;
+  --content-max: 1320px;
+
+  /* ==================================================================
+   * 第 1 段·扩展 1B：方案 01 兼容层 —— 只新增、不修改（Wave A，2026-10）
+   * ==================================================================
+   * 核对结论（docs/refactor/01-token-contract.md §2）：方案 01 §4 色彩表里的品牌
+   * 色阶（#0B2239/#12314F/#1A4570/#22608F/#DCE7F0/#EFF4F9/#6E9CC2）在兼容层
+   * **一个都不存在**——现有 --brand-* 是更暖更浅的另一套海军蓝，值全部不同；
+   * 按「--brand-* 一个 hex 都不许改」的纪律，这里**另起命名空间并存**。
+   * 图表序列与状态色严格不互用（option-01.md §4），用在哪一序列见 2.23。
+   */
+
+  /* 方案 01 品牌阶：更深的冷调海军蓝。编号与方案文档的 --brand-* 对应，
+     换前缀是为了不与兼容层现有阶重名（--navy-300/500/600 方案文档未给值，不设）。 */
+  --navy-050: #f7fafc;   /* 方案 §4「主色·浅底」hover 底 */
+  --navy-100: #eef3f9;   /* 方案 §4 角标底、运行态底色 */
+  --navy-200: #c9d6e6;   /* = 方案 §4 图表序列 4 */
+  --navy-400: #8fa1b5;   /* 方案 §4「主色·标签」侧栏分组小标题；= 图表序列 3 */
+  --navy-600: #4f6b8f;   /* 方案 §4「主色·运行」焦点/运行中/正在执行段；= 图表序列 2 */
+  --navy-700: #244a6e;   /* 方案 §4「主色·动作」链接、cites 角标 */
+  --navy-800: #12395c;   /* 方案 §4「主色」主按钮、当前导航；= 图表序列 1 */
+  --navy-900: #0a2540;   /* 方案 §4「主色·深」侧栏/登录品牌面板深底结构面 */
+  --bronze-500: #b07d2a; /* 方案 §4 图表序列 5（青铜，区分用、非状态色） */
+
+  /* 方案 01 墨灰字阶：蓝黑冷调，与暖灰 --n-* 是不同值，并存。
+     注意：方案 §4 声明「--ink-900…--ink-200 六级」但只确认了端点与正文/次要，
+     中间两档缺失 → 契约待决策 D5，先只建已确认的四档。 */
+  --ink-900: #0a2540;    /* 标题（方案 §4 端点） */
+  --ink-800: #1a1f36;    /* 正文（方案 §4，白底对比度达标） */
+  --ink-500: #5a6779;    /* 次要字（方案 §4，≥4.5:1） */
+  --ink-200: #c7d2e0;    /* 占位字（方案 §4 端点） */
+
+  /* 方案 01 hairline 阶：层级靠细线而非卡片投影（§4/§5）。 */
+  --rule: #e0e6ee;
+  --rule-strong: #cfd7e3;
+  --rule-soft: #eef2f7;
+
+  /* 方案 01 纸面阶：--paper(白) 即现有 --n-0，不重复设令牌。 */
+  --paper-alt: #f6f9fc;   /* 页面底（与暖灰 --n-50 是不同值） */
+  --paper-sunk: #eef2f7;  /* 表头底 */
+  --paper-deep: #e0e6ee;  /* 进度轨底（§9 未达段灰轨） */
+
+  /* 方案 01 状态阶：与 --ok-fg/--warn-fg/--err-fg 相近但**不同值**。
+     不改存量三色（全仓回归风险），新起并存阶，仅方案 01 组件消费。
+     命名沿用方案 §4 表的 --ok-700/--ok-100 叫法，与现有 --ok-fg 系不冲突。 */
+  --ok-700: #0b7a46;
+  --ok-100: #e9f8f0;
+  --warn-700: #8a5b12;
+  --warn-100: #fdf7e8;
+  --err-700: #a9221b;
+  --err-100: #fdeceb;
+
+  /* 尺寸：方案 01 §5 要侧栏 240px、主内容 1220px，兼容层现值都不同。 */
+  --sidebar-w-cmd: 240px;
+  --content-max-cmd: 1220px;
+
+  /* ==================================================================
+   * 第 1 段·扩展 1C：品牌层历史裸 hex 的迁登记 —— 消除铁律违规，值不变
+   * ==================================================================
+   * 原 2.2/2.8b/2.16 在品牌层直接写了 12 个裸 hex，违反本文件铁律（头部注释）。
+   * 处置：hex 原值一字不改地登记到兼容层，品牌层改为 var(--新令牌)——
+   * 令牌名不变、解析值不变，app.css 与 login.css 的 var(--ds-*) 引用零变化。
+   */
+  --n-500-safe: #646e7d; /* --n-500 的画布底达标变体（理由见 2.2 注释） */
+  --bar-dot-ok: #3ecf8e;  /* 深底状态点：压在深底上的另一组色，与白底 --ok-fg 不同值 */
+  --bar-dot-warn: #f5b83d;
+  --bar-dot-err: #ff7b72;
+  --err-deep: #8c1d18;    /* 错误详情长文本 */
+  /* 后端对齐图表色：来源 app/agents/charts.py:67-68（条形/折线），3..6 为前端扩展分类色。
+     方案 01 §4 图表色板与这一套**冲突**，契约待决策 D1；本组令牌只是为
+     --ds-chart-1..6 存量值迁登记，不代表方案 01 采用它。 */
+  --viz-legacy-1: #3b6ea5;
+  --viz-legacy-2: #c0504d;
+  --viz-legacy-3: #2f7d6b;
+  --viz-legacy-4: #a5701a;
+  --viz-legacy-5: #5b5fa8;
+  --viz-legacy-6: #8a5a8f;
+
+  /* Wave B/C 集成补齐（10-integration-log §1，只新增不改存量）：
+     深底侧栏发丝线 —— navy-800 压 navy-900 实测 1.24:1，等于"假装存在"，
+     换成 12% 透明白：肉眼可见、不抢主字色，且不与 navy 阶冲突。 */
+  --rule-on-navy: rgba(255, 255, 255, .16);
+
+  /* ---- 第 1 段·扩展 1D：方案 05 Stripe 的玻璃与 mesh 光斑（Wave E） ----
+     只新增、不改上面任何值。半透明白与光斑颜色只在这里出现一次，
+     组件层全部走 var() 引用；不引入外部渐变图片，全部用 CSS 径向渐变画。 */
+  --glass-bar: #fbfdff;                    /* 命令条近白底（实心，不做毛玻璃：视觉纪律契约禁用该滤镜） */
+  --glass-line: rgba(10, 37, 64, .07);     /* 玻璃条底缘发丝线 */
+  --mesh-purple: rgba(99, 91, 255, .22);   /* mesh 主光斑（品牌紫） */
+  --mesh-cyan: rgba(0, 180, 255, .16);     /* mesh 冷光斑 */
+  --mesh-pink: rgba(255, 109, 158, .14);   /* mesh 暖光斑 */
+  --brand-panel-surface: rgba(255, 255, 255, .06); /* 深墨品牌面板上的事实卡底 */
+  --shadow-action: 0 6px 16px -6px rgba(99, 91, 255, .55);
+  --shadow-action-hover: 0 10px 24px -8px rgba(99, 91, 255, .62);
+
+  /* ==================================================================
+   * 第 2 段：品牌层（--ds-*）—— 语义命名 + 新增令牌
+   * ==================================================================
+   * 消费方：login.css（登录页，第二阶段）、app.css 的后续重构、
+   *   以及 docs/design-system.md 里的组件规范。没有被消费方的令牌**一个都不写**，
+   *   所以这里没有「预留着以后可能用」的占位。
+   * 每个颜色令牌的值都指向兼容层，不另写 hex（理由见文件头）。
+   */
+
+  /* --- 2.1 画布与表面 ------------------------------------------------
+     三层表面：页面底（canvas）→ 卡片（surface）→ 凹陷块（sunken）。
+     顶栏是第四层，单独用 --ds-color-bar。 */
+  --ds-color-canvas: var(--n-50);
+  --ds-color-surface: var(--n-0);
+  --ds-color-surface-subtle: var(--n-25);   /* 上传区、时间线步骤底 */
+  --ds-color-surface-sunken: var(--n-100);  /* 骨架屏、进度槽 */
+  --ds-color-surface-hover: var(--n-50);    /* 次级按钮/列表行 hover */
+
+  /* --- 2.2 文字（ink 而不是 text，避免和 CSS 的 text-* 属性混淆）---
+     ink 是最强正文、subtle 是最弱但仍过 4.5:1 的一档（画布底与白底都过，实测见
+     .tmp/design/contrast_report.txt）。
+     比 subtle 再浅的灰（--n-400 及以下）只许用于非文本，不许拿来讲信息。 */
+  --ds-color-ink: var(--n-800);
+  --ds-color-ink-strong: var(--n-900);
+  --ds-color-ink-muted: var(--n-600);
+  /* 这里故意**不**跟随 --n-500：实测 --n-500 压在页面底色 --n-50 上只有 4.446:1，
+     低于正文门槛 4.5:1 —— app.css 注释里公示的 4.77 只在纯白底成立。
+     取兼容层 --n-500-safe（同色相、只深 1.7%）后：画布底 4.712:1、纯白底 5.051:1，
+     两边同时达标。
+     等 app.css 的四处 12px 用法（.nav__group / .nav__flag / .sidebar__foot / .crumb）
+     或 --n-500 的值与本令牌对齐后，这里改回 var(--n-500)。 */
+  --ds-color-ink-subtle: var(--n-500-safe);
+  --ds-color-ink-inverse: var(--n-0);
+
+  /* --- 2.3 线条 ------------------------------------------------------
+     line=常规边框、line-strong=控件的可交互边框（要过 3:1）、
+     line-divider=卡片内的分隔（装饰，不承载必要信息，不受 3:1 约束）、
+     line-decorative=注释块左侧竖线。 */
+  --ds-color-line: var(--n-200);
+  --ds-color-line-strong: var(--n-400);
+  --ds-color-line-divider: var(--n-150);
+  --ds-color-line-decorative: var(--n-300);
+
+  /* --- 2.4 操作（主按钮、选中态、焦点）------------------------------- */
+  --ds-color-action: var(--brand-600);
+  --ds-color-action-hover: var(--brand-700);
+  --ds-color-action-active: var(--brand-800);
+  --ds-color-on-action: var(--n-0);
+  --ds-color-action-surface: var(--brand-50);      /* 选中行底、摘要块底 */
+  --ds-color-action-line: var(--brand-200);
+  --ds-color-action-disabled-surface: var(--brand-100);
+  --ds-color-action-disabled-line: var(--brand-200);
+  --ds-color-action-disabled-ink: var(--brand-700);
+  --ds-color-selected-surface: var(--brand-50);
+  --ds-color-selected-ink: var(--brand-700);
+  --ds-color-selected-marker: var(--brand-600);    /* 当前导航项左侧 2px 竖条 */
+  --ds-color-focus: var(--brand-600);
+
+  /* --- 2.5 禁用（次级控件）------------------------------------------
+     禁用态**不用 opacity**，是显式配色：opacity 会把元素和背景做 alpha 混合，
+     白字压白底会渲染成 1.00:1 的空白框。 */
+  --ds-color-disabled-surface: var(--n-100);
+  --ds-color-disabled-line: var(--n-300);
+  --ds-color-disabled-ink: var(--n-600);
+
+  /* --- 2.6 顶栏（深底反白）------------------------------------------ */
+  --ds-color-bar: var(--navy-900);
+  --ds-color-bar-line: var(--navy-800);
+  --ds-color-on-bar: var(--n-0);
+  --ds-color-on-bar-muted: var(--navy-400);
+  --ds-color-on-bar-faint: var(--navy-200);
+
+  /* --- 2.7 链接 ------------------------------------------------------ */
+  --ds-color-link: var(--brand-600);
+  --ds-color-link-hover: var(--brand-700);
+
+  /* --- 2.8 状态四件套（与兼容层同名语义一一对应）-------------------- */
+  --ds-color-success: var(--ok-fg);
+  --ds-color-success-surface: var(--ok-bg);
+  --ds-color-success-line: var(--ok-line);
+  --ds-color-warning: var(--warn-fg);
+  --ds-color-warning-surface: var(--warn-bg);
+  --ds-color-warning-line: var(--warn-line);
+  --ds-color-danger: var(--err-fg);
+  --ds-color-danger-surface: var(--err-bg);
+  --ds-color-danger-line: var(--err-line);
+  --ds-color-info: var(--info-fg);
+  --ds-color-info-surface: var(--info-bg);
+  --ds-color-info-line: var(--info-line);
+
+  /* --- 2.8b app.css 里 4 个「有值但没名字」的颜色 --------------------
+     它们今天以裸色写在 app.css 里（全文件仅此 4 处）。值是对的，缺的是
+     名字与出处；Wave A 起 hex 已迁登记到兼容层 1C，这里只留 var()（铁律）。
+     之所以必须单独定名而不是复用状态四色：
+       ① 顶栏三个状态点是压在深色顶栏上的，而 ok/warn/err 三色是
+          给白底用的——在深底上会糊成一团，所以它们本来就是另一组颜色；
+       ② .error-box .detail 是**整段错误详情长文本**，需要一个比 --err-fg 更深的红：
+          压 err-bg 实测 8.45:1，比 --err-fg 的 7.17:1 更耐读。
+     换掉 app.css 裸值的动作属于 app.css 瘦身（见 docs/design-system.md 第 15 章）。 */
+  --ds-color-bar-dot-ok: var(--bar-dot-ok);      /* app.css:292 .dot--ok */
+  --ds-color-bar-dot-warn: var(--bar-dot-warn);  /* app.css:293 .dot--warn */
+  --ds-color-bar-dot-err: var(--bar-dot-err);    /* app.css:294 .dot--err */
+  --ds-color-danger-strong: var(--err-deep);     /* app.css:914 .error-box .detail */
+
+  /* --- 2.9 字体排印 -------------------------------------------------- */
+  --ds-font-sans: var(--font);
+  --ds-font-mono: var(--font-mono);
+  --ds-weight-regular: 400;
+  --ds-weight-medium: 500;
+  --ds-weight-semibold: 600;
+  --ds-weight-bold: 700;
+  /* 行高：标题 1.35 收紧、控件 1.5、正文 1.65、长报告 1.8 放松。
+     中文没有西文的 x-height 优势，行高比英文规范要再松一档，否则密不透气。 */
+  --ds-leading-tight: 1.35;
+  --ds-leading-snug: 1.5;
+  --ds-leading-normal: 1.65;
+  --ds-leading-relaxed: 1.8;
+  --ds-tracking-tight: -.01em;  /* 25px 以上的标题，字距收紧才不散 */
+  --ds-tracking-normal: 0;
+  --ds-tracking-wide: .02em;
+  --ds-tracking-caps: .08em;    /* 导航分组小标题（大写 + 宽字距） */
+  /* 字号语义别名：写组件时想的是「这是元信息」而不是「这是 12px」 */
+  --ds-text-display: var(--fs-4xl);
+  --ds-text-title: var(--fs-3xl);
+  --ds-text-section: var(--fs-xl);
+  --ds-text-body: var(--fs-md);
+  --ds-text-label: var(--fs-sm);
+  --ds-text-meta: var(--fs-xs);
+  /* 数字排版：等宽数字 + 衬线数字，指标、表格、时间戳都要用，
+     否则 1 比 0 窄，纵向对不齐、跳动。用法：font-variant-numeric: var(--ds-numeric); */
+  --ds-numeric: tabular-nums lining-nums;
+
+  /* --- 2.10 尺寸与栅格 ----------------------------------------------
+     页面外壳宽度 = --content-max。报告正文用 measure 而不是百分比。
+     1ch = 当前字体里数字「0」的宽度，中文是 1em，所以 78ch 能放几个中文字随字体变。
+     实测（.tmp/design/measure_report_line.py，正文 14px）：微软雅黑 0 宽 8px → 78ch = 624px ≈ 44.6 字；
+     宋体 0 宽 7px → 546px ≈ 39 字。区间 39–45 字/行都落在中文阅读舒适区，所以 78ch 不改。 */
+  --ds-shell-max: var(--content-max);
+  --ds-measure-report: 78ch;
+  --ds-measure-form: 420px;   /* 登录页表单宽度：单手可及、不空旷 */
+  --ds-gutter: var(--sp-6);          /* 桌面主内容内边距 */
+  --ds-gutter-compact: var(--sp-5);  /* ≤1080px */
+  --ds-grid-gap: var(--sp-5);
+  --ds-card-pad: var(--sp-5);
+  --ds-card-pad-head: var(--sp-4);
+  --ds-topbar-h: var(--topbar-h);
+  /* 方案 01 §5 侧栏骨架宽度令牌：唯一消费方是 app.css:447 的外框
+     grid-template-columns。历史别名 --ds-sidebar-w（224px）与
+     --ds-sidebar-w-compact（190px）在全站无任何消费方，Wave D 已删除，不留死值
+     （兼容层原令牌 --sidebar-w / --sidebar-w-cmd 保留，见 D-3 不动 app.css :root）。 */
+  --ds-sidebar-w-cmd: var(--sidebar-w-cmd);
+  --ds-topbar-h-compact: 52px;    /* ≤760px 的覆盖值 */
+  --ds-sidebar-drawer-w: 78vw;    /* ≤760px 抽屉宽 */
+  --ds-sidebar-drawer-max: 300px;
+
+  /* --- 2.10b 圆角（形状）--------------------------------------------
+     只有这一档与兼容层分叉：兼容层的 --r-lg 是 10px，而 D1「线框纪律」要求大面块圆角 ≤6px。
+     10px 的圆角放在 1320px 宽的卡片上显得软、和 6px 的控件圆角套在一起也不协调。
+     所以：小元素 --r-sm(4px)、控件/输入框 --r-md(6px)、大面块用这里的 6px、
+     胶囊与状态标签 --r-pill(999px)、圆点与头像直接 50%（几何常量，不做成令牌）。
+     app.css 里 4 处 var(--r-lg)（:316 会话门盒子 / :396 用户菜单 / :513 卡片 / :678 上传区）
+     换成这个令牌属于**视觉变更**，由 frontend-engineer 在第二阶段执行，见 docs/design-system.md 第 15 章。 */
+  --ds-radius-surface: 14px;
+
+  /* --- 2.11 控件度量 -------------------------------------------------
+     实测（app.css 现状）：按钮 7+7 + 13×1.5 = 35.5px；输入框 9+9 + 14×1.6 = 42.4px。
+     令牌取整为 36 / 42，新组件请写 min-height: var(--ds-control-h) 而不是再算 padding。
+     触控目标：桌面 36px 够用，移动端必须 ≥44px（WCAG 2.5.8）——
+     现有 .btn 的 35.5px 在手机上偏小，这是已知待改项，不是「已达标」。 */
+  --ds-control-h: 36px;
+  --ds-control-h-sm: 28px;   /* 胶囊筛选片 */
+  --ds-input-h: 42px;
+  --ds-touch-min: 44px;
+  /* 图标：1.05em 跟随父级字号，1.7 描边在 14px 下不糊也不飘 */
+  --ds-icon-size: 1.05em;
+  --ds-icon-stroke: 1.7;
+
+  /* --- 2.12 边框宽度与焦点环 ---------------------------------------- */
+  --ds-border-w: 1px;
+  --ds-border-w-emphasis: 1.5px;  /* 上传区虚线框 */
+  --ds-rule-w: 3px;               /* 注释块左侧竖线 */
+  --ds-rule-w-accent: 4px;        /* 摘要块左侧品牌竖线 */
+  --ds-focus-w: 2px;
+  --ds-focus-offset: 2px;
+  --ds-focus-ring: 0 0 0 3px var(--brand-100);  /* 输入框聚焦光晕 */
+
+  /* --- 2.13 阴影 / 层级 ---------------------------------------------
+     阶梯从 app.css 的现状往上接，不另起一套编号：
+       20 导航 · 30 顶栏 · 40 跳转链接 · 45 用户下拉 · 50 会话门
+       60 遮罩 · 70 弹窗 · 80 轻提示 · 90 tooltip
+     三条硬规则：
+       ① --ds-z-gate(50) 必须严格高于 --ds-z-popover(45)：会话失效时门要能盖住
+          已经弹出的用户菜单。靠 DOM 顺序取胜是运气，靠数值才是规则。
+       ② 业务浮层（60 以上）只在已认证后出现，所以允许高于会话门；未认证时页面
+          被门整块遮住，不存在「浮层压在门上」的合法场景。
+       ③ 同一页面里不许出现两个同值的浮层层级（谁在上变成 DOM 顺序的运气）。 */
+  --ds-elevation-1: var(--sh-1);
+  --ds-elevation-2: var(--sh-2);
+  --ds-elevation-3: var(--sh-3);
+  --ds-z-skip: var(--z-skip);
+  --ds-z-topbar: var(--z-topbar);
+  --ds-z-nav: var(--z-nav);
+  --ds-z-popover: var(--z-pop);
+  --ds-z-gate: var(--z-gate);
+  --ds-z-scrim: 60;
+  --ds-z-modal: 70;
+  --ds-z-toast: 80;
+  --ds-z-tooltip: 90;
+
+  /* --- 2.14 动效 -----------------------------------------------------
+     120ms 用于颜色/边框这类「即时反馈」，200ms 用于位移/展开。
+     超过 400ms 的动效只在「等待本身需要解释」时用（转圈、脉冲、骨架屏）。
+     所有动效都必须被 prefers-reduced-motion 降级（app.css 已有全局规则）。 */
+  --ds-dur-fast: var(--dur-1);
+  --ds-dur-base: var(--dur-2);
+  --ds-dur-slow: 320ms;
+  --ds-dur-spin: 700ms;      /* 按钮加载转圈 */
+  --ds-dur-pulse: 1100ms;    /* 进行中任务脉冲 */
+  --ds-dur-shimmer: 1400ms;  /* 骨架屏扫光 */
+  --ds-ease-standard: var(--ease);
+  --ds-ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ds-ease-in-out: cubic-bezier(.4, 0, .2, 1);
+
+  /* --- 2.15 断点 -----------------------------------------------------
+     CSS 规范不允许 var() 出现在媒体查询条件里，所以这些值**只能给 JS 读**
+     （getComputedStyle 拿值）或给文档当口径。写 @media 时必须写字面量，
+     字面量必须与这里一致：480 / 760 / 1080。 */
+  --ds-bp-sm: 480px;
+  --ds-bp-md: 760px;
+  --ds-bp-lg: 1080px;
+
+  /* --- 2.16 数据可视化 ----------------------------------------------
+     chart-1/2 就是后端在用的两个真实颜色（app/agents/charts.py:67-68 的
+     _BAR_COLOR/_LINE_COLOR，值已迁登记为兼容层 --viz-legacy-1/2），
+     前端令牌必须与后端对齐，否则同一份数据在报告里和图表里是两种蓝。
+     chart-3..6 是扩展分类色板，只在新增图表时用；每个都在白底上实测 ≥4.2:1
+     （非文本图形要求 3:1），并做过红绿色盲近似检查（见对比度报告末节）。
+     色板排序即取用顺序：先 1 后 2，超过 6 类请改用「表 + 前 6 类」而不是继续加色。
+     ⚠ 方案 01 §4 的图表色板与这一套（含后端饼图色板 _PIE_PALETTE）冲突，
+     已由主控裁定（docs/refactor/06-leader-decisions.md D-1）：**以本组存量值为口径**，
+     --ds-viz-1..5 已重指到 --viz-legacy-1..5，保证前端极小图形与后端 PNG 同色；
+     落地页面**不自绘业务趋势图**（真实图表只来自后端 PNG），后端色板不动。 */
+  --ds-chart-1: var(--viz-legacy-1);  /* 条形（后端 _BAR_COLOR） */
+  --ds-chart-2: var(--viz-legacy-2);  /* 折线（后端 _LINE_COLOR） */
+  --ds-chart-3: var(--viz-legacy-3);
+  --ds-chart-4: var(--viz-legacy-4);
+  --ds-chart-5: var(--viz-legacy-5);
+  --ds-chart-6: var(--viz-legacy-6);
+  --ds-chart-bar: var(--ds-chart-1);
+  --ds-chart-line: var(--ds-chart-2);
+  /* 图表容器永远是白底（--n-0）：PNG 是后端出的浅底图，容器的底不能跟着主题变，
+     否则图里图外两个白。网格线只做装饰 → 用最浅的分隔色，不许抢数据的视觉权重。 */
+  --ds-chart-surface: var(--n-0);
+  --ds-chart-grid: var(--n-150);
+  --ds-chart-axis: var(--n-300);
+  --ds-chart-label: var(--n-600);
+
+  /* ==================================================================
+   * 第 2 段·方案 01 扩展（2.17–2.24，Wave A，2026-10）
+   * ==================================================================
+   * 「高端企业战略指挥中心」（docs/design-options/option-01.md）的语义层。
+   * 全部**尚无消费方**：Wave B 才在 app.css / index.html 首次引用，
+   * 现有 app.css / login.css 渲染零变化。每条令牌的 UI 落点与值来源
+   * 逐条对照见 docs/refactor/01-token-contract.md。
+   * 铁律同样成立：颜色只 var() 兼容层（1B/1C），非颜色字面量只允许
+   * ms/px/ch 这类度量，且逐个写了出处。
+   */
+
+  /* --- 2.17 指挥外壳：240px 深底侧栏 + 顶部命令条 + 纸面（方案 §4/§5/§6） --- */
+  --ds-shell-content-max: var(--content-max-cmd); /* §5 主内容 1220px */
+  --ds-shell-side-bg: var(--n-0);            /* §5 侧栏深底结构面；§6 登录品牌面板同色 */
+  --ds-shell-side-ink: var(--ink-800);                /* §5 深底上的亮字 */
+  --ds-shell-side-ink-muted: var(--n-600);     /* §4 主色·标签：分组小标题、栏底版本号 */
+  --ds-shell-side-line: var(--rule-soft);          /* §5 侧栏分组发丝线（3 组 6 项之间） */
+  --ds-shell-side-active-bg: var(--brand-50);     /* §5 当前导航项底色（= 方案表的 brand-800 角色） */
+  --ds-shell-side-active-marker: var(--brand-600); /* §5 当前项左 3px 竖标（色为本契约推断，待决策 D4） */
+  --ds-shell-side-active-marker-w: var(--ds-rule-w); /* 竖标宽 = 3px，复用 2.12，不写魔法数 */
+  --ds-shell-side-hover-bg: var(--n-50);      /* 侧栏 hover 同当前项底，靠竖标区分（方案未指定，D4） */
+  --ds-shell-side-badge-bg: var(--brand-100);      /* §5 计数徽标底（数据集数/运行中数；色为推断，D4） */
+  --ds-shell-side-badge-ink: var(--brand-800);          /* 计数徽标数字（--ds-numeric 排印） */
+  --ds-shell-bar-bg: var(--glass-bar);                  /* §5 命令条 = paper 白底粘性细条 */
+  --ds-shell-bar-line: var(--glass-line);               /* 命令条底缘发丝线 */
+  --ds-shell-bar-ink: var(--ink-900);             /* 命令条视图标题 */
+  --ds-shell-bar-ink-muted: var(--ink-500);       /* 「数据截至…」与设计声明行（§4 次要字） */
+  --ds-shell-paper: var(--n-0);                   /* §4 背景：内容面 */
+  --ds-shell-paper-alt: var(--n-50);         /* §4 背景：页面底（与 --ds-color-canvas 并存不重指） */
+  --ds-shell-paper-sunk: var(--paper-alt);       /* §4 背景：表头底 */
+  --ds-shell-paper-deep: var(--paper-deep);       /* §4 背景：进度轨底（2.22 消费同一值） */
+
+  /* --- 2.18 指挥动作色与焦点（与 2.4 存量 --ds-color-action 族并存，不重指） --- */
+  --ds-cmd-action: var(--brand-600);              /* §4 主按钮（§5 命令条「发起新分析」） */
+  --ds-cmd-action-hover: var(--brand-700);        /* §4 hover 强调 */
+  --ds-cmd-action-ink: var(--n-0);               /* 主按钮前景 */
+  --ds-cmd-link: var(--brand-700);                /* §4 链接 */
+  --ds-cmd-link-hover: var(--brand-800);          /* §4 链接 hover */
+  --ds-cmd-focus: var(--brand-600);               /* §4 焦点 outline（用 outline 不用发光投影，方案「附」节） */
+  --ds-cmd-surface-hover: var(--brand-50);       /* §4 浅底 hover 底（亮面控件） */
+  --ds-cmd-selected-surface: var(--brand-50);    /* §4 选中行 / 运行态底色 */
+
+  /* --- 2.19 墨阶与 hairline（§4：中性墨承担约九成画面，层级靠细线不靠投影） --- */
+  --ds-ink-heading: var(--ink-900);              /* 标题 */
+  --ds-ink-body: var(--ink-800);                 /* 正文 */
+  --ds-ink-secondary: var(--ink-500);            /* 次要字（≥4.5:1） */
+  --ds-ink-placeholder: var(--ink-200);          /* 占位字（非文本，不受 4.5 约束） */
+  --ds-hairline: var(--rule);                    /* 表格/分带常规细线 */
+  --ds-hairline-strong: var(--rule-strong);      /* 表头上下界等强调线 */
+  --ds-hairline-soft: var(--rule-soft);          /* 最弱的带内分隔 */
+
+  /* --- 2.20 战略态势带 + hairline 指标网格（§5/§7） ---------------------
+     满宽带基准 4 列（问题/结论/证据/动作）；≤1080 的 2 列 / 2×2 由组件 @media
+     字面量覆盖（§5）。列数是组件里的非均分 minmax，塞不进 repeat()，只作口径
+     说明、不作令牌——Wave D 删掉了全站无消费方的 --ds-posture-cols，不留死值。
+     指标网格禁用投影：分隔用细线（--ds-metric-rule）。 */
+  --ds-posture-row-line: var(--rule-soft);        /* §5 态势带行分隔发丝线 */
+  --ds-posture-question-ink: var(--ink-900);      /* §7 业务问题列 */
+  --ds-posture-delta-up: var(--ok-700);           /* §7 上升 delta（状态色仅用于 delta/徽标/severity） */
+  --ds-posture-delta-down: var(--err-700);        /* §7 下降 delta */
+  --ds-posture-evidence-ink: var(--brand-700);     /* §7 证据数（真实来源口径文字） */
+  --ds-posture-evidence-bg: var(--brand-50);      /* §4 证据数角标底 */
+  --ds-metric-cols: 4;                            /* §5 关键指标 hairline 网格 */
+  --ds-metric-rule: var(--rule);                  /* §5 分隔线而非卡片投影 */
+  --ds-metric-value-ink: var(--ink-900);          /* 指标值（配 --ds-numeric 等宽数字） */
+  --ds-metric-label-ink: var(--ink-500);          /* 指标标签 */
+
+  /* --- 2.21 报表级表格（§5：右对齐 tabular-nums + 细线建立层级） ---------
+     等宽数字排印复用 2.9 --ds-numeric，不另建令牌；右对齐写在组件。 */
+  --ds-table-rule: var(--rule);                   /* 行列细线 */
+  --ds-table-rule-emphasis: var(--rule-strong);  /* 表头上下界线（§4 线·强） */
+  --ds-table-head-ink: var(--ink-500);            /* 表头字（压 paper-sunk 达标，§4） */
+  --ds-table-cell-ink: var(--ink-800);            /* 单元格正文 */
+  --ds-table-hover-bg: var(--n-50);           /* §4 行 hover 底 */
+  --ds-table-hover-dur: var(--dur-1);             /* §11 行 hover 120ms */
+  --ds-table-share-bar: var(--brand-600);          /* §7 区域业务表内份额条主体（§4 图表·2） */
+  --ds-table-share-track: var(--paper-deep);      /* 份额条槽底（§4 进度轨底同值） */
+
+  /* --- 2.22 六段阶段阶梯（§9；口径只许 step_index/total_steps，禁按时间进度） --- */
+  --ds-rail-done: var(--brand-600);                /* 已完成段实心（§4「已完成阶段点」） */
+  --ds-rail-running: var(--brand-500);             /* 正在执行段（§4 主色·运行） */
+  --ds-rail-running-surface: var(--brand-50);     /* 运行态底（§4 主色·浅底） */
+  --ds-rail-track: var(--paper-deep);             /* 未达段灰轨（§4 进度轨底） */
+  --ds-rail-skip-ink: var(--brand-200);            /* 跳过段斜纹前景（§4 图表·4 同值；色为推断，D4） */
+  --ds-rail-skip-stripe: var(--sp-2);             /* 斜纹带宽 8px：复用间距阶梯，组件 repeating-linear-gradient 取本令牌 + --ds-rail-track，无魔法数 */
+  --ds-rail-step-dur: var(--ds-dur-slow);         /* §11 状态点 320ms 底色过渡 */
+  --ds-rail-pulse-dur: 1200ms;                    /* §11 运行脉冲 1.2s 循环。与 2.14 --ds-dur-pulse（1100ms，存量消费方 login.css 等）并存不重指，见 D7 */
+  --ds-rail-segment-gap: var(--sp-1);             /* 段间隙 4px（方案未给值，取阶梯最小档，D4） */
+
+  /* --- 2.23 cites 角标 · 视图动效 · 方案 01 图表序列（§10/§11/§4） --------
+     纪律（§4）：--ds-viz 系列只用于数据序列色，
+     状态色（2.8 与 --ds-posture-delta 系）只用于药丸/severity，不得互用。
+     D-1 已裁定：本序列重指后端 PNG 同值，避免同屏两套色（见 06-leader-decisions.md）。 */
+  --ds-cite-ink: var(--brand-700);                 /* §4 cites 上标角标字 */
+  --ds-cite-bg: var(--brand-50);                  /* §4 角标底 */
+  --ds-view-dur: var(--dur-2);                    /* §11 视图切换淡入：区间 120–200ms 取上限 200ms；纯透明度切换组件可用 --ds-dur-fast */
+  --ds-view-shift: 6px;                           /* §11 淡入伴随位移 */
+  --ds-view-ease: var(--ds-ease-out);             /* 减速进场，复用 2.14 缓动族 */
+  --ds-skeleton-dur: 1300ms;                      /* §11 骨架 shimmer 1.3s（与 --ds-dur-shimmer 1400ms 并存不重指，D7） */
+  --ds-viz-grow-dur: 500ms;                       /* §11 份额条/折线首次生长，仅一次不循环 */
+  --ds-viz-1: var(--viz-legacy-1);                /* 序列 1：与后端条形 _BAR_COLOR 同值 */
+  --ds-viz-2: var(--viz-legacy-2);                /* 序列 2：与后端折线 _LINE_COLOR 同值 */
+  --ds-viz-3: var(--viz-legacy-3);                /* 序列 3 */
+  --ds-viz-4: var(--viz-legacy-4);                /* 序列 4 */
+  --ds-viz-5: var(--viz-legacy-5);                /* 序列 5 */
+  --ds-viz-surface: var(--n-0);                   /* 图表容器恒为浅底（与后端 PNG 底一致） */
+
+  /* --- 2.24 方案 01 断点口径（§5；2.15 的 480/760/1080 保留不动） --------
+     同样只许 JS/文档消费：var() 进不了 @media 条件，组件写字面量必须与此一致。 */
+  --ds-bp-base: 1440px;                           /* §5 设计基准宽（是口径非常规断点，不参与 @media） */
+  --ds-bp-side-collapse: 768px;                   /* §5 侧栏转顶部标签行/表格转堆叠；与存量 --ds-bp-md 760 差 8px，见 D3 */
+
+  /* ==================================================================
+   * 第 2 段·Wave B/C 集成补齐（2.25，docs/refactor/10-integration-log.md）
+   * ==================================================================
+   * Wave B 两位 owner 上报的"缺令牌/借令牌/契约名不一致"（裂缝 1/2/10）在这里
+   * 一次性补齐。铁律不变：品牌层零裸 hex；兼容层 1B/1C 一个值都没改。
+   */
+
+  /* --- 2.25a 尺寸：命令条与粘性表头联动、报告 measure、阶梯条高、骨架行高 ---
+     这些是"两个消费者共用同一个真值"的度量：写死在组件里就必然漂移。 */
+  --cmdbar-h: 60px;                                /* 命令条高（契约 §2.2/§5.1 与 .dtable 粘性表头联动） */
+  --ds-cmdbar-h: var(--cmdbar-h);
+  --ds-doc-measure: 900px;                         /* §7 article.doc 单栏宽度（与 .doc max-width 同一真值） */
+  --ds-rail-bar-h: 6px;                            /* §9 阶段阶梯段条高度（.seg__bar） */
+  --ds-skel-row-h: 52px;                           /* §11 骨架行高（.skel .sl 与 .posture__row--skeleton 共用） */
+
+  /* --- 2.25b 命令动作色的"按下"与"禁用"两档 ----
+     2.18 只有 action/hover/ink 三档，Wave B 的 :active 与 :disabled 只能借同族别的令牌
+     （:active 借 shell-side-bg、禁用三件套借 selected-surface / action-hover / hairline）——
+     借来的值语义上不是"按下"也不是"禁用"，一眼看得到就是设计漏洞。这里正式给名字。
+     navy 族本身没给"禁用三件套"的 hex，但**值与所借的 navy 阶同值**（不新造色），
+     所以直接在品牌层 var(--navy-*)，兼容层无需新增 hex。 */
+  --ds-cmd-action-active: var(--brand-800);         /* :active：比 hover 再深一档；白字压上去仍 16:1 */
+  --ds-cmd-action-disabled-surface: var(--n-100);
+  --ds-cmd-action-disabled-line: var(--n-300);
+  --ds-cmd-action-disabled-ink: var(--n-600);
+
+  /* --- 2.26 方案 05 Stripe：玻璃、mesh 光斑与卡片投影 ----------------
+     只做"名字 → 兼容层"的搬运，避免组件层出现裸 rgba。
+     卡片投影统一走 --ds-card-shadow：Stripe 的层次是"一条边 + 一层很淡的柔光"，
+     不是重投影；hover 才升到第二档。 */
+  --ds-glass-bar: var(--glass-bar);
+  --ds-glass-line: var(--glass-line);
+  --ds-mesh-purple: var(--mesh-purple);
+  --ds-mesh-cyan: var(--mesh-cyan);
+  --ds-mesh-pink: var(--mesh-pink);
+  --ds-card-shadow: var(--sh-2);
+  --ds-card-shadow-hover: var(--sh-3);
+
+  /* --- 2.27 登录页品牌面板（方案 05：深墨底 + mesh 光斑） ----------------
+     登录页左侧不是产品内页，它的深底与登录表单卡需要一组独立的语义名，
+     否则 login.css 只能去裸借 --brand-900/--navy-400（借得对，但看不出"为什么是深底"）。 */
+  --ds-brand-panel-bg: var(--brand-900);            /* #0a2540 深墨，与 app.css 顶栏深底同族 */
+  --ds-brand-panel-ink: var(--n-0);
+  --ds-brand-panel-ink-muted: var(--navy-400);      /* 5.87:1 压 navy-900，正文级可读 */
+  --ds-brand-panel-line: var(--rule-on-navy);
+  --ds-brand-panel-accent: var(--brand-300);
+  --ds-brand-panel-surface: var(--brand-panel-surface);
+  --ds-brand-panel-tile: linear-gradient(135deg, var(--brand-600), var(--brand-400) 62%, var(--brand-200));
+
+  /* --- 2.25c 深底发丝线：契约名与实际名不一致（裂缝 2） ------------------
+     契约 §1.3 写的名字是 `--ds-shell-rule`，Wave A 落地在 `--ds-shell-side-line`
+     （navy-800，压在 navy-900 上实测 1.24:1 ≈ 看不见）。以 tokens.css 为准：
+     旧名保留（app.css 已在引用），新增 `--ds-shell-side-rule` = 12% 透明白，
+     深底上的分隔线用它；`--ds-shell-side-line` 继续给"分隔同族深底"用（如侧栏右缘）。
+     差异要写进给主控的回报，不改 docs/refactor/02。 */
+  --ds-shell-side-rule: var(--rule-soft);
+}

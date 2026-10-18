@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 07 · 商业情报 BI 面板 / 探索式分析台（视觉示意）</title>
+<style>
+/* 设计底座（方案 07）：亮色 · 高密度 · 鼠标驱动的 12 栏图表墙。
+   坐标对应矩阵第 3 节：左 260px 筛选面板（作用域标注）+ 顶部时间控件。
+   立场"改一处筛选，相关图全部联动"——但联动只作用于本次运行结果集，
+   图表是后端静态 PNG，不随筛选重绘；这些边界以标注写进界面本身。
+   与 04 区分：04 暗色键盘终端、以表格为主；本方案亮色鼠标面板、以图表为主。
+   与 01 区分：01 首屏是结论态势带；本方案首屏是探索用图表墙。
+   色彩：状态色（等待/运行/完成/警告/失败）只进状态徽标；
+   图表系列色只进图形区，两套绝不互用。 */
+:root{
+  --bg:#F3F6F8; --surface:#FFFFFF; --panel:#EAEFF3; --tbar:#EEF3F6;
+  --line:#D3DBE2; --line2:#E2E9EF;
+  --ink:#1F2A33; --ink2:#4C5A66; --ink3:#5D6B76;
+  --pri:#0F5F73; --pri-d:#0B4A59;
+  --st-wait:#5C6A77; --st-run:#0E6B8C; --st-done:#1D7A4C; --st-warn:#96690B; --st-fail:#B23A31;
+  --st-wait-bg:#EDF0F3; --st-run-bg:#E3F0F6; --st-done-bg:#E7F0EB; --st-warn-bg:#F6EEDC; --st-fail-bg:#FBEAE8;
+  --chart-c1:#3563A5; --chart-c2:#2C8C7D; --chart-c3:#9561B1; --chart-c4:#C4762F; --chart-c5:#55A899;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;color:var(--ink)}
+:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mono{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace}
+
+.topbar{display:flex;align-items:center;gap:14px;height:48px;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30}
+.notice{font-size:12px;color:var(--pri-d);background:#E4EFF2;border:1px solid #BFD8DE;border-radius:4px;padding:2px 8px;white-space:nowrap}
+.brand{font-weight:700;font-size:15px;white-space:nowrap}
+.viewnav{display:flex;gap:2px;margin-left:auto;flex-wrap:wrap}
+.viewnav button{border:1px solid var(--line);background:var(--surface);color:var(--ink2);padding:5px 10px;border-radius:4px;font-size:13px}
+.viewnav button.on{background:var(--pri);border-color:var(--pri);color:#fff;font-weight:600}
+.userchip{font-size:13px;color:var(--ink2);white-space:nowrap}
+
+.view{display:none}
+.view.on{display:block}
+
+/* 徽标：色+形+字三重编码 */
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:1px 7px;border-radius:3px;border:1px solid transparent;white-space:nowrap}
+.tag i{font-style:normal;font-weight:700}
+.tg-wait{color:#4B5866;background:var(--st-wait-bg);border-color:#C6CED6}.tg-wait i{color:var(--st-wait)}
+.tg-run{color:#0B5D79;background:var(--st-run-bg);border-color:#B9DCE9}.tg-run i{color:var(--st-run)}
+.tg-done{color:#145A38;background:var(--st-done-bg);border-color:#BCDCC8}.tg-done i{color:var(--st-done)}
+.tg-warn{color:#7A5406;background:var(--st-warn-bg);border-color:#E5D3A8}.tg-warn i{color:var(--st-warn)}
+.tg-fail{color:#93261F;background:var(--st-fail-bg);border-color:#EBC3BF}.tg-fail i{color:var(--st-fail)}
+.scope{display:inline-block;font-size:11px;font-weight:600;padding:0 6px;border-radius:3px;border:1px solid var(--line);color:var(--ink2);background:var(--surface)}
+.scope.g{border-color:#BFD8DE;color:var(--pri-d);background:#E4EFF2}
+.scope.p{border-color:#C9D8C4;color:#3D6B33;background:#EAF2E6}
+.scope.c{border-color:#E0D2C0;color:#8A5A22;background:#F7EFE3}
+
+.btn{border:1px solid var(--pri);background:var(--pri);color:#fff;border-radius:4px;padding:7px 14px;font-size:14px;font-weight:600}
+.btn:hover{background:var(--pri-d)}
+.btn.sec{background:var(--surface);color:var(--pri-d)}
+.btn.sec:hover{background:#E4EFF2}
+.btn:disabled{background:#B9C4CC;border-color:#B9C4CC;color:#F3F6F8;cursor:not-allowed}
+
+/* 登录 */
+.loginwrap{display:grid;grid-template-columns:1fr 480px;gap:0;min-height:calc(100vh - 48px)}
+.loginhero{background:var(--pri);color:#fff;padding:64px 48px;display:flex;flex-direction:column;justify-content:center;gap:16px}
+.loginhero h1{font-size:30px;line-height:1.35}
+.loginhero p{font-size:15px;color:#CFE4E9;max-width:520px}
+.herogrid{display:flex;gap:6px;margin-top:8px}
+.herogrid span{width:46px;height:30px;border:1px solid #3E8496;border-radius:3px;background:#0C5365}
+.loginform{background:var(--surface);display:flex;align-items:center;justify-content:center;padding:32px}
+.loginbox{width:100%;max-width:360px;display:flex;flex-direction:column;gap:14px}
+.loginbox h2{font-size:19px}
+.bootswitch{display:flex;gap:6px}
+.bootswitch button{flex:1;padding:6px;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--ink2);border-radius:4px}
+.bootswitch button.on{border-color:var(--pri);color:var(--pri-d);background:#E4EFF2;font-weight:600}
+.boot-hint{display:none;font-size:12px;color:#7A5406;background:var(--st-warn-bg);border:1px solid #E5D3A8;border-left:3px solid var(--st-warn);padding:8px;border-radius:3px}
+.loginbox.boot .boot-hint{display:block}
+.field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink2)}
+.field input{border:1px solid var(--line);border-radius:4px;padding:8px;font-size:14px;background:var(--surface)}
+.loginmsg{display:none;font-size:13px;padding:8px;border-radius:3px;border-left:3px solid}
+.loginbox.st-err .loginmsg{display:block;color:#93261F;background:var(--st-fail-bg);border-color:#EBC3BF}
+.loginbox.st-429 .loginmsg{display:block;color:#93261F;background:var(--st-fail-bg);border-color:#EBC3BF}
+.loginsmall{font-size:12px;color:var(--ink3)}
+.loginsucc{font-size:13px;color:#145A38;background:var(--st-done-bg);border-left:3px solid var(--st-done);padding:8px;border-radius:3px;display:none}
+.loginbox.st-ok .loginsucc{display:block}
+
+/* 分析台外壳 */
+.dash{display:grid;grid-template-columns:260px 1fr;min-height:calc(100vh - 48px)}
+.filters{width:260px;background:var(--panel);border-right:1px solid var(--line);padding:12px;overflow-y:auto}
+.fhead h2{font-size:15px;color:var(--pri-d)}
+.fnote{font-size:12px;color:#93261F;background:var(--st-fail-bg);border:1px solid #EBC3BF;border-left:3px solid var(--st-fail);padding:6px;border-radius:3px;margin:8px 0}
+.fgroup{border:1px solid var(--line);border-radius:4px;background:var(--surface);padding:8px 10px;margin-bottom:10px}
+.fgroup legend{font-size:13px;font-weight:600;padding:0 4px;color:var(--ink)}
+.fgroup label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2);padding:2px 0}
+.fgroup .enum{color:var(--ink3);font-size:11px}
+.faffect{font-size:12px;color:var(--pri-d);margin-top:4px;font-weight:600}
+.fgroup input[type=number]{width:70px;border:1px solid var(--line);border-radius:3px;padding:3px 6px}
+.fplain{font-size:12px;color:var(--ink3);border-top:1px dashed var(--line);padding-top:8px;margin-top:4px}
+.freset{margin:8px 0}
+.freset button{width:100%;padding:6px;font-size:13px;border:1px solid var(--pri);color:var(--pri-d);background:var(--surface);border-radius:4px}
+.freset button:hover{background:#E4EFF2}
+#filterToggle{display:none}
+
+.wall{padding:12px 14px}
+.timebar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:var(--tbar);border:1px solid var(--line);border-radius:4px;padding:8px 12px;margin-bottom:8px}
+.tblabel{font-size:13px;font-weight:600;color:var(--ink2)}
+.tbtns{display:flex;gap:4px}
+.tbtn{font-size:12px;padding:4px 10px;border:1px solid var(--line);background:var(--surface);border-radius:3px;color:var(--ink2)}
+.tbtn.on{border-color:var(--pri);background:#E4EFF2;color:var(--pri-d);font-weight:600}
+.tbnote{font-size:11px;color:var(--ink3)}
+.asof{margin-left:auto;font-size:12px;color:var(--ink2)}
+.runchips{display:flex;gap:8px;margin:6px 0 10px;flex-wrap:wrap}
+.rchip{display:flex;align-items:center;gap:8px;font-size:12px;border:1px solid var(--line);background:var(--surface);border-radius:4px;padding:5px 9px}
+.rchip.on{border-color:var(--pri);box-shadow:inset 3px 0 0 var(--pri)}
+.rchip.out{display:none}
+.rchip .mono{color:var(--ink2)}
+.scopebanner{font-size:13px;color:var(--ink2);background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--pri);padding:7px 10px;border-radius:3px;margin-bottom:10px}
+
+.grid12{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
+.sec-h{grid-column:span 12;font-size:13px;font-weight:700;color:var(--pri-d);border-left:3px solid var(--pri);padding-left:8px;margin-top:4px}
+.card{grid-column:span 4;background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;transition:width 180ms ease}
+.card.span3{grid-column:span 3}.card.span4{grid-column:span 4}.card.span6{grid-column:span 6}.card.span12{grid-column:span 12}
+.card.hide{display:none}
+.card.linked{animation:link 160ms ease-out}
+@keyframes link{from{opacity:.6;transform:translateY(1px)}to{opacity:1;transform:translateY(0)}}
+.card header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card h3{font-size:13.5px;font-weight:700}
+.tagn{font-size:11px;font-weight:600;color:var(--ink2);background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:0 6px}
+.scopetag{font-size:11px;color:var(--ink3)}
+.sizes{margin-left:auto;display:flex;gap:2px}
+.sizes button{width:24px;font-size:11px;padding:2px 0;border:1px solid var(--line);background:var(--surface);color:var(--ink3);border-radius:3px}
+.sizes button.on{border-color:var(--pri);background:#E4EFF2;color:var(--pri-d);font-weight:700}
+.imgbox{border:1px dashed #A9B6C0;border-radius:3px;background:#FBFCFD;padding:4px;position:relative}
+.imgbox .pngchip{position:absolute;top:6px;right:8px;font-size:10px;color:var(--ink3);background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:0 5px}
+.pngpath{font-size:10.5px;color:var(--ink3);border-top:1px solid var(--line2);padding-top:3px;word-break:break-all}
+.card svg{display:block;width:100%;height:auto}
+.minidata{width:100%;border-collapse:collapse;font-size:12px}
+.minidata caption{text-align:left;font-size:11px;color:var(--ink3);padding-bottom:2px}
+.minidata th{font-size:11px;text-align:left;color:var(--ink2);border-bottom:1px solid var(--line2);padding:2px 6px;font-weight:600}
+.minidata td{padding:2px 6px;border-bottom:1px solid #EFF3F6;color:var(--ink)}
+.minidata tr.fout{display:none}
+.hit{font-size:11px;color:var(--pri-d);font-weight:600}
+.pngnote{font-size:11px;color:var(--ink3)}
+.layernote{font-size:12px;color:var(--ink3);margin-top:10px}
+
+/* 通用内容页 */
+.page{max-width:1160px;margin:0 auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.block{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:14px 16px}
+.block h2{font-size:16px;color:var(--pri-d);margin-bottom:8px;border-left:3px solid var(--pri);padding-left:8px}
+.block h3{font-size:14px;margin:10px 0 6px}
+.kv{display:grid;grid-template-columns:180px 1fr;gap:4px 12px;font-size:13px}
+.kv dt{color:var(--ink3)}.kv dd{color:var(--ink)}
+.pathline{font-size:12px;color:var(--ink2);background:var(--tbar);border:1px solid var(--line);border-radius:3px;padding:6px 9px;margin-top:8px}
+
+/* 市场分析 */
+.askwrap{display:grid;grid-template-columns:1fr 380px;gap:14px}
+.fieldrow{display:flex;flex-direction:column;gap:5px;margin-bottom:12px;font-size:13px;color:var(--ink2)}
+.fieldrow select,.fieldrow textarea,.fieldrow input[type=number]{border:1px solid var(--line);border-radius:4px;padding:8px;background:var(--surface)}
+.fieldrow textarea{min-height:96px;resize:vertical}
+.counter{font-size:12px;color:var(--ink3)}
+.counter.bad{color:#93261F}
+.inlineerr{display:none;font-size:12px;color:#93261F;background:var(--st-fail-bg);border-left:3px solid var(--st-fail);padding:6px;border-radius:3px}
+.inlineerr.show{display:block}
+.accept{display:none;border:1px solid #BCDCC8;background:var(--st-done-bg);border-left:3px solid var(--st-done);padding:10px;border-radius:3px;font-size:13px;color:#145A38;margin-top:10px}
+.accept.show{display:block}
+.ladder{display:flex;gap:4px;align-items:flex-end;margin:10px 0}
+.ladder .step{flex:1;border:1px solid var(--line);border-bottom:3px solid #C6CED6;border-radius:3px;padding:6px 4px;font-size:11px;text-align:center;color:var(--ink3);background:var(--surface)}
+.ladder .step.done{border-bottom-color:var(--st-done);background:var(--st-done-bg);color:#145A38;font-weight:600}
+.ladder .step.now{border-bottom-color:var(--st-run);background:var(--st-run-bg);color:#0B5D79;font-weight:700}
+.pollnote{font-size:12px;color:var(--ink3)}
+.stepnum{font-size:13px;font-weight:700;color:var(--pri-d)}
+
+/* 运行表 */
+.bigtable{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+.bigtable th{text-align:left;font-size:12px;color:var(--ink2);border-bottom:2px solid var(--line2);padding:6px 8px;background:var(--tbar)}
+.bigtable td{padding:6px 8px;border-bottom:1px solid var(--line2);vertical-align:top}
+.enumcell{font-size:11px;color:var(--ink3)}
+.statusgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:8px}
+.statusgrid div{border:1px solid var(--line);border-radius:3px;padding:6px;font-size:12px;text-align:center;background:var(--surface)}
+
+/* 报告 */
+.repsec{display:grid;grid-template-columns:120px 1fr;gap:14px;padding:12px 0;border-bottom:1px solid var(--line2)}
+.repsec .no{font-size:22px;font-weight:700;color:#B9C4CC}
+.cite{display:inline-block;font-size:10.5px;font-weight:700;color:var(--pri-d);background:#E4EFF2;border:1px solid #BFD8DE;border-radius:3px;padding:0 4px;vertical-align:super;cursor:default}
+.srcline{font-size:11.5px;color:var(--ink3);margin-top:6px;border-left:2px solid var(--line);padding-left:8px}
+.vline{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:3px;margin-top:6px;background:var(--surface)}
+.vline.error{border-left:4px solid var(--st-fail);background:var(--st-fail-bg)}
+.vline.warning{border-left:4px solid var(--st-warn);background:var(--st-warn-bg)}
+.vline.info{border-left:4px solid var(--st-run);background:var(--st-run-bg)}
+.vline i{font-style:normal;font-weight:700}
+
+/* 三态 */
+.trio{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.trio .block{min-height:0}
+.emptycause{border:1px dashed #A9B6C0;border-radius:3px;padding:10px;margin-top:8px;font-size:13px;color:var(--ink2);background:#FBFCFD;display:flex;flex-direction:column;gap:6px}
+.emptycause b{color:var(--ink)}
+.skel{border:1px solid var(--line);border-radius:3px;background:#FBFCFD;padding:8px}
+.skel .bar{height:10px;background:var(--line2);border-radius:2px;margin:6px 0}
+.skel .bar.w60{width:60%}.skel .bar.w40{width:40%}
+.nochartband{grid-column:span 12;border:1px solid #E5D3A8;border-left:4px solid var(--st-warn);background:var(--st-warn-bg);color:#7A5406;border-radius:3px;padding:12px;font-size:13px}
+.stbtnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.stbtnrow button{font-size:12px;padding:5px 10px;border:1px solid var(--pri);color:var(--pri-d);background:var(--surface);border-radius:4px}
+.stbtnrow button:hover{background:#E4EFF2}
+
+@media (max-width:1100px){
+  .card.span3{grid-column:span 6}.card.span4{grid-column:span 6}
+  .askwrap{grid-template-columns:1fr}
+  .statusgrid{grid-template-columns:repeat(3,1fr)}
+  .loginwrap{grid-template-columns:1fr}
+  .loginhero{display:none}
+}
+@media (max-width:900px){
+  .dash{grid-template-columns:1fr}
+  #filterToggle{display:block;width:100%;margin-bottom:8px;padding:8px;border:1px solid var(--pri);color:var(--pri-d);background:var(--surface);border-radius:4px;font-size:13px;font-weight:600}
+  .filters{width:auto;border-right:none;position:static}
+  .filters.collapsed fieldset,.filters.collapsed .fplain,.filters.collapsed .freset{display:none}
+  .card.span6{grid-column:span 12}
+  .trio{grid-template-columns:1fr}
+}
+@media (max-width:768px){
+  .grid12{grid-template-columns:repeat(6,1fr)}
+  .card,.card.span3,.card.span4,.card.span6,.card.span12{grid-column:span 6}
+  .minidata thead{display:none}
+  .minidata tr{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--line)}
+  .minidata td{border:none}
+  .minidata td::before{content:attr(data-l) "：";display:block;font-size:11px;color:var(--ink3)}
+  .kv{grid-template-columns:1fr}
+  .repsec{grid-template-columns:1fr}
+  .asof{margin-left:0}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="notice">视觉方案示意 · 数据为占位样例 · 未接入后端</span>
+  <span class="brand">AI 市场情报分析平台 · 07 探索式分析台</span>
+  <nav class="viewnav" id="viewNav" aria-label="原型视图切换">
+    <button data-view="view-login">登录</button>
+    <button data-view="view-dash" class="on">分析台</button>
+    <button data-view="view-analysis">市场分析</button>
+    <button data-view="view-runs">Agent 运行</button>
+    <button data-view="view-report">报告</button>
+    <button data-view="view-states">空 / 加载 / 错误</button>
+  </nav>
+  <span class="userchip">市场分析师 · 演示账号</span>
+</div>
+
+<!-- ============ 登录 ============ -->
+<section class="view" id="view-login" aria-label="登录视图" hidden>
+  <div class="loginwrap">
+    <div class="loginhero">
+      <h1>把市场数据变成<br>可追溯的决策依据</h1>
+      <p>上传 CSV / Excel，向多智能体流水线提出自然语言问题；每个数字都能回溯到具体工具调用。</p>
+      <div class="herogrid" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    </div>
+    <div class="loginform">
+      <form class="loginbox" id="loginBox" onsubmit="return false;">
+        <h2 id="loginTitle">登录</h2>
+        <div class="bootswitch" role="group" aria-label="登录模式">
+          <button type="button" id="btnModeNormal" class="on">账号登录</button>
+          <button type="button" id="btnModeBoot">首次部署 · 初始化</button>
+        </div>
+        <p class="boot-hint">检测到后端指示 <b>needs_bootstrap</b>（系统尚无管理员账号）。提交将调用 <span class="mono">POST /auth/bootstrap</span> 创建首个管理员；创建成功后此模式自动关闭。</p>
+        <label class="field">账号<input id="loginUser" type="text" autocomplete="username" value="analyst"></label>
+        <label class="field">密码<input id="loginPass" type="password" autocomplete="current-password" placeholder="请输入密码"></label>
+        <p class="loginmsg" id="loginMsg" role="status">登录失败，请检查账号密码或稍后重试。</p>
+        <p class="loginsucc" role="status">登录成功（示意）。会话 Cookie mis_session 有效 8 小时。</p>
+        <button type="button" class="btn" id="btnLoginSubmit">登录</button>
+        <div class="stbtnrow">
+          <button type="button" data-lst="err">演示 401：凭据错误</button>
+          <button type="button" data-lst="429">演示 429：请求过频</button>
+          <button type="button" data-lst="ok">演示成功 → 分析台</button>
+        </div>
+        <p class="loginsmall">失败返回统一文案，不泄露账号是否存在；限流响应含 Retry-After。退出走 <span class="mono">POST /auth/logout</span>。</p>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 分析台（Dashboard） ============ -->
+<section class="view on" id="view-dash" aria-label="探索式分析台">
+  <div class="dash">
+    <aside class="filters" id="filterPanel" aria-label="筛选器面板">
+      <button id="filterToggle" aria-expanded="true">筛选器面板（点击折叠）</button>
+      <div class="fhead"><h2>筛选器 · 260px</h2></div>
+      <p class="fnote">仅作用于本次运行结果集 · 后端无服务端筛选 / 再聚合接口，图表 PNG 不随筛选重绘</p>
+
+      <fieldset class="fgroup" id="fTypes">
+        <legend>图表类型 <span class="scope g">全局</span></legend>
+        <label><input type="checkbox" class="ftype" data-t="bar" checked> 柱状图 <span class="enum">bar</span></label>
+        <label><input type="checkbox" class="ftype" data-t="line" checked> 折线图 <span class="enum">line</span></label>
+        <label><input type="checkbox" class="ftype" data-t="pie" checked> 饼图 <span class="enum">pie</span></label>
+        <label><input type="checkbox" class="ftype" data-t="scatter" checked> 散点图 <span class="enum">scatter</span></label>
+        <p class="faffect">影响 <span id="aTypes">9</span> 张卡（显隐卡片）</p>
+      </fieldset>
+
+      <fieldset class="fgroup" id="fRegion">
+        <legend>区域 <span class="scope p">分区 · 区域维</span></legend>
+        <label><input type="checkbox" class="fregion" value="华东" checked> 华东</label>
+        <label><input type="checkbox" class="fregion" value="华南" checked> 华南</label>
+        <label><input type="checkbox" class="fregion" value="华北" checked> 华北</label>
+        <label><input type="checkbox" class="fregion" value="西南" checked> 西南</label>
+        <p class="faffect">影响 <span id="aRegion">4</span> 张卡（过滤结果表行）</p>
+      </fieldset>
+
+      <fieldset class="fgroup" id="fChannel">
+        <legend>渠道 <span class="scope p">分区 · 渠道维</span></legend>
+        <label><input type="checkbox" class="fchannel" value="线上" checked> 线上</label>
+        <label><input type="checkbox" class="fchannel" value="线下" checked> 线下</label>
+        <label><input type="checkbox" class="fchannel" value="经销" checked> 经销</label>
+        <p class="faffect">影响 <span id="aChannel">4</span> 张卡（过滤结果表行）</p>
+      </fieldset>
+
+      <fieldset class="fgroup" id="fGrowth">
+        <legend>增幅下限（%）<span class="scope c">单卡</span></legend>
+        <label style="gap:8px"><input type="number" id="growthMin" value="-100" step="1" aria-label="增幅下限百分比"> 仅作用于「品类增幅」卡</label>
+        <p class="faffect">影响 <span id="aGrowth">1</span> 张卡</p>
+      </fieldset>
+
+      <div class="freset"><button type="button" id="btnResetFilters">重置全部筛选</button></div>
+      <p class="fplain">筛选联动 = 本次运行结果表（每表前 20 行）的行命中与卡片显隐。要改变聚合口径，需重新发起分析取数。</p>
+      <p class="fplain">面板档位与布局仅本次会话有效 · 后端无保存视图 / 分享面板接口。</p>
+    </aside>
+
+    <div class="wall">
+      <div class="timebar">
+        <span class="tblabel">时间窗（对已取回历史运行做前端过滤）</span>
+        <div class="tbtns" role="group" aria-label="时间窗">
+          <button type="button" class="tbtn" data-win="24h">近 24 小时</button>
+          <button type="button" class="tbtn" data-win="7d">近 7 天</button>
+          <button type="button" class="tbtn" data-win="30d">近 30 天</button>
+          <button type="button" class="tbtn on" data-win="all">全部</button>
+        </div>
+        <p class="tbnote" id="runSampleNote">样本 3 条（上限 100）· 历史接口仅支持 limit/offset，此过滤不查全库</p>
+        <span class="asof">数据截至 <b class="mono" id="asofText">2026-10-16T09:12+08:00</b></span>
+      </div>
+
+      <div class="runchips" id="runChips" aria-label="历史运行样本（前端过滤）"></div>
+
+      <p class="scopebanner" id="scopeBanner">当前范围：运行 <b class="mono">wf-2041</b> · 已完成 · 结果集 = 报告各小节表格（每表前 20 行）；下方筛选器仅作用于该结果集。原型内三条运行共用同一批占位面板。</p>
+
+      <div class="grid12" id="chartGrid">
+        <h2 class="sec-h">分区 · 区域与渠道（3 面板）</h2>
+
+        <article class="card span6" data-type="line" data-scopes="region" id="c1">
+          <header><h3>区域销售额走势（季度）</h3><span class="tagn">PNG 占位</span><span class="scopetag">区域维 · 受"区域"筛选</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3">S</button><button data-span="4">M</button><button data-span="6" class="on">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 560 170" role="img" aria-label="示意：四条区域季度销售额折线的占位图形，代表后端生成的 line 图 PNG">
+              <line x1="40" y1="140" x2="540" y2="140" stroke="#B9C4CC"/><line x1="40" y1="16" x2="40" y2="140" stroke="#B9C4CC"/>
+              <polyline points="60,110 190,92 320,78 450,58 530,44" fill="none" stroke="#2C8C7D" stroke-width="2.5"/>
+              <polyline points="60,124 190,112 320,105 450,96 530,88" fill="none" stroke="#55A899" stroke-width="2"/>
+              <text x="46" y="156" font-size="11" fill="#5D6B76">2025Q4</text><text x="420" y="156" font-size="11" fill="#5D6B76">2026Q3</text>
+              <text x="532" y="46" font-size="10" fill="#145A38">华东</text><text x="532" y="90" font-size="10" fill="#3D6B33">华南</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/line_region_trend.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表（前 20 行截断）</caption>
+            <thead><tr><th scope="col">区域</th><th scope="col">销售额（万元）</th><th scope="col">环比增幅（%）</th></tr></thead>
+            <tbody>
+              <tr data-region="华东"><td data-l="区域">华东</td><td data-l="销售额">1,240</td><td data-l="增幅">+8.2</td></tr>
+              <tr data-region="华南"><td data-l="区域">华南</td><td data-l="销售额">860</td><td data-l="增幅">+5.1</td></tr>
+              <tr data-region="华北"><td data-l="区域">华北</td><td data-l="销售额">720</td><td data-l="增幅">+2.4</td></tr>
+              <tr data-region="西南"><td data-l="区域">西南</td><td data-l="销售额">540</td><td data-l="增幅">+11.0</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">4/4</span> 行</p>
+          <p class="pngnote">图区为后端静态 PNG，筛选不重绘；联动作用于下方数据表与卡片显隐。</p>
+        </article>
+
+        <article class="card span3" data-type="bar" data-scopes="channel" id="c2">
+          <header><h3>渠道销售额对比</h3><span class="tagn">PNG 占位</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3" class="on">S</button><button data-span="4">M</button><button data-span="6">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 260 150" role="img" aria-label="示意：三根渠道销售额柱的占位图形，代表后端生成的 bar 图 PNG">
+              <line x1="24" y1="126" x2="248" y2="126" stroke="#B9C4CC"/>
+              <rect x="44" y="52" width="40" height="74" fill="#3563A5"/><text x="50" y="46" font-size="11" fill="#1F2A33">1,240</text>
+              <rect x="112" y="84" width="40" height="42" fill="#3563A5"/><text x="118" y="78" font-size="11" fill="#1F2A33">860</text>
+              <rect x="180" y="100" width="40" height="26" fill="#3563A5"/><text x="186" y="94" font-size="11" fill="#1F2A33">540</text>
+              <text x="46" y="142" font-size="11" fill="#5D6B76">线上</text><text x="114" y="142" font-size="11" fill="#5D6B76">线下</text><text x="182" y="142" font-size="11" fill="#5D6B76">经销</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/bar_channel_compare.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表</caption>
+            <thead><tr><th scope="col">渠道</th><th scope="col">销售额（万元）</th></tr></thead>
+            <tbody>
+              <tr data-channel="线上"><td data-l="渠道">线上</td><td data-l="销售额">1,240</td></tr>
+              <tr data-channel="线下"><td data-l="渠道">线下</td><td data-l="销售额">860</td></tr>
+              <tr data-channel="经销"><td data-l="渠道">经销</td><td data-l="销售额">540</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">3/3</span> 行</p>
+        </article>
+
+        <article class="card span3" data-type="pie" data-scopes="" id="c3">
+          <header><h3>品类份额</h3><span class="tagn">PNG 占位</span><span class="scopetag">不受当前筛选影响</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3" class="on">S</button><button data-span="4">M</button><button data-span="6">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 260 150" role="img" aria-label="示意：品类份额环形图的占位图形，代表后端生成的 pie 图 PNG">
+              <g transform="rotate(-90 100 78)">
+                <circle cx="100" cy="78" r="42" fill="none" stroke="#3563A5" stroke-width="26" stroke-dasharray="70 264"/>
+                <circle cx="100" cy="78" r="42" fill="none" stroke="#2C8C7D" stroke-width="26" stroke-dasharray="53 264" stroke-dashoffset="-70"/>
+                <circle cx="100" cy="78" r="42" fill="none" stroke="#9561B1" stroke-width="26" stroke-dasharray="42 264" stroke-dashoffset="-123"/>
+                <circle cx="100" cy="78" r="42" fill="none" stroke="#C4762F" stroke-width="26" stroke-dasharray="99 264" stroke-dashoffset="-165"/>
+              </g>
+              <rect x="182" y="30" width="9" height="9" fill="#3563A5"/><text x="196" y="39" font-size="11" fill="#1F2A33">饮料 27%</text>
+              <rect x="182" y="52" width="9" height="9" fill="#2C8C7D"/><text x="196" y="61" font-size="11" fill="#1F2A33">零食 20%</text>
+              <rect x="182" y="74" width="9" height="9" fill="#9561B1"/><text x="196" y="83" font-size="11" fill="#1F2A33">日用 16%</text>
+              <rect x="182" y="96" width="9" height="9" fill="#C4762F"/><text x="196" y="105" font-size="11" fill="#1F2A33">其他 37%</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/pie_category_share.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表</caption>
+            <thead><tr><th scope="col">品类</th><th scope="col">份额（%）</th></tr></thead>
+            <tbody><tr><td data-l="品类">饮料</td><td data-l="份额">26.5</td></tr><tr><td data-l="品类">零食</td><td data-l="份额">20.1</td></tr><tr><td data-l="品类">日用</td><td data-l="份额">16.2</td></tr><tr><td data-l="品类">其他</td><td data-l="份额">37.2</td></tr></tbody></table>
+          <p class="hit">表命中 <span class="hitn">4/4</span> 行</p>
+        </article>
+
+        <h2 class="sec-h">分区 · 价格与品类（3 面板）</h2>
+
+        <article class="card span6" data-type="scatter" data-scopes="region" id="c4">
+          <header><h3>均价 × 销量散点（SKU 级）</h3><span class="tagn">PNG 占位</span><span class="scopetag">区域维 · 受"区域"筛选</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3">S</button><button data-span="4">M</button><button data-span="6" class="on">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 560 170" role="img" aria-label="示意：均价与销量散点的占位图形，代表后端生成的 scatter 图 PNG">
+              <line x1="40" y1="146" x2="540" y2="146" stroke="#B9C4CC"/><line x1="40" y1="14" x2="40" y2="146" stroke="#B9C4CC"/>
+              <circle cx="96" cy="118" r="6" fill="#C4762F"/><circle cx="150" cy="84" r="6" fill="#C4762F"/><circle cx="205" cy="128" r="6" fill="#C4762F"/>
+              <circle cx="262" cy="60" r="6" fill="#C4762F"/><circle cx="318" cy="102" r="6" fill="#C4762F"/><circle cx="374" cy="48" r="6" fill="#C4762F"/>
+              <circle cx="430" cy="112" r="6" fill="#C4762F"/><circle cx="492" cy="72" r="6" fill="#C4762F"/>
+              <text x="44" y="162" font-size="11" fill="#5D6B76">均价（元）→</text><text x="8" y="24" font-size="11" fill="#5D6B76">销量</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/scatter_price_volume.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表（前 20 行截断）</caption>
+            <thead><tr><th scope="col">SKU</th><th scope="col">区域</th><th scope="col">均价（元）</th><th scope="col">销量（件）</th></tr></thead>
+            <tbody>
+              <tr data-region="华东"><td data-l="SKU">S-1042</td><td data-l="区域">华东</td><td data-l="均价">36.5</td><td data-l="销量">18,240</td></tr>
+              <tr data-region="华南"><td data-l="SKU">S-1077</td><td data-l="区域">华南</td><td data-l="均价">29.8</td><td data-l="销量">15,010</td></tr>
+              <tr data-region="华北"><td data-l="SKU">S-1120</td><td data-l="区域">华北</td><td data-l="均价">41.2</td><td data-l="销量">9,880</td></tr>
+              <tr data-region="西南"><td data-l="SKU">S-1163</td><td data-l="区域">西南</td><td data-l="均价">24.6</td><td data-l="销量">12,470</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">4/4</span> 行</p>
+          <p class="pngnote">坐标轴、单位与精度由后端 PNG 固化，前端不提供轴 / 单位调整控件。</p>
+        </article>
+
+        <article class="card span3" data-type="bar" data-scopes="growth" id="c5">
+          <header><h3>品类增幅</h3><span class="tagn">PNG 占位</span><span class="scopetag">"增幅下限"单卡作用域</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3" class="on">S</button><button data-span="4">M</button><button data-span="6">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 260 150" role="img" aria-label="示意：品类同比增幅柱状占位图形，代表后端生成的 bar 图 PNG">
+              <line x1="24" y1="126" x2="248" y2="126" stroke="#B9C4CC"/>
+              <rect x="40" y="40" width="34" height="86" fill="#3563A5"/><text x="44" y="34" font-size="11" fill="#1F2A33">+11.0</text>
+              <rect x="90" y="70" width="34" height="56" fill="#3563A5"/><text x="94" y="64" font-size="11" fill="#1F2A33">+7.4</text>
+              <rect x="140" y="96" width="34" height="30" fill="#3563A5"/><text x="144" y="90" font-size="11" fill="#1F2A33">+3.9</text>
+              <rect x="190" y="112" width="34" height="14" fill="#3563A5"/><text x="194" y="106" font-size="11" fill="#1F2A33">+1.2</text>
+              <text x="40" y="142" font-size="10" fill="#5D6B76">西南品类A</text><text x="92" y="142" font-size="10" fill="#5D6B76">饮料</text><text x="142" y="142" font-size="10" fill="#5D6B76">零食</text><text x="192" y="142" font-size="10" fill="#5D6B76">日用</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/bar_category_growth.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表</caption>
+            <thead><tr><th scope="col">品类</th><th scope="col">同比增幅（%）</th></tr></thead>
+            <tbody>
+              <tr data-growth="11.0"><td data-l="品类">西南新品类</td><td data-l="增幅">+11.0</td></tr>
+              <tr data-growth="7.4"><td data-l="品类">饮料</td><td data-l="增幅">+7.4</td></tr>
+              <tr data-growth="3.9"><td data-l="品类">零食</td><td data-l="增幅">+3.9</td></tr>
+              <tr data-growth="1.2"><td data-l="品类">日用</td><td data-l="增幅">+1.2</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">4/4</span> 行</p>
+        </article>
+
+        <article class="card span3" data-type="line" data-scopes="region channel" id="c6">
+          <header><h3>区域×渠道组合走势</h3><span class="tagn">PNG 占位</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3" class="on">S</button><button data-span="4">M</button><button data-span="6">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 260 150" role="img" aria-label="示意：区域与渠道组合趋势折线占位图形，代表后端生成的 line 图 PNG">
+              <line x1="24" y1="126" x2="248" y2="126" stroke="#B9C4CC"/><line x1="24" y1="14" x2="24" y2="126" stroke="#B9C4CC"/>
+              <polyline points="34,100 90,84 150,70 214,50" fill="none" stroke="#2C8C7D" stroke-width="2.5"/>
+              <polyline points="34,112 90,106 150,98 214,92" fill="none" stroke="#55A899" stroke-width="2"/>
+              <text x="150" y="142" font-size="10" fill="#5D6B76">2025Q4 → 2026Q3</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/line_region_channel_mix.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表</caption>
+            <thead><tr><th scope="col">区域 / 渠道</th><th scope="col">指数</th></tr></thead>
+            <tbody>
+              <tr data-region="华东" data-channel="线上"><td data-l="组合">华东 / 线上</td><td data-l="指数">128</td></tr>
+              <tr data-region="华南" data-channel="线上"><td data-l="组合">华南 / 线上</td><td data-l="指数">117</td></tr>
+              <tr data-region="华北" data-channel="线下"><td data-l="组合">华北 / 线下</td><td data-l="指数">104</td></tr>
+              <tr data-region="西南" data-channel="经销"><td data-l="组合">西南 / 经销</td><td data-l="指数">96</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">4/4</span> 行</p>
+        </article>
+
+        <h2 class="sec-h">分区 · 结构与交叉（3 面板）</h2>
+
+        <article class="card span4" data-type="pie" data-scopes="channel" id="c7">
+          <header><h3>渠道结构占比</h3><span class="tagn">PNG 占位</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3">S</button><button data-span="4" class="on">M</button><button data-span="6">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 260 150" role="img" aria-label="示意：渠道结构环形占位图形，代表后端生成的 pie 图 PNG">
+              <g transform="rotate(-90 100 78)">
+                <circle cx="100" cy="78" r="42" fill="none" stroke="#3563A5" stroke-width="26" stroke-dasharray="115 264"/>
+                <circle cx="100" cy="78" r="42" fill="none" stroke="#2C8C7D" stroke-width="26" stroke-dasharray="80 264" stroke-dashoffset="-115"/>
+                <circle cx="100" cy="78" r="42" fill="none" stroke="#C4762F" stroke-width="26" stroke-dasharray="69 264" stroke-dashoffset="-195"/>
+              </g>
+              <rect x="186" y="40" width="9" height="9" fill="#3563A5"/><text x="200" y="49" font-size="11" fill="#1F2A33">线上</text>
+              <rect x="186" y="66" width="9" height="9" fill="#2C8C7D"/><text x="200" y="75" font-size="11" fill="#1F2A33">线下</text>
+              <rect x="186" y="92" width="9" height="9" fill="#C4762F"/><text x="200" y="101" font-size="11" fill="#1F2A33">经销</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/pie_channel_mix.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表</caption>
+            <thead><tr><th scope="col">渠道</th><th scope="col">占比（%）</th></tr></thead>
+            <tbody>
+              <tr data-channel="线上"><td data-l="渠道">线上</td><td data-l="占比">46.2</td></tr>
+              <tr data-channel="线下"><td data-l="渠道">线下</td><td data-l="占比">32.1</td></tr>
+              <tr data-channel="经销"><td data-l="渠道">经销</td><td data-l="占比">21.7</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">3/3</span> 行</p>
+        </article>
+
+        <article class="card span4" data-type="bar" data-scopes="region" id="c8">
+          <header><h3>区域客单价对比</h3><span class="tagn">PNG 占位</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3">S</button><button data-span="4" class="on">M</button><button data-span="6">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 260 150" role="img" aria-label="示意：区域客单价柱状占位图形，代表后端生成的 bar 图 PNG">
+              <line x1="24" y1="126" x2="248" y2="126" stroke="#B9C4CC"/>
+              <rect x="40" y="56" width="36" height="70" fill="#3563A5"/><text x="44" y="50" font-size="11" fill="#1F2A33">86</text>
+              <rect x="94" y="72" width="36" height="54" fill="#3563A5"/><text x="98" y="66" font-size="11" fill="#1F2A33">74</text>
+              <rect x="148" y="80" width="36" height="46" fill="#3563A5"/><text x="152" y="74" font-size="11" fill="#1F2A33">69</text>
+              <rect x="202" y="94" width="36" height="32" fill="#3563A5"/><text x="206" y="88" font-size="11" fill="#1F2A33">58</text>
+              <text x="42" y="142" font-size="10" fill="#5D6B76">华东</text><text x="96" y="142" font-size="10" fill="#5D6B76">华南</text><text x="150" y="142" font-size="10" fill="#5D6B76">华北</text><text x="204" y="142" font-size="10" fill="#5D6B76">西南</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/bar_region_atv.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表</caption>
+            <thead><tr><th scope="col">区域</th><th scope="col">客单价（元）</th></tr></thead>
+            <tbody>
+              <tr data-region="华东"><td data-l="区域">华东</td><td data-l="客单价">86.4</td></tr>
+              <tr data-region="华南"><td data-l="区域">华南</td><td data-l="客单价">74.1</td></tr>
+              <tr data-region="华北"><td data-l="区域">华北</td><td data-l="客单价">69.3</td></tr>
+              <tr data-region="西南"><td data-l="区域">西南</td><td data-l="客单价">58.0</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">4/4</span> 行</p>
+        </article>
+
+        <article class="card span4" data-type="scatter" data-scopes="channel" id="c9">
+          <header><h3>促销次数 × 增量</h3><span class="tagn">PNG 占位</span>
+            <div class="sizes" role="group" aria-label="面板尺寸档位"><button data-span="3">S</button><button data-span="4" class="on">M</button><button data-span="6">L</button><button data-span="12">XL</button></div>
+          </header>
+          <div class="imgbox"><span class="pngchip">PNG 占位</span>
+            <svg viewBox="0 0 260 150" role="img" aria-label="示意：促销次数与销量增量散点占位图形，代表后端生成的 scatter 图 PNG">
+              <line x1="24" y1="126" x2="248" y2="126" stroke="#B9C4CC"/><line x1="24" y1="14" x2="24" y2="126" stroke="#B9C4CC"/>
+              <circle cx="60" cy="104" r="5" fill="#C4762F"/><circle cx="96" cy="78" r="5" fill="#C4762F"/><circle cx="132" cy="90" r="5" fill="#C4762F"/>
+              <circle cx="170" cy="52" r="5" fill="#C4762F"/><circle cx="212" cy="64" r="5" fill="#C4762F"/>
+              <text x="120" y="142" font-size="10" fill="#5D6B76">促销次数 →</text>
+            </svg>
+            <p class="pngpath mono">GET /api/workflows/wf-2041/charts/scatter_promo_lift.png</p>
+          </div>
+          <table class="minidata"><caption>本卡结果集数据表</caption>
+            <thead><tr><th scope="col">渠道</th><th scope="col">促销次数</th><th scope="col">销量增量（件）</th></tr></thead>
+            <tbody>
+              <tr data-channel="线上"><td data-l="渠道">线上</td><td data-l="促销">18</td><td data-l="增量">+5,210</td></tr>
+              <tr data-channel="线下"><td data-l="渠道">线下</td><td data-l="促销">9</td><td data-l="增量">+1,860</td></tr>
+              <tr data-channel="经销"><td data-l="渠道">经销</td><td data-l="促销">6</td><td data-l="增量">+930</td></tr>
+            </tbody></table>
+          <p class="hit">表命中 <span class="hitn">3/3</span> 行</p>
+        </article>
+      </div>
+
+      <p class="layernote">布局与档位仅本次会话有效（后端无保存视图 / 另存为 / 分享面板接口）。联动刷新机制 = 每 1000ms 轮询 <span class="mono">GET /api/workflows/{id}</span>，非推送。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 市场分析 ============ -->
+<section class="view" id="view-analysis" aria-label="市场分析视图" hidden>
+  <div class="page">
+    <div class="askwrap">
+      <div class="block">
+        <h2>发起一次市场分析</h2>
+        <div class="fieldrow">
+          <label for="dsSelect">数据集（GET /api/datasets · 支持文件名搜索 q 与排序 sort/order，均为真实参数）</label>
+          <select id="dsSelect">
+            <option>market_sales_2026Q3.csv · 12,480 行 · 14 列</option>
+            <option>channel_weekly.csv · 3,210 行 · 9 列</option>
+            <option>competitor_price_2026.xlsx · 860 行 · 7 列</option>
+          </select>
+          <p class="pollnote" id="dsProfile">画像摘要（GET /api/datasets/{id}/profile）：数值列 9 · 缺失率 0.8% · 重复行 12 · 时间列覆盖 2025-10 至 2026-09</p>
+        </div>
+        <div class="fieldrow">
+          <label for="askText">分析问题（question：2–500 字）</label>
+          <textarea id="askText">对比 2026 年三季度各区域、各渠道的销售表现与增速差异，识别增长最快的品类，并给出价格与销量的关系证据。</textarea>
+          <p class="counter" id="askCount">当前 58 字 · 合法范围 2–500</p>
+          <p class="inlineerr" id="askErr">问题需为 2–500 字，请调整后再发起。</p>
+        </div>
+        <div class="fieldrow">
+          <label for="maxSteps">max_steps（执行代理最大步数，1–8）</label>
+          <input type="number" id="maxSteps" min="1" max="8" value="6">
+        </div>
+        <button class="btn" id="askSubmit">发起分析 · POST /api/analysis</button>
+        <div class="accept" id="accept202" role="status">
+          <b>已受理（HTTP 202）</b> · workflow <span class="mono">wf-2043</span> · 任务已入队，下方为轮询视图；受理本身不代表完成。
+        </div>
+        <p class="pathline">完整路径：选数据集 → 提问（2–500 字）→ max_steps（1–8）→ 202 已受理 → 每 1000ms 轮询 <span class="mono">GET /api/workflows/{id}</span> → 完成后取 <span class="mono">/report</span> 与 <span class="mono">/charts/{filename}</span>（PNG · bar/line/pie/scatter）。</p>
+      </div>
+      <div class="block">
+        <h2>运行状态（轮询）</h2>
+        <p><span class="tag tg-wait" id="anStatus"><i>○</i>等待中 <span class="enum">PENDING</span></span></p>
+        <p class="stepnum" id="anStepNum">step_index / total_steps = 0 / 6（已完成阶段数）</p>
+        <div class="ladder" id="anLadder" aria-label="阶段阶梯（按已完成阶段数）"></div>
+        <button class="btn sec" id="anAdvance">模拟一次轮询推进（原型演示）</button>
+        <p class="pollnote" style="margin-top:8px">每 1000ms 拉取一次状态接口；无推送通道。阶段耗时后端不提供，此处只画"已完成阶段数"。</p>
+        <p class="pollnote" id="anTimer">等待受理…</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Agent 运行 ============ -->
+<section class="view" id="view-runs" aria-label="Agent 运行视图" hidden>
+  <div class="page">
+    <div class="block">
+      <h2>运行 wf-2041 · 执行过程</h2>
+      <div class="kv">
+        <dt>状态</dt><dd><span class="tag tg-done"><i>✓</i>已完成 <span class="enum">SUCCESS</span></span>（数据每 1000ms 轮询更新 · 无推送通道）</dd>
+        <dt>阶段进度</dt><dd><span class="stepnum">step_index / total_steps = 6 / 6</span>（已完成阶段数，非时间百分比）</dd>
+        <dt>总耗时</dt><dd>03:41（created_at → finished_at，整条任务真实总耗时；阶段级耗时后端不暴露）</dd>
+      </div>
+      <div class="ladder" id="runLadder" aria-label="六阶段阶梯"></div>
+      <p class="pollnote">阶梯含义 = 画像 → 规划 → 执行 → 图表 → 报告 → 校验 六个阶段的完成数；当前档不做时间标注。</p>
+    </div>
+
+    <div class="block">
+      <h2>任务简报（tasks）</h2>
+      <table class="bigtable">
+        <thead><tr><th scope="col">task_id</th><th scope="col">description</th><th scope="col">status</th><th scope="col">error</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">t-01</td><td>读取画像并生成列语义映射</td><td><span class="tag tg-done"><i>✓</i>已完成</span> <span class="enumcell">SUCCESS</span></td><td class="enumcell">—</td></tr>
+          <tr><td class="mono">t-02</td><td>按区域聚合 2026Q3 销售</td><td><span class="tag tg-done"><i>✓</i>已完成</span> <span class="enumcell">SUCCESS</span></td><td class="enumcell">—</td></tr>
+          <tr><td class="mono">t-03</td><td>渠道交叉透视</td><td><span class="tag tg-warn"><i>!</i>带警告完成</span> <span class="enumcell">SUCCESS_WITH_WARNINGS</span></td><td class="enumcell">部分行缺失渠道字段，已按未知渠道处理</td></tr>
+          <tr><td class="mono">t-04</td><td>促销弹性回归</td><td><span class="tag tg-wait"><i>－</i>已跳过</span> <span class="enumcell">SKIPPED</span></td><td class="enumcell">—</td></tr>
+          <tr><td class="mono">t-05</td><td>生成品类增幅柱图</td><td><span class="tag tg-done"><i>✓</i>已完成</span> <span class="enumcell">SUCCESS</span></td><td class="enumcell">—</td></tr>
+          <tr><td class="mono">t-06</td><td>历史异常渠道复核</td><td><span class="tag tg-fail"><i>×</i>失败</span> <span class="enumcell">FAILED</span></td><td class="enumcell">工具返回超时（第 6 步，达到 max_steps 前终止重试）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="block">
+      <h2>状态枚举映射（保留原始值可查证）</h2>
+      <div class="statusgrid">
+        <div><span class="tag tg-wait"><i>○</i>等待中</span><br><span class="enumcell">PENDING</span></div>
+        <div><span class="tag tg-run"><i>▸</i>画像中</span><br><span class="enumcell">PROFILING</span></div>
+        <div><span class="tag tg-run"><i>▸</i>规划中</span><br><span class="enumcell">PLANNING</span></div>
+        <div><span class="tag tg-run"><i>▸</i>执行中</span><br><span class="enumcell">EXECUTING</span></div>
+        <div><span class="tag tg-run"><i>▸</i>图表生成中</span><br><span class="enumcell">CHARTING</span></div>
+        <div><span class="tag tg-run"><i>▸</i>报告生成中</span><br><span class="enumcell">REPORTING</span></div>
+        <div><span class="tag tg-run"><i>▸</i>校验中</span><br><span class="enumcell">VALIDATING</span></div>
+        <div><span class="tag tg-done"><i>✓</i>已完成</span><br><span class="enumcell">SUCCESS</span></div>
+        <div><span class="tag tg-warn"><i>!</i>带警告完成</span><br><span class="enumcell">SUCCESS_WITH_WARNINGS</span></div>
+        <div><span class="tag tg-fail"><i>×</i>失败</span><br><span class="enumcell">FAILED</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 报告 ============ -->
+<section class="view" id="view-report" aria-label="报告视图" hidden>
+  <div class="page">
+    <div class="block">
+      <h2>2026Q3 市场销售分析（report.title）</h2>
+      <div class="kv">
+        <dt>summary</dt><dd>三季度整体销售环比 +6.3%；华东线上领先，西南增速最快但基数低；价格与销量呈弱负相关。</dd>
+        <dt>generated_at</dt><dd class="mono">2026-10-16T09:12+08:00 · <span class="tag tg-done"><i>✓</i>已完成 SUCCESS</span></dd>
+        <dt>数据截至</dt><dd class="mono">2026-09-30T23:59+08:00</dd>
+        <dt>llm_used</dt><dd>是（报告叙述由 LLM 生成；数字全部来自工具调用结果集）</dd>
+      </div>
+
+      <div class="repsec">
+        <div class="no">01</div>
+        <div>
+          <h3>区域格局：华东领跑，西南提速</h3>
+          <p style="font-size:13.5px">华东以 1,240 万元居首，环比 +8.2%<sup class="cite" title="T1 = 工具调用 query_region_sales（结果表前 20 行）">T1</sup>；西南增速 +11.0%，为四区最高，但绝对值仅 540 万元<sup class="cite" title="T1 = 工具调用 query_region_sales（结果表前 20 行）">T1</sup>。</p>
+          <p class="srcline">来源：T1 · 工具调用 <span class="mono">query_region_sales</span> · 数据截至 2026-09-30 · 小节表格与"分析台 c1 卡"同源（前 20 行）</p>
+        </div>
+      </div>
+      <div class="repsec">
+        <div class="no">02</div>
+        <div>
+          <h3>渠道结构：线上占比接近一半</h3>
+          <p style="font-size:13.5px">线上贡献 46.2% 的销售额<sup class="cite" title="T2 = 工具调用 query_channel_mix（结果表前 20 行）">T2</sup>；经销渠道连续两季下滑，促销弹性证据不足（回归任务被跳过）<sup class="cite" title="T3 = 任务 t-04 promo_lift_regression · SKIPPED">T3</sup>。</p>
+          <p class="srcline">来源：T2 · 工具调用 <span class="mono">query_channel_mix</span> · 数据截至 2026-09-30 ｜ T3 · 任务 <span class="mono">t-04</span>（SKIPPED，不据此下结论，仅作缺口说明）</p>
+        </div>
+      </div>
+
+      <h3>校验结果（severity：error / warning / info）</h3>
+      <div class="vline error"><i>×</i>error：小节 03 引用的增幅 15.0% 未在结果集中复现——该结论已从正文移除（演示占位）。</div>
+      <div class="vline warning"><i>!</i>warning：t-03 存在 41 行渠道字段缺失，已按"未知渠道"聚合。</div>
+      <div class="vline info"><i>i</i>info：散点样本量 8，趋势判断置信度有限。</div>
+      <h3>数据质量说明（data_quality_notes）</h3>
+      <p style="font-size:13px;color:var(--ink2)">缺失率 0.8%；重复行 12 已去重；金额单位为万元（后端 PNG 与表格固化，前端不换算）。</p>
+      <p class="pathline">接口：<span class="mono">GET /api/workflows/wf-2041/report</span> · 报告无导出 / 分享能力（后端不存在），仅在站内查看。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 空 / 加载 / 错误 ============ -->
+<section class="view" id="view-states" aria-label="三态视图" hidden>
+  <div class="page">
+    <div class="trio">
+      <div class="block">
+        <h2>空态 · 三种成因分开</h2>
+        <div class="emptycause"><b>① 还没有数据</b>暂无数据集。上传数据集，开始第一次分析。
+          <div class="stbtnrow"><button type="button" id="btnGoUpload">去上传数据集（→ 市场分析视图）</button></div>
+        </div>
+        <div class="emptycause"><b>② 筛选无结果</b>当前筛选未命中任何结果表行。放宽条件，或重置筛选器（筛选只作用于本次运行结果集）。
+          <div class="stbtnrow"><button type="button" id="btnResetFromEmpty">重置筛选并回分析台</button></div>
+        </div>
+        <div class="emptycause"><b>③ 读取失败</b>表格读取失败：网络或服务异常，非"无数据"。
+          <div class="stbtnrow"><button type="button" id="btnRetryEmpty">重试读取</button><span class="pollnote" id="retryEmptyState" role="status"></span></div>
+        </div>
+        <div class="emptycause" style="border-left:4px solid var(--st-warn);border-style:solid"><b>「本次运行无图表」明确形态</b>
+          本次运行未产出图表（charts 数 = 0）。报告与数据表仍可查看；图表步骤为 CHARTING 后无产出文件时显示本横带，需要图表请重新发起分析。
+        </div>
+      </div>
+      <div class="block">
+        <h2>加载态</h2>
+        <div class="skel"><div class="bar w40"></div><div style="height:56px;background:#EFF3F6;border-radius:2px"></div><div class="bar w60"></div><div class="bar"></div></div>
+        <div class="skel" style="margin-top:8px"><div class="bar w60"></div><div style="height:56px;background:#EFF3F6;border-radius:2px"></div><div class="bar w40"></div></div>
+        <p class="pollnote" style="margin-top:10px">面板占位为静态骨架；状态区每 1000ms 轮询更新、不闪烁（<span class="mono">GET /api/workflows/{id}</span>）。</p>
+        <p class="pollnote">运行中示例：<span class="tag tg-run"><i>▸</i>执行中 EXECUTING</span> · step_index 3 / 6（已完成阶段数）</p>
+      </div>
+      <div class="block">
+        <h2>错误态</h2>
+        <div class="emptycause"><b>401 会话过期</b>会话已过期（默认 8 小时），请重新登录。<div class="stbtnrow"><button type="button" id="btnGoLogin">→ 去登录</button></div></div>
+        <div class="emptycause"><b>429 限流</b>尝试过于频繁 · Retry-After: 34 秒（倒计时为示意）。</div>
+        <div class="emptycause"><b>轮询连续失败</b>状态接口连续 3 次不可达：停止放大请求频率前先退避重试。<div class="stbtnrow"><button type="button" id="btnRetryPoll">重试轮询</button><span class="pollnote" id="retryPollState" role="status"></span></div></div>
+      </div>
+    </div>
+    <div class="block">
+      <h2>空态在分析台的形态</h2>
+      <div class="grid12">
+        <div class="nochartband" role="status">本次运行无图表（PNG 数 0） · 运行 <span class="mono">wf-2043</span> · 报告小节与数据表可在「报告」页签查看 · 需要图表请重新发起分析并关注 CHARTING 阶段状态。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+// 路由用 hash 驱动：原型只切换视图，不请求后端。
+var STAGES = ['画像','规划','执行','图表','报告','校验'];
+var STAGE_ENUM = ['PROFILING','PLANNING','EXECUTING','CHARTING','REPORTING','VALIDATING'];
+
+function $(id){ return document.getElementById(id); }
+function showView(id){
+  ['view-login','view-dash','view-analysis','view-runs','view-report','view-states'].forEach(function(v){
+    var on = (v===id);
+    $(v).classList.toggle('on', on);
+    $(v).hidden = !on;
+  });
+  document.querySelectorAll('.viewnav button').forEach(function(b){
+    b.classList.toggle('on', b.getAttribute('data-view')===id);
+  });
+  if(onlocationHash(id)) location.hash = id;
+}
+function onlocationHash(id){ return id && id.indexOf('view-')===0; }
+document.getElementById('viewNav').addEventListener('click', function(e){
+  var b = e.target.closest('button[data-view]');
+  if(b) showView(b.getAttribute('data-view'));
+});
+window.addEventListener('hashchange', function(){
+  var h = location.hash.replace('#','');
+  if(h && document.getElementById(h)) showView(h);
+});
+if(location.hash && document.getElementById(location.hash.replace('#',''))) showView(location.hash.replace('#',''));
+
+/* 登录：needs_bootstrap 模式与 401 / 429 状态演示 */
+var loginBox = $('loginBox');
+$('btnModeBoot').addEventListener('click', function(){
+  loginBox.classList.add('boot'); loginBox.classList.remove('st-err','st-429','st-ok');
+  this.classList.add('on'); $('btnModeNormal').classList.remove('on');
+  $('loginTitle').textContent = '初始化管理员账号';
+  $('btnLoginSubmit').textContent = '创建管理员 · POST /auth/bootstrap';
+});
+$('btnModeNormal').addEventListener('click', function(){
+  loginBox.classList.remove('boot'); loginBox.classList.remove('st-err','st-429','st-ok');
+  this.classList.add('on'); $('btnModeBoot').classList.remove('on');
+  $('loginTitle').textContent = '登录';
+  $('btnLoginSubmit').textContent = '登录 · POST /auth/login';
+});
+document.querySelectorAll('#view-login [data-lst]').forEach(function(b){
+  b.addEventListener('click', function(){
+    var s = b.getAttribute('data-lst');
+    loginBox.classList.remove('st-err','st-429','st-ok');
+    if(s==='err'){ loginBox.classList.add('st-err'); $('loginMsg').textContent='登录失败，请检查账号密码或稍后重试。'; }
+    if(s==='429'){ loginBox.classList.add('st-429'); $('loginMsg').textContent='尝试过于频繁 · HTTP 429 · Retry-After: 34 秒，请稍候再试。'; }
+    if(s==='ok'){ loginBox.classList.add('st-ok'); setTimeout(function(){ showView('view-dash'); }, 500); }
+  });
+});
+$('btnLoginSubmit').addEventListener('click', function(){
+  loginBox.classList.remove('st-ok'); loginBox.classList.add('st-err');
+  $('loginMsg').textContent = loginBox.classList.contains('boot')
+    ? '初始化失败：请求过于频繁，按 Retry-After 稍后重试（统一文案，不透露原因）。'
+    : '登录失败，请检查账号密码或稍后重试。';
+});
+
+/* 运行芯片 + 时间窗：历史接口只有 limit/offset，时间窗是对已取回样本的前端过滤 */
+var RUNS = [
+  {id:'wf-2041', st:'SUCCESS', stz:'已完成', cls:'tg-done', g:'i', at:'2026-10-16T09:12:00+08:00'},
+  {id:'wf-2038', st:'SUCCESS_WITH_WARNINGS', stz:'带警告完成', cls:'tg-warn', g:'!', at:'2026-10-14T17:40:00+08:00'},
+  {id:'wf-2031', st:'FAILED', stz:'失败', cls:'tg-fail', g:'×', at:'2026-09-28T11:05:00+08:00'}
+];
+var NOW = new Date('2026-10-16T10:00:00+08:00').getTime();
+var curWin = 'all', curRun = 'wf-2041';
+function renderChips(){
+  var box = $('runChips'); box.innerHTML = '';
+  var shown = 0;
+  RUNS.forEach(function(r){
+    var t = new Date(r.at).getTime();
+    var inWin = curWin==='all' || (curWin==='24h' && NOW-t<=24*3600e3) || (curWin==='7d' && NOW-t<=7*24*3600e3) || (curWin==='30d' && NOW-t<=30*24*3600e3);
+    if(inWin) shown++;
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'rchip' + (inWin?'':' out') + (curRun===r.id?' on':'');
+    b.innerHTML = '<span class="tag '+r.cls+'"><i>'+r.g+'</i>'+r.stz+'</span><span class="mono">'+r.id+'</span><span>'+r.at.slice(0,16).replace('T',' ')+'</span>';
+    b.addEventListener('click', function(){
+      if(!inWin) return;
+      curRun = r.id;
+      $('scopeBanner').innerHTML = '当前范围：运行 <b class="mono">'+r.id+'</b> · '+r.stz+'（<span class="mono">'+r.st+'</span>）· 结果集 = 报告各小节表格（每表前 20 行）；筛选器仅作用于该结果集。原型内三条运行共用同一批占位面板。';
+      $('asofText').textContent = r.at.slice(0,16)+'+08:00';
+      renderChips();
+    });
+    box.appendChild(b);
+  });
+  $('runSampleNote').textContent = '样本 '+shown+' 条（上限 100）· 历史接口仅支持 limit/offset，此过滤不查全库';
+}
+document.querySelectorAll('.tbtn').forEach(function(b){
+  b.addEventListener('click', function(){
+    document.querySelectorAll('.tbtn').forEach(function(x){ x.classList.remove('on'); });
+    b.classList.add('on'); curWin = b.getAttribute('data-win'); renderChips();
+  });
+});
+renderChips();
+
+/* 筛选联动：只作用于结果集表格行与卡片显隐；PNG 不重绘 */
+function selSet(cls){ var s={}; document.querySelectorAll('.'+cls+':checked').forEach(function(i){ s[i.value||i.getAttribute('data-t')]=true; }); return s; }
+function scopeCards(scope){
+  return Array.prototype.slice.call(document.querySelectorAll('#chartGrid .card')).filter(function(c){
+    return (c.getAttribute('data-scopes')||'').split(' ').indexOf(scope)>=0;
+  });
+}
+$('aTypes').textContent = document.querySelectorAll('#chartGrid .card').length;
+$('aRegion').textContent = scopeCards('region').length;
+$('aChannel').textContent = scopeCards('channel').length;
+$('aGrowth').textContent = scopeCards('growth').length;
+
+function applyFilters(changedScopes){
+  var types = selSet('ftype'), regions = selSet('fregion'), channels = selSet('fchannel');
+  var gmin = parseFloat($('growthMin').value); if(isNaN(gmin)) gmin = -Infinity;
+  document.querySelectorAll('#chartGrid .card').forEach(function(card){
+    var type = card.getAttribute('data-type'), scopes = (card.getAttribute('data-scopes')||'');
+    if(!types[type]){ card.classList.add('hide'); return; }
+    card.classList.remove('hide');
+    var rows = card.querySelectorAll('tbody tr'), hit = 0;
+    rows.forEach(function(r){
+      var ok = true;
+      if(r.hasAttribute('data-region') && scopes.indexOf('region')>=0 && !regions[r.getAttribute('data-region')]) ok = false;
+      if(r.hasAttribute('data-channel') && scopes.indexOf('channel')>=0 && !channels[r.getAttribute('data-channel')]) ok = false;
+      if(r.hasAttribute('data-growth') && scopes.indexOf('growth')>=0 && parseFloat(r.getAttribute('data-growth')) < gmin) ok = false;
+      r.classList.toggle('fout', !ok);
+      if(ok) hit++;
+    });
+    card.querySelector('.hitn').textContent = hit+'/'+rows.length;
+    var scoped = scopes.length>0;
+    card.classList.toggle('hide', scoped && rows.length>0 && hit===0);
+    if(scoped && changedScopes && changedScopes.some(function(s){ return scopes.indexOf(s)>=0; })) relink(card);
+  });
+}
+function relink(card){ card.classList.remove('linked'); void card.offsetWidth; card.classList.add('linked'); }
+document.querySelectorAll('.ftype,.fregion,.fchannel').forEach(function(i){
+  i.addEventListener('change', function(){
+    // 联动高亮只打给与新值作用域重叠的卡，避免全墙闪动被误读为"全量重算"
+    var sc = i.classList.contains('ftype') ? ['type'] : (i.classList.contains('fregion') ? ['region'] : ['channel']);
+    applyFilters(sc);
+  });
+});
+$('growthMin').addEventListener('input', function(){ applyFilters(['growth']); });
+$('btnResetFilters').addEventListener('click', function(){
+  document.querySelectorAll('.ftype,.fregion,.fchannel').forEach(function(i){ i.checked = true; });
+  $('growthMin').value = '-100';
+  applyFilters(['region','channel','growth']);
+});
+
+/* 面板尺寸档位：仅会话内生效 */
+document.querySelectorAll('.sizes button').forEach(function(b){
+  b.addEventListener('click', function(){
+    var card = b.closest('.card');
+    ['span3','span4','span6','span12'].forEach(function(c){ card.classList.remove(c); });
+    card.classList.add('span'+b.getAttribute('data-span'));
+    card.querySelectorAll('.sizes button').forEach(function(x){ x.classList.remove('on'); });
+    b.classList.add('on');
+    relink(card);
+  });
+});
+
+/* 筛选面板折叠（窄屏） */
+$('filterToggle').addEventListener('click', function(){
+  var p = $('filterPanel'), c = p.classList.toggle('collapsed');
+  this.setAttribute('aria-expanded', c?'false':'true');
+  this.textContent = c ? '筛选器面板（点击展开）' : '筛选器面板（点击折叠）';
+});
+
+/* 市场分析：202 受理 + 轮询阶梯 */
+function ladder(elId){
+  var box = $(elId); if(!box) return null; box.innerHTML='';
+  STAGES.forEach(function(s,idx){
+    var d = document.createElement('div');
+    d.className='step'; d.textContent = s; d.title = STAGE_ENUM[idx];
+    box.appendChild(d);
+  });
+  return box;
+}
+ladder('anLadder'); ladder('runLadder');
+$('runLadder').querySelectorAll('.step').forEach(function(s){ s.classList.add('done'); });
+
+var anIdx = 0, anState = 'PENDING';
+function paintAn(){
+  var steps = $('anLadder').querySelectorAll('.step');
+  steps.forEach(function(s,i){
+    s.classList.toggle('done', anIdx>=6 || i < anIdx-1);
+    s.classList.toggle('now', i === anIdx-1 && anIdx>0 && anIdx<6);
+  });
+  $('anStepNum').textContent = 'step_index / total_steps = '+Math.min(anIdx,6)+' / 6（已完成阶段数）';
+  var tag = $('anStatus');
+  if(anIdx===0){ tag.className='tag tg-wait'; tag.innerHTML='<i>○</i>等待中 <span class="enum">PENDING</span>'; }
+  else if(anIdx<=5){ var e=STAGE_ENUM[anIdx-1]; tag.className='tag tg-run'; tag.innerHTML='<i>▸</i>'+STAGES[anIdx-1]+'中 <span class="enum">'+e+'</span>'; }
+  else { tag.className='tag tg-done'; tag.innerHTML='<i>✓</i>已完成 <span class="enum">SUCCESS</span>'; }
+}
+$('askText').addEventListener('input', function(){
+  var n = this.value.trim().length, ok = n>=2 && n<=500;
+  $('askCount').textContent = '当前 '+n+' 字 · 合法范围 2–500';
+  $('askCount').classList.toggle('bad', !ok);
+  $('askErr').classList.toggle('show', !ok);
+});
+$('askSubmit').addEventListener('click', function(){
+  var n = $('askText').value.trim().length, ms = parseInt($('maxSteps').value,10);
+  if(n<2||n>500){ $('askErr').classList.add('show'); return; }
+  if(!(ms>=1&&ms<=8)){ $('askErr').textContent='max_steps 需在 1–8 之间。'; $('askErr').classList.add('show'); return; }
+  $('askErr').classList.remove('show');
+  $('accept202').classList.add('show');
+  $('anTimer').textContent = '已受理：以后每 1000ms 轮询 GET /api/workflows/wf-2043（原型不真发请求）。';
+  anIdx = 0; anState='PENDING'; paintAn();
+});
+$('anAdvance').addEventListener('click', function(){
+  if(!$('accept202').classList.contains('show')){ $('anTimer').textContent='请先发起分析（受理前无 workflow 可轮询）。'; return; }
+  if(anIdx<6){ anIdx++; paintAn(); $('anTimer').textContent='第 '+anIdx+' 档推进 · 徽标 140ms 淡入标记变化（非闪烁、非推送）。'; }
+});
+paintAn();
+
+/* 三态：演示按钮（原型内的状态切换，不请求后端） */
+$('btnGoUpload').addEventListener('click', function(){ showView('view-analysis'); });
+$('btnGoLogin').addEventListener('click', function(){ showView('view-login'); });
+$('btnResetFromEmpty').addEventListener('click', function(){ $('btnResetFilters').click(); showView('view-dash'); });
+function demoRetry(btnId, outId, doneText){
+  $(btnId).addEventListener('click', function(){
+    $(outId).textContent = '重新读取中…（原型仅演示状态机）';
+    setTimeout(function(){ $(outId).textContent = doneText; }, 1000);
+  });
+}
+demoRetry('btnRetryEmpty','retryEmptyState','仍读取失败：网络或服务异常（演示未接入后端）。');
+demoRetry('btnRetryPoll','retryPollState','轮询恢复：状态接口可达（演示）。');
+
+applyFilters(null);
+</script>
+</body>
+</html>

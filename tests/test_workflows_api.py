@@ -45,11 +45,17 @@ from app.schemas_workflow import (
     WorkflowState,
     WorkflowStatus,
 )
+from tests import auth_support
 
 # 一条合法的工作流 id（32 位小写十六进制）与一个合法的图表文件名（12 位 + .png）。
 WORKFLOW_ID = "0123456789abcdef0123456789abcdef"
 CHART_ID = "0123456789ab"
 CHART_FILENAME = f"{CHART_ID}.png"
+
+# 发请求的客户端（`client` 夹具）就是 `tests/auth_support.py` 造的 test-admin。
+# 工作流带上同样的归属，接口才认它是"我的"；不带归属的记录按设计对所有人 404。
+OWNER_ID = 1
+OWNER_NAME = auth_support.TEST_USERNAME
 
 # 几个字节就够：这里测的是响应头与"有没有把文件送出来"，不是 PNG 本身能不能打开。
 FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"fake-image-body"
@@ -146,6 +152,11 @@ def _register(**overrides) -> WorkflowState:
 
     参数用 `**overrides` 而不是一堆位置参数：每个用例只关心自己要改的一两个字段，
     其余走默认值，读起来才知道"这条用例在测什么"。
+
+    默认带上 `OWNER_ID` / `OWNER_NAME`（= 发请求的那个 test-admin）：
+    工作流的读接口按归属判定，**没有归属的记录对所有人都 404**（见
+    `app/api/ownership.py`）。不带归属的话这里每一条用例都会拿到 404，
+    而原因跟它们各自想测的东西毫无关系。
     """
     now = datetime.now(timezone.utc)
     fields: dict = {
@@ -157,6 +168,8 @@ def _register(**overrides) -> WorkflowState:
         "created_at": now - timedelta(seconds=10),
         "started_at": now - timedelta(seconds=10),
         "heartbeat_at": now,
+        "owner_user_id": OWNER_ID,
+        "owner_username": OWNER_NAME,
     }
     fields.update(overrides)
     state = WorkflowState(**fields)

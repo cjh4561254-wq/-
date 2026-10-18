@@ -72,6 +72,22 @@ class Dataset(DatasetSummary):
     （Pydantic 的子类校验规则和父类一致，不需要额外配置。）
     """
 
+    # 归属（谁上传的）。用途只有一个：**数据隔离**。
+    #
+    # 为什么默认 None 而不是必填：`Dataset` 是**唯一的对外返回体**，
+    # 它同时被"刚上传、内存里登记好的对象"和"历史遗留对象（本次改造之前登记的）"
+    # 使用。把 owner_user_id 设成必填，会让"改造前登记的、没有归属的数据"
+    # 根本没法表示 —— 而它们确实存在（进程内单例在测试里尤其常见）。
+    # None 的语义写死为"没有归属 → 谁也不给看"，见 app/api/ownership.py。
+    owner_user_id: int | None = Field(
+        default=None,
+        description="上传者的用户 id；None 表示没有归属（改造前的历史数据），任何人都看不到",
+    )
+    owner_username: str | None = Field(
+        default=None,
+        description="上传者的用户名，只用于展示；判定归属一律用 owner_user_id",
+    )
+
     stored_filename: str = Field(description="磁盘上的真实文件名，与用户输入完全无关")
     file_ext: FileExt = Field(description="白名单扩展名，csv 或 xlsx")
     size_bytes: int = Field(ge=0, description="文件字节数")
@@ -84,6 +100,53 @@ class Dataset(DatasetSummary):
         default_factory=list,
         description="前 5 行；**所有值统一转成 str**，避免 NaN / Timestamp 无法序列化",
     )
+
+
+class DatasetListItem(Dataset):
+    """列表里的一条数据集：`Dataset` 加上"不用再请求一次就能显示的三个数字"。
+
+    为什么继承 `Dataset` 而不是另起一个小模型（更省带宽）：
+    列表和详情返回**同一种形状**，前端只需要一套解析/渲染代码。
+    多传的字段（columns / dtypes / preview_rows）在列表里是空的 ——
+    它们是"预览"，列表本来就不展示，构造时显式置空（见路由层），
+    而不是让前端去判断"这个字段在列表里可能不存在"。
+
+    为什么多这三个字段（rows / columns / missing_cells）：
+    task 要求的列表接口必须显示"行数 / 列数 / 缺失值"三个数字。
+    `row_count` / `column_count` 已经在 Dataset 里，只差缺失值总数，
+    而它需要**遍历所有列求和** —— 这件事只在生成画像时做过一次。
+    所以这里**只从缓存里读**（profile 算过才有值），不在列表接口里现算：
+
+    - 现算的代价：一个 20 万行 × 200 列的 DataFrame，列表每刷新一次就全表扫一遍，
+      而列表是用户最常打开的页面 —— 等于把"点生成画像才付的钱"变成"每次进列表都付"。
+    - `rows` 这个名字是 task 明确要求的**额外**字段，与 `row_count` 是同一份
+      数据的两个名字，这样既对齐 task 的字段名、又不动既有字段（前端已按老名字写）。
+    - **实测修正**：`columns` 这个名字**不能**再定义一次 —— `Dataset.columns` 已经是
+      `list[str]`（列名数组），Pydantic 不允许子类把同一字段换成 int，真换了会把
+      既有前端读到的列名数组变成数字（静默错误）。列数由既有 `column_count` 承担：
+      前端 `app/web/app.js:1029-1038` 的 `datasetCols()` 本来就先读 `column_count`、
+      再退回 `columns` 数组长度，两种形状都能显示。
+    """
+
+    rows: int = Field(ge=0, description="行数（`row_count` 的别名，task 要求的字段名）")
+
+    missing_cells: int | None = Field(
+        default=None,
+        description="缺失值总格数（各列 null_count 之和）；未生成画像时为 null",
+    )
+
+
+class DatasetListData(BaseModel):
+    """`GET /api/datasets` 的返回体：一页数据 + 分页元信息 + 用户自己的总数。
+
+    `total` 是**过滤后的**总数（当前用户的数据集条数）：前端用它算页数。
+    不要退回全表计数 —— 那个数字会泄露"系统里一共有多少别人的数据"。
+    """
+
+    items: list[DatasetListItem] = Field(default_factory=list)
+    total: int = Field(ge=0, description="当前用户的数据集总数（过滤后，不是这一页的条数）")
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
 
 
 class ColumnProfile(BaseModel):

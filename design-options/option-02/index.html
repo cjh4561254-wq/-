@@ -1,0 +1,1803 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 02 · AI 原生智能体工作台</title>
+<style>
+/* 设计底座（方案 02 的坐标 → 界面语言）
+1. 立场：分析是"和一组 Agent 协作"，不是"填一张表单"。因此没有侧栏菜单，界面的组织单位是"一次分析会话"：
+   左 220px 会话列表 / 中 可继续的指令流 / 右 180px 运行轨道 rail，三栏靠 1px 墨线而非投影分层（纸感）。
+2. 与 06（顶部导航 + 页内 Tab）、09（泳道队列 + 事件流）的区别写在 DOM 结构本身：本文件的同级容器是
+   col-sessions / col-stream / col-rail，中栏永远是 <ol class="stream"> 的轮次序列。
+3. 右轨只允许 step_index / total_steps 一个数字，不含阶段耗时、百分比、剩余时间（后端没有）。
+4. 配色：暖白纸面 #F6F5F2 + 墨色文字 + 唯一主色墨蓝 #2A3550（交互）+ 唯一辅助色赭石 #8A6A3C（只出现在产出物与其引用链）。
+   图表走中性冷灰阶 C1–C5，与状态色不互用。弱化文字统一到 #5A5C63（文档给的 #8A8C93 实测对比度约 3:1，不达标，此处从约束）。
+5. 状态一律"色 + 形 + 字"三通道，并在 title 保留原始枚举值可查证；动效只服务状态推进，120–180ms。 */
+:root{
+  --bg:#F6F5F2;
+  --stream-bg:#FBFAF8;
+  --surface:#FFFFFF;
+  --rule:#E3E1DB;
+  --rule-strong:#CFCCC4;
+  --ink:#1C1D21;
+  --ink-2:#55575E;
+  --ink-3:#5A5C63;
+  --accent:#2A3550;
+  --artifact:#8A6A3C;
+  --st-pending-mark:#949AA2;
+  --st-run:#2E6DA4;
+  --st-ok:#3E7C4F;
+  --st-warn-mark:#B07514;
+  --st-warn-text:#8A5A0B;
+  --st-fail:#B23B32;
+  --st-skip-mark:#BBBFC6;
+  --c1:#2F3742;--c2:#55616F;--c3:#7E8A97;--c4:#AAB4BF;--c5:#D2D9E0;
+  --topbar-h:48px;--col-sessions:220px;--col-rail:180px;
+  --dur-fast:120ms;--dur:160ms;--dur-slow:180ms;
+  --font:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--font);font-size:14px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+:focus{outline:2px solid var(--accent);outline-offset:2px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3,h4,p,ol,ul{margin:0;padding:0}
+ol,ul{list-style:none}
+.hidden{display:none !important}
+.mono{font-family:var(--mono)}
+.tag{
+  font-family:var(--mono);font-size:11px;letter-spacing:.02em;color:var(--ink-3);
+  border:1px solid var(--rule);border-radius:2px;padding:1px 5px;background:var(--surface);
+}
+
+/* ---------- 顶栏 ---------- */
+.topbar{
+  height:var(--topbar-h);display:flex;align-items:center;gap:16px;
+  padding:0 16px;background:var(--bg);border-bottom:1px solid var(--rule-strong);
+  position:relative;z-index:30;
+}
+.brand{display:flex;align-items:baseline;gap:8px;flex:0 0 auto}
+.brand b{font-size:14px;font-weight:600;letter-spacing:.01em}
+.brand span{font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.04em}
+.topbar-context{
+  flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:8px;
+  font-size:12px;color:var(--ink-2);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+}
+.topbar-context .sep{color:var(--rule-strong)}
+.topbar-right{display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.disclaim{
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+  border-left:1px solid var(--rule-strong);padding-left:10px;white-space:nowrap;
+}
+.vswitch{display:flex;align-items:center;gap:2px}
+.vswitch button{
+  background:none;border:0;border-bottom:2px solid transparent;padding:4px 6px;
+  font-size:12px;color:var(--ink-2);cursor:pointer;border-radius:2px 2px 0 0;
+}
+.vswitch button:hover{border-bottom-color:var(--rule-strong)}
+.vswitch button[aria-current="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.session-toggle{
+  display:none;background:var(--surface);border:1px solid var(--rule-strong);
+  border-radius:2px;padding:3px 8px;font-size:12px;cursor:pointer;
+}
+.account{position:relative}
+.account-btn{
+  display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--rule-strong);
+  border-radius:2px;padding:3px 8px;font-size:12px;cursor:pointer;
+}
+.account-btn .initial{
+  width:18px;height:18px;border:1px solid var(--accent);border-radius:50%;
+  display:grid;place-items:center;font-family:var(--mono);font-size:10px;color:var(--accent);
+}
+.popover{
+  position:absolute;right:0;top:calc(100% + 8px);width:320px;background:var(--surface);
+  border:1px solid var(--rule-strong);border-radius:3px;padding:12px;
+  opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity var(--dur-fast) linear,transform var(--dur-fast) linear;
+}
+.popover[data-open="true"]{opacity:1;transform:translateY(0);pointer-events:auto}
+.popover h4{font-size:12px;color:var(--ink-3);font-weight:600;letter-spacing:.04em;margin-bottom:6px}
+.popover .row{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0}
+.popover .row span:last-child{color:var(--ink-2)}
+.popover hr{border:0;border-top:1px solid var(--rule);margin:10px 0}
+.field{display:grid;gap:3px;margin-bottom:8px}
+.field label{font-size:12px;color:var(--ink-2)}
+input[type="text"],input[type="password"],input[type="search"],textarea,select{
+  background:var(--surface);border:1px solid var(--rule-strong);border-radius:2px;padding:6px 8px;width:100%;
+}
+textarea{resize:vertical;min-height:68px;line-height:1.55}
+.btn{
+  background:var(--surface);border:1px solid var(--rule-strong);border-radius:2px;
+  padding:5px 12px;font-size:13px;cursor:pointer;
+}
+.btn:hover{border-color:var(--accent)}
+.btn--primary{background:var(--accent);border-color:var(--accent);color:#FFFFFF;font-weight:600}
+.btn--primary:hover{background:#222B42}
+.btn--quiet{border-color:transparent;background:none;color:var(--accent);text-decoration:underline;padding:2px 4px}
+.btn[disabled]{cursor:not-allowed;background:var(--rule);border-color:var(--rule-strong);color:var(--ink-3);font-weight:400}
+.btn[disabled]:hover{border-color:var(--rule-strong)}
+.hint{font-size:12px;color:var(--ink-3)}
+.hint--stop{color:var(--st-fail)}
+
+/* ---------- 三栏骨架 ---------- */
+.shell{
+  display:grid;grid-template-columns:var(--col-sessions) minmax(0,1fr) var(--col-rail);
+  height:calc(100vh - var(--topbar-h));
+}
+.col-sessions,.col-rail{background:var(--bg);overflow:auto}
+.col-sessions{border-right:1px solid var(--rule-strong);padding:12px 0 0}
+.col-rail{border-left:1px solid var(--rule-strong);padding:12px 12px 20px}
+.col-stream{background:var(--stream-bg);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+
+/* ---------- 左：分析会话 ---------- */
+.sessions-head{display:flex;align-items:center;justify-content:space-between;padding:0 12px 8px;border-bottom:1px solid var(--rule)}
+.sessions-head h2{font-size:13px;font-weight:600;letter-spacing:.06em}
+.sessions-head button{
+  width:22px;height:22px;line-height:1;border:1px solid var(--accent);background:var(--surface);
+  color:var(--accent);border-radius:2px;cursor:pointer;font-size:14px;
+}
+.sessions-head button:hover{background:var(--accent);color:#FFFFFF}
+#sessionList{padding:4px 0 8px}
+.session-item{
+  width:100%;text-align:left;background:none;border:0;border-left:3px solid transparent;
+  padding:8px 10px 8px 9px;cursor:pointer;display:grid;gap:2px;
+  border-bottom:1px solid var(--rule);transition:background var(--dur-fast) linear;
+}
+.session-item:hover{background:var(--surface)}
+.session-item[aria-current="true"]{border-left-color:var(--accent);background:var(--surface)}
+.session-item .q{font-size:13px;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.session-item .meta{font-size:11px;color:var(--ink-3);display:flex;gap:6px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sessions-foot{padding:8px 12px 14px;display:grid;gap:6px;font-size:11px;color:var(--ink-3)}
+.pager{display:flex;gap:6px;align-items:center}
+.pager button{
+  flex:1;background:var(--surface);border:1px solid var(--rule-strong);border-radius:2px;
+  padding:3px 0;font-size:12px;cursor:pointer;color:var(--ink-2);
+}
+.pager button:hover:not([disabled]){border-color:var(--accent);color:var(--accent)}
+.pager button[disabled]{color:var(--st-skip-mark);cursor:default}
+.new-analysis{display:block;width:100%;font-size:12px;padding:4px 0}
+
+/* ---------- 中：指令流 ---------- */
+.pane{display:flex;flex-direction:column;min-height:0;flex:1}
+.session-title{
+  padding:14px 28px 12px;border-bottom:1px solid var(--rule);background:var(--stream-bg);
+  display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;
+}
+.session-title h1{font-size:18px;font-weight:600;line-height:1.4;flex:1 1 24ch;min-width:0}
+.session-title .sub{font-size:12px;color:var(--ink-3);flex-basis:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.stream{
+  flex:1 1 auto;overflow:auto;padding:20px 28px 24px;
+  display:grid;gap:16px;align-content:start;
+}
+.stream>*{max-width:78ch}
+.turn{animation:turn-in var(--dur-slow) ease-out both}
+.turn--user .who{font-size:11px;letter-spacing:.08em;color:var(--ink-3);font-family:var(--mono)}
+.turn--user .body{font-size:16px;color:var(--ink);margin-top:2px}
+.turn--system .body{font-size:13px;color:var(--ink-2);border-left:3px solid var(--rule-strong);padding-left:10px}
+.turn--agent{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--artifact);padding:12px 14px}
+.turn--agent .who{font-size:11px;letter-spacing:.08em;color:var(--artifact);font-family:var(--mono);margin-bottom:4px}
+.turn--agent p{font-size:14px}
+.turn--error{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--st-fail);padding:12px 14px}
+.turn--error .who{font-size:11px;letter-spacing:.08em;color:var(--st-fail);font-family:var(--mono);margin-bottom:4px}
+.plan-list{margin-top:8px;display:grid;gap:2px;counter-reset:p}
+.plan-list li{font-size:13px;color:var(--ink-2);display:flex;gap:8px}
+.plan-list li::before{counter-increment:p;content:counter(p,decimal-leading-zero);font-family:var(--mono);font-size:11px;color:var(--ink-3);padding-top:2px}
+.receipt{background:var(--surface);border:1px dashed var(--rule-strong);padding:10px 12px;display:grid;gap:4px}
+.receipt .kv{font-size:12px;color:var(--ink-2);display:flex;gap:6px;flex-wrap:wrap}
+.receipt .kv b{font-family:var(--mono);font-weight:400;color:var(--ink)}
+
+/* 任务卡（数据主角） */
+.task-card{background:var(--surface);border:1px solid var(--rule);transition:background-color var(--dur) linear}
+.task-card.is-changed{background:var(--stream-bg)}
+.task-card header{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--rule)}
+.task-card .tid{font-family:var(--mono);font-size:11px;color:var(--ink);letter-spacing:.04em}
+.task-card .tool{font-family:var(--mono);font-size:12px;color:var(--accent)}
+.task-card .title{padding:8px 12px 6px;font-size:14px}
+.task-card .foot{padding:0 12px 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--ink-3)}
+.task-io{border-top:1px solid var(--rule);padding:6px 12px 8px}
+.task-io summary{font-size:12px;color:var(--ink-2);cursor:pointer}
+.task-io p{font-size:12px;color:var(--ink-2);font-family:var(--mono);margin-top:4px;word-break:break-all}
+.err-text{
+  font-family:var(--mono);font-size:12px;color:var(--st-fail);background:var(--stream-bg);
+  border:1px solid var(--rule);padding:6px 8px;margin:0 12px 10px;
+}
+
+/* 状态编码：色 + 形 + 字 */
+.status{display:inline-flex;align-items:center;gap:5px;font-size:12px;white-space:nowrap}
+.status .glyph{font-family:var(--mono);font-size:12px;line-height:1}
+.status--pending{color:var(--ink-3)}
+.status--pending .glyph{color:var(--st-pending-mark)}
+.status--run{color:#265C8A}
+.status--run .glyph{color:var(--st-run)}
+.status--ok{color:#33683F}
+.status--ok .glyph{color:var(--st-ok)}
+.status--warn{color:var(--st-warn-text)}
+.status--warn .glyph{color:var(--st-warn-mark)}
+.status--fail{color:#9E332B}
+.status--fail .glyph{color:var(--st-fail)}
+.status--skip{color:#5F636A}
+.status--skip .glyph{color:var(--st-skip-mark)}
+
+/* 产出物 */
+.artifact-block{display:grid;gap:10px}
+.chart-frame{background:var(--surface);border:1px solid var(--rule);padding:10px 12px 8px}
+.chart-frame .head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.chart-frame .head .label{
+  font-family:var(--mono);font-size:11px;color:var(--artifact);border:1px solid var(--artifact);
+  padding:0 4px;border-radius:2px;
+}
+.chart-frame .head .name{font-size:13px}
+.chart-frame svg{display:block;width:100%;height:auto}
+.chart-frame--compact svg{width:340px;max-width:100%}
+.chart-frame .src{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:6px;word-break:break-all}
+.report-card{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--artifact);padding:12px}
+.report-card .mark{font-family:var(--mono);font-size:11px;color:var(--artifact);letter-spacing:.06em}
+.report-card h3{font-size:16px;font-weight:600;margin:4px 0}
+.report-card p{font-size:13px;color:var(--ink-2)}
+.report-card .acts{margin-top:8px}
+
+/* composer */
+.composer{
+  flex:0 0 auto;border-top:1px solid var(--rule-strong);background:var(--surface);
+  padding:12px 28px 14px;display:grid;gap:8px;
+}
+.composer .row1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--rule-strong);
+  border-radius:2px;padding:3px 8px;font-size:12px;cursor:pointer;
+}
+.chip:hover{border-color:var(--accent)}
+.chip .k{color:var(--ink-3);font-family:var(--mono);font-size:11px}
+.chip .v{font-family:var(--mono)}
+.steps-ctl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2)}
+.steps-ctl select{width:auto;padding:3px 6px;font-family:var(--mono)}
+.counter{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-left:auto}
+.counter.bad{color:var(--st-fail)}
+.composer .row2{display:flex;align-items:flex-end;gap:12px}
+.composer .row2 textarea{flex:1 1 auto}
+.dataset-panel{
+  position:absolute;left:var(--col-sessions);bottom:0;width:min(520px,calc(100% - var(--col-sessions) - var(--col-rail) - 32px));
+  background:var(--surface);border:1px solid var(--rule-strong);border-bottom:0;
+  padding:12px 14px;display:grid;gap:8px;z-index:20;
+  opacity:0;transform:translateY(4px);pointer-events:none;transition:opacity var(--dur-fast) linear,transform var(--dur-fast) linear;
+}
+.dataset-panel[data-open="true"]{opacity:1;transform:translateY(0);pointer-events:auto}
+.dataset-panel .head{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.dataset-panel .head h3{font-size:13px;font-weight:600}
+.dataset-panel .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.dataset-panel .tools input[type="search"]{width:200px}
+.dataset-panel .tools select{width:auto;padding:4px 6px}
+#datasetRows{max-height:190px;overflow:auto;border:1px solid var(--rule)}
+.dataset-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--rule);font-size:12px}
+.dataset-row:last-child{border-bottom:0}
+.dataset-row .f{font-family:var(--mono);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dataset-row .m{color:var(--ink-3);font-family:var(--mono)}
+.dataset-panel .close{background:none;border:0;color:var(--ink-2);cursor:pointer;font-size:12px;text-decoration:underline}
+
+/* ---------- 右：运行轨道 ---------- */
+.rail h2{font-size:12px;letter-spacing:.06em;color:var(--ink-3);font-weight:600}
+.rail .count{font-family:var(--mono);font-size:18px;color:var(--accent);margin:2px 0 12px;letter-spacing:.02em}
+.rail .count small{font-size:12px;color:var(--ink-3)}
+.rail-nodes{display:flex;flex-direction:column;gap:0}
+.rail-node{position:relative;display:grid;grid-template-columns:18px minmax(0,1fr);gap:6px;padding:0 0 12px}
+.rail-node::before{
+  content:"";position:absolute;left:8px;top:14px;bottom:-2px;width:1px;
+  background:var(--rule-strong);
+}
+.rail-node:last-child::before{display:none}
+.rail-node.is-waiting::before{background:none;border-left:1px dashed var(--rule-strong)}
+.rail-node.is-active::before,.rail-node.is-done::before{background:var(--accent)}
+.rail-node.is-failed::before{background:var(--st-fail)}
+.rail-node.is-skipped::before{background:none;border-left:1px dashed var(--st-skip-mark)}
+.rail-node .g{
+  width:18px;height:18px;display:grid;place-items:center;font-family:var(--mono);font-size:12px;
+  background:var(--bg);z-index:1;
+}
+.rail-node.is-done .g{color:var(--st-ok)}
+.rail-node.is-active .g{color:var(--st-run);border:1px solid var(--st-run);border-radius:2px}
+.rail-node.is-waiting .g{color:var(--st-pending-mark)}
+.rail-node.is-failed .g{color:var(--st-fail)}
+.rail-node.is-skipped .g{color:var(--st-skip-mark)}
+.rail-node .n{font-size:12px;color:var(--ink)}
+.rail-node.is-skipped .n,.rail-node.is-waiting .n{color:var(--ink-2)}
+.rail-node .s{font-size:11px;color:var(--ink-3);font-family:var(--mono)}
+.scan{height:2px;background:var(--st-run);margin-top:3px;animation:scan 1.8s linear infinite}
+.rail .poll{margin-top:10px;padding-top:10px;border-top:1px solid var(--rule);display:grid;gap:3px;font-size:11px;color:var(--ink-3)}
+.rail .artifacts{margin-top:12px;padding-top:10px;border-top:1px solid var(--rule);display:grid;gap:4px;font-size:12px;color:var(--ink-2)}
+.rail .artifacts b{font-family:var(--mono);color:var(--artifact);font-weight:400;margin-right:4px}
+.rail .workflow-status{margin-top:10px;font-size:12px}
+
+/* ---------- 报告 ---------- */
+.report-body{display:grid;gap:18px}
+.report-meta{font-size:12px;color:var(--ink-3);display:flex;gap:10px;flex-wrap:wrap;font-family:var(--mono)}
+.report-title{font-size:22px;font-weight:600;line-height:1.35;max-width:72ch}
+.report-summary{font-size:18px;line-height:1.65;max-width:72ch}
+.report-section{max-width:72ch}
+.report-section h3{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.report-section h3 .no{font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:400}
+.report-section p{font-size:14px;color:var(--ink)}
+.dq{border-left:3px solid var(--artifact);padding-left:10px;font-size:13px;color:var(--ink-2);margin-top:8px}
+.cite{
+  font-family:var(--mono);font-size:11px;color:var(--artifact);background:none;border:0;
+  padding:0 1px;cursor:pointer;vertical-align:super;
+}
+.cite:hover{text-decoration:underline}
+.error-rule{border-top:1px solid var(--st-fail);margin:6px 0 0}
+.sources{display:grid;gap:0;border:1px solid var(--rule);background:var(--surface)}
+.sources h3{font-size:13px;padding:8px 12px;border-bottom:1px solid var(--rule);color:var(--ink-3);letter-spacing:.06em}
+.source-row{
+  padding:8px 12px;border-bottom:1px solid var(--rule);border-left:2px solid transparent;
+  font-size:12px;color:var(--ink-2);display:grid;gap:2px;
+}
+.source-row:last-child{border-bottom:0}
+.source-row .id{font-family:var(--mono);color:var(--artifact)}
+.source-row.active{border-left-width:3px;border-left-color:var(--artifact);background:var(--stream-bg);transition:border-left-width var(--dur-fast) linear,background-color var(--dur) linear}
+.validation{display:grid;gap:0;border:1px solid var(--rule);background:var(--surface)}
+.validation h3{font-size:13px;padding:8px 12px;border-bottom:1px solid var(--rule);display:flex;gap:8px;align-items:center}
+.v-row{padding:8px 12px;border-bottom:1px solid var(--rule);font-size:13px;display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px}
+.v-row:last-child{border-bottom:0}
+.v-row .sev{display:inline-flex;gap:5px;align-items:center;font-size:12px}
+.v-row.err .sev{color:var(--st-fail)}
+.v-row.warn .sev{color:var(--st-warn-text)}
+.v-row.info .sev{color:#265C8A}
+
+/* ---------- 表格 ---------- */
+table{border-collapse:collapse;width:100%;background:var(--surface);font-size:13px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule)}
+thead th{font-size:11px;letter-spacing:.06em;color:var(--ink-3);font-weight:600;border-bottom:1px solid var(--rule-strong)}
+td.num{font-family:var(--mono)}
+caption{caption-side:bottom;font-size:11px;color:var(--ink-3);padding-top:6px;text-align:left}
+
+/* ---------- 三态 ---------- */
+.state-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.state-cell{background:var(--surface);border:1px solid var(--rule);padding:14px;display:grid;gap:8px}
+.state-cell h3{font-size:13px;font-weight:600;color:var(--ink-3);letter-spacing:.04em}
+.empty{padding:22px 14px;text-align:center;border:1px dashed var(--rule-strong);background:var(--stream-bg)}
+.empty .glyph{font-family:var(--mono);font-size:20px;color:var(--ink-3)}
+.empty p{font-size:13px;color:var(--ink-2)}
+.empty .acts{display:flex;justify-content:center;gap:8px;margin-top:8px}
+.skeleton{display:grid;gap:8px}
+.skeleton i{display:block;height:12px;background:var(--rule);border-radius:2px;animation:pulse 1.2s ease-in-out infinite alternate}
+.skeleton i:nth-child(2){width:70%}
+.skeleton i:nth-child(3){width:45%}
+.errbox{border:1px solid var(--st-fail);border-left-width:3px;padding:10px 12px;display:grid;gap:6px;background:var(--surface)}
+.errbox .code{font-family:var(--mono);font-size:11px;color:var(--st-fail)}
+.errbox p{font-size:13px;color:var(--ink-2)}
+
+/* ---------- 登录 ---------- */
+.login-stage{min-height:calc(100vh - var(--topbar-h));display:grid;place-items:center;padding:40px 20px}
+.letter{
+  width:420px;max-width:100%;background:var(--surface);border:1px solid var(--rule-strong);
+  padding:26px 26px 20px;position:relative;
+}
+.letter::before{content:"";position:absolute;left:-1px;top:-1px;width:34px;height:3px;background:var(--accent)}
+.letter h1{font-size:22px;font-weight:600;margin-bottom:4px}
+.letter .lead{font-size:13px;color:var(--ink-2);margin-bottom:18px}
+.letter .vp{font-size:18px;color:var(--ink);margin-bottom:18px;line-height:1.5}
+.bootstrap-flag{position:absolute;right:14px;top:14px;font-family:var(--mono);font-size:11px;color:var(--ink-3);border:1px solid var(--rule);padding:1px 5px}
+.form-err{border-left:3px solid var(--st-fail);background:var(--stream-bg);padding:6px 10px;font-size:13px;color:var(--st-fail);margin-bottom:10px}
+.health{margin-top:16px;padding-top:12px;border-top:1px solid var(--rule);display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--ink-3);font-family:var(--mono)}
+.health b{font-weight:400;color:var(--ink-2)}
+.proto-strip{margin-top:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.proto-strip span{font-size:11px;color:var(--ink-3)}
+.proto-strip button{font-size:11px;padding:2px 7px;background:var(--surface);border:1px solid var(--rule);border-radius:2px;cursor:pointer;color:var(--ink-2)}
+.proto-strip button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.facet{display:flex;gap:2px;border:1px solid var(--rule-strong);background:var(--surface);padding:2px;border-radius:2px;width:max-content}
+.facet button{background:none;border:0;padding:3px 10px;font-size:12px;cursor:pointer;color:var(--ink-2);border-radius:2px}
+.facet button[aria-pressed="true"]{background:var(--accent);color:#FFFFFF}
+.overlay-close{display:none}
+
+@keyframes turn-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes scan{0%{transform:translateX(0);opacity:.25}50%{opacity:1}100%{transform:translateX(100%);opacity:.25}}
+@keyframes pulse{from{opacity:.55}to{opacity:.9}}
+@media (prefers-reduced-motion: reduce){
+  .turn,.scan,.skeleton i{animation:none}
+  .popover,.dataset-panel,.task-card,.session-item{transition:none}
+}
+
+@media (max-width:1200px){
+  .stream>*,.report-body>*,.composer .row2 textarea{max-width:68ch}
+}
+@media (max-width:860px){
+  .topbar{height:auto;min-height:var(--topbar-h);flex-wrap:wrap;row-gap:2px;padding:6px 12px;gap:10px}
+  .disclaim{font-size:10px;border-left:0;padding-left:0;flex:1 1 100%;order:5}
+  .shell{grid-template-columns:minmax(0,1fr);height:auto;min-height:calc(100vh - var(--topbar-h))}
+  .col-rail{grid-row:1;border-left:0;border-bottom:1px solid var(--rule-strong);padding:10px 16px}
+  .col-stream{grid-row:2;overflow:visible}
+  .pane{min-height:0}
+  .stream{overflow:visible}
+  .rail-nodes{flex-direction:row;gap:10px;overflow-x:auto;padding-bottom:4px}
+  .rail-node{flex:0 0 auto;padding:0;grid-template-columns:auto}
+  .rail-node::before{display:none}
+  .rail-node .n{font-size:11px}
+  .rail-node .s{font-size:10px}
+  .col-sessions{
+    position:fixed;left:0;top:0;bottom:0;width:var(--col-sessions);z-index:40;
+    border-right:1px solid var(--rule-strong);
+  }
+  .col-sessions[aria-hidden="true"]{display:none}
+  .overlay-close{display:inline-block;background:none;border:0;color:var(--ink-2);font-size:12px;cursor:pointer;text-decoration:underline}
+  .session-toggle{display:inline-flex}
+  .brand span{display:none}
+  .topbar-context{display:none}
+  .vswitch{overflow-x:auto;flex:1 1 0;min-width:0}
+  .vswitch button{white-space:nowrap}
+  .topbar-right{flex:1 1 100%;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+  .account-btn{white-space:nowrap}
+  .account{order:1}
+  .stream,.composer,.session-title{padding-left:16px;padding-right:16px}
+  .composer .row2{flex-wrap:wrap}
+  .composer .row2 .btn{white-space:nowrap}
+  .dataset-panel{left:0;width:100%;border-left:0;border-right:0}
+  .stackable thead{display:none}
+  .stackable tr{display:grid;gap:2px;padding:8px 10px;border-bottom:1px solid var(--rule)}
+  .stackable th,.stackable td{display:block;border:0;padding:0;width:auto}
+  .stackable thead th{position:absolute;left:-9999px}
+  .stackable td::before{content:attr(data-label);display:block;font-size:11px;color:var(--ink-3);letter-spacing:.04em}
+  td.num{font-family:var(--mono)}
+  .v-row{grid-template-columns:minmax(0,1fr)}
+  .chart-frame--compact svg{width:320px}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <b>市场情报与智能分析平台</b>
+    <span>AI MARKET INTELLIGENCE STUDIO</span>
+  </div>
+  <button type="button" class="session-toggle" id="btnSessions" aria-controls="colSessions" aria-expanded="false">会话</button>
+  <div class="topbar-context" id="topContext">
+    <span id="ctxSession">分析会话 · 华东市场 Q4 份额变化与主要驱动因素</span>
+    <span class="sep">|</span>
+    <span class="mono" id="ctxDataset">market_2024_q4.csv</span>
+    <span class="sep">|</span>
+    <span class="mono" id="ctxWorkflow">W-2214</span>
+  </div>
+  <div class="topbar-right">
+    <p class="disclaim">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+    <nav class="vswitch" aria-label="原型视图切换">
+      <button type="button" data-view="login">登录</button>
+      <button type="button" data-view="workbench">工作台</button>
+      <button type="button" data-view="analysis">市场分析</button>
+      <button type="button" data-view="runs">Agent 运行</button>
+      <button type="button" data-view="report">报告</button>
+      <button type="button" data-view="states">三态</button>
+    </nav>
+    <div class="account">
+      <button type="button" class="account-btn" id="btnAccount" aria-expanded="false" aria-haspopup="true">
+        <span class="initial" aria-hidden="true">张</span><span>张分析</span>
+      </button>
+      <div class="popover" id="accountPop" data-open="false" role="dialog" aria-label="账户">
+        <h4>当前账号</h4>
+        <div class="row"><span>用户名</span><span class="mono">zhang.analyst</span></div>
+        <div class="row"><span>会话有效期</span><span>8 小时</span></div>
+        <hr>
+        <h4>登录设备（GET /api/auth/sessions）</h4>
+        <div class="row"><span>Windows · 上海</span><span class="mono">2 小时前</span></div>
+        <div class="row"><span>macOS · 北京</span><span class="mono">10-14 09:12</span></div>
+        <hr>
+        <h4>修改密码（POST /api/auth/password）</h4>
+        <form id="pwdForm" novalidate>
+          <div class="field"><label for="pwdOld">当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>
+          <div class="field"><label for="pwdNew">新密码</label><input type="password" id="pwdNew" autocomplete="new-password"></div>
+          <button type="submit" class="btn btn--primary">提交修改</button>
+        </form>
+        <hr>
+        <button type="button" class="btn btn--quiet" id="btnLogout">退出登录</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ============================ 视图 1：登录 ============================ -->
+<div class="login-stage" id="viewLogin">
+  <form class="letter" id="loginForm" novalidate>
+    <span class="bootstrap-flag" id="bootstrapFlag" hidden>needs_bootstrap</span>
+    <h1 id="loginTitle">欢迎回来</h1>
+    <p class="lead" id="loginLead">登录后回到上一次的会话，可以接着问。</p>
+    <p class="vp">把市场数据变成可追溯的决策依据。</p>
+    <p class="form-err hidden" id="loginErr">用户名或密码不正确</p>
+    <div class="field">
+      <label for="loginUser">用户名</label>
+      <input type="text" id="loginUser" autocomplete="username" placeholder="zhang.analyst">
+    </div>
+    <div class="field">
+      <label for="loginPwd">密码</label>
+      <input type="password" id="loginPwd" autocomplete="current-password">
+    </div>
+    <div class="field hidden" id="confirmWrap">
+      <label for="loginPwd2">确认密码</label>
+      <input type="password" id="loginPwd2" autocomplete="new-password">
+    </div>
+    <button type="submit" class="btn btn--primary" id="loginSubmit" style="width:100%">登录</button>
+    <p class="hint" id="loginHint" style="margin-top:8px">接口：POST /auth/login · 会话 Cookie <span class="mono">mis_session</span>（HttpOnly）</p>
+    <div class="health" id="healthRow">
+      <span>服务 <b>正常</b> <span class="mono">/api/health</span></span>
+      <span>大模型 <b>已配置</b></span>
+      <span>上传目录 <b>就绪</b></span>
+      <span>已运行 <b id="uptimeText">3 小时 12 分</b></span>
+    </div>
+    <div class="proto-strip">
+      <span>原型状态（非产品功能）</span>
+      <button type="button" data-login-state="normal" aria-pressed="true">常规</button>
+      <button type="button" data-login-state="bootstrap" aria-pressed="false">首次部署 needs_bootstrap</button>
+      <button type="button" data-login-state="unauthorized" aria-pressed="false">401 统一文案</button>
+      <button type="button" data-login-state="throttled" aria-pressed="false">429 Retry-After</button>
+    </div>
+  </form>
+</div>
+
+<!-- ============================ 三栏工作台骨架 ============================ -->
+<div class="shell hidden" id="shell">
+
+  <aside class="col-sessions" id="colSessions" aria-label="分析会话列表">
+    <div class="sessions-head">
+      <h2>分析会话</h2>
+      <button type="button" id="btnNewSession" aria-label="发起新分析（进入空会话）" title="发起新分析">+</button>
+    </div>
+    <ul id="sessionList"></ul>
+    <div class="sessions-foot">
+      <button type="button" class="btn new-analysis" id="btnNewAnalysis">发起新分析</button>
+      <div class="pager">
+        <button type="button" id="btnPrevPage" aria-label="上一页会话">‹ 上一页</button>
+        <button type="button" id="btnNextPage" aria-label="下一页会话">下一页 ›</button>
+      </div>
+      <span id="pagerText" class="mono">第 1–20 条，共 47 条</span>
+    </div>
+  </aside>
+
+  <div class="col-stream" style="position:relative">
+
+    <!-- 视图 2：工作台 -->
+    <section class="pane" id="paneWorkbench" data-pane="workbench">
+      <div class="session-title">
+        <h1 id="wbSessionTitle">华东市场 Q4 份额变化与主要驱动因素</h1>
+        <span class="status status--run" title="EXECUTING" id="wbSessionStatus"><span class="glyph" aria-hidden="true">■</span>正在计算</span>
+        <p class="sub">
+          <span class="mono">market_2024_q4.csv</span><span class="sep">·</span>
+          <span class="mono">W-2214</span><span class="sep">·</span>
+          <span>每次追问都会作为一次新的分析运行提交</span>
+        </p>
+      </div>
+      <ol class="stream" id="wbStream">
+        <li class="turn turn--user">
+          <p class="who">我 · 14:22</p>
+          <p class="body">华东市场 Q4 的份额变化主要由哪些渠道驱动？和三季度比，谁涨了、谁跌了。</p>
+        </li>
+        <li class="turn turn--agent">
+          <p class="who">Agent · 规划</p>
+          <p>先确认字段与数据质量，再按区域×渠道聚合份额、排出头部、看月度走势；共 6 步，不给时间估计。</p>
+          <ol class="plan-list">
+            <li>读取数据 · describe_dataset 建立整体画像</li>
+            <li>制定分析计划 · 拆解为 6 个可复算的计算任务</li>
+            <li>计算 · 关键字段缺失率、区域×渠道聚合、头部排名</li>
+            <li>生成图表 · 柱状图与折线图（PNG）</li>
+            <li>撰写报告 · 每个数字绑定一次工具调用</li>
+            <li>校验数字 · 复核结论与聚合口径</li>
+          </ol>
+        </li>
+        <li class="turn">
+          <article class="task-card">
+            <header>
+              <span class="tid">T1</span><span class="tool">describe_dataset</span>
+              <span class="status status--ok" title="SUCCESS"><span class="glyph" aria-hidden="true">✓</span>已完成</span>
+            </header>
+            <p class="title">数据集整体画像</p>
+            <p class="foot"><span class="tag">kind: describe</span><span>24 列 · 128 行 · 缺失率最高列 3.1%</span></p>
+            <details class="task-io">
+              <summary>输入 / 输出摘要</summary>
+              <p>params: {} · rows: 128 · numeric: share_pct, revenue · 重复行 0</p>
+            </details>
+          </article>
+        </li>
+        <li class="turn">
+          <article class="task-card">
+            <header>
+              <span class="tid">T2</span><span class="tool">missing_values</span>
+              <span class="status status--ok" title="SUCCESS"><span class="glyph" aria-hidden="true">✓</span>已完成</span>
+            </header>
+            <p class="title">检查每一列的缺失值与重复行</p>
+            <p class="foot"><span class="tag">kind: missing</span><span>channel 缺 4 行，已在报告中说明</span></p>
+            <details class="task-io">
+              <summary>输入 / 输出摘要</summary>
+              <p>params: {"columns": ["region","channel","share_pct"]} · missing: channel=4/128</p>
+            </details>
+          </article>
+        </li>
+        <li class="turn">
+          <article class="task-card">
+            <header>
+              <span class="tid">T3</span><span class="tool">group_aggregate</span>
+              <span class="status status--run" title="RETRYING"><span class="glyph" aria-hidden="true">⇄</span>重试中</span>
+            </header>
+            <p class="title">按区域、渠道分组汇总 share_pct</p>
+            <p class="foot"><span class="tag">kind: aggregate</span><span>128 行参与计算 · 首次读取超时，重试第 1 次</span></p>
+            <details class="task-io">
+              <summary>输入 / 输出摘要</summary>
+              <p>params: {"group_by": ["region","channel"], "metric": "share_pct", "agg": "sum"}</p>
+            </details>
+          </article>
+        </li>
+        <li class="turn">
+          <article class="task-card">
+            <header>
+              <span class="tid">T4</span><span class="tool">top_n</span>
+              <span class="status status--pending" title="PENDING"><span class="glyph" aria-hidden="true">○</span>等待执行</span>
+            </header>
+            <p class="title">按 share_change_qoq 从大到小取前 5 行</p>
+            <p class="foot"><span class="tag">kind: aggregate</span><span>依赖 T3</span></p>
+          </article>
+        </li>
+        <li class="turn">
+          <article class="task-card">
+            <header>
+              <span class="tid">T5</span><span class="tool">correlation</span>
+              <span class="status status--pending" title="PENDING"><span class="glyph" aria-hidden="true">○</span>等待执行</span>
+            </header>
+            <p class="title">计算数值列两两之间的相关系数</p>
+            <p class="foot"><span class="tag">kind: correlation</span><span>share_pct × price_index</span></p>
+          </article>
+        </li>
+        <li class="turn">
+          <article class="task-card">
+            <header>
+              <span class="tid">T6</span><span class="tool">time_series_summary</span>
+              <span class="status status--pending" title="PENDING"><span class="glyph" aria-hidden="true">○</span>等待执行</span>
+            </header>
+            <p class="title">按月汇总 revenue 的走势</p>
+            <p class="foot"><span class="tag">kind: trend</span><span>依赖 T3</span></p>
+          </article>
+        </li>
+      </ol>
+      <footer class="composer">
+        <div class="row1">
+          <button type="button" class="chip" id="wbDatasetChip" aria-expanded="false" aria-controls="datasetPanel">
+            <span class="k">数据集</span><span class="v">market_2024_q4.csv</span>
+          </button>
+          <label class="steps-ctl" for="wbSteps">max_steps
+            <select id="wbSteps"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option><option>7</option><option>8</option></select>
+          </label>
+          <span class="hint">步数越多，Agent 会做多几轮交叉验证</span>
+        </div>
+        <div class="row2">
+          <label for="wbInput" class="hidden">继续提问</label>
+          <textarea id="wbInput" placeholder="接着问：例如 换成按月看华东的变化"></textarea>
+          <button type="button" class="btn btn--primary" id="wbAsk">追问</button>
+        </div>
+        <p class="hint">同数据集追问沿用 dataset_id，但会作为一次新的分析运行提交 · POST /api/analysis</p>
+      </footer>
+    </section>
+
+    <!-- 视图 3：市场分析（完整路径） -->
+    <section class="pane hidden" id="paneAnalysis" data-pane="analysis">
+      <div class="session-title">
+        <h1>发起一次分析</h1>
+        <span class="status status--pending" title="PENDING" id="anStatusChip"><span class="glyph" aria-hidden="true">○</span>等待中</span>
+        <p class="sub"><span>选数据集 → 写需求（2–500 字）→ 设 max_steps → 提交，返回 202 只代表已受理进入队列</span></p>
+      </div>
+      <ol class="stream" id="anStream">
+        <li class="turn turn--system">
+          <p class="body">空会话：还没提交任何运行。下方 composer 选好数据集并写下问题即可发起；提交后这条流会按 1000ms 轮询追加 Agent 的计划、任务卡与产出物。</p>
+        </li>
+      </ol>
+      <footer class="composer">
+        <div class="row1">
+          <button type="button" class="chip" id="anDatasetChip" aria-expanded="false" aria-controls="datasetPanel">
+            <span class="k">数据集</span><span class="v" id="anDatasetValue">未选择</span>
+          </button>
+          <label class="steps-ctl" for="anSteps">max_steps
+            <select id="anSteps"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option><option>7</option><option>8</option></select>
+          </label>
+          <span class="counter" id="anCounter">0 / 500</span>
+        </div>
+        <div class="row2">
+          <label for="anQuestion" class="hidden">分析需求</label>
+          <textarea id="anQuestion" placeholder="例如：各渠道毛利率对比，重点看 9 月的异常月份"></textarea>
+          <button type="button" class="btn btn--primary" id="anSubmit" disabled>发起分析</button>
+        </div>
+        <p class="hint" id="anSubmitHint">需要选择一个数据集，问题长度 2–500 字</p>
+      </footer>
+    </section>
+
+    <!-- 视图 4：Agent 运行 -->
+    <section class="pane hidden" id="paneRuns" data-pane="runs">
+      <div class="session-title">
+        <h1 id="runTitle">各渠道毛利率对比与异常月份</h1>
+        <div class="facet" role="group" aria-label="切换查看的运行">
+          <button type="button" data-run="warn" aria-pressed="true">W-2208 · 带警告完成</button>
+          <button type="button" data-run="fail" aria-pressed="false">W-2211 · 执行失败</button>
+        </div>
+        <p class="sub"><span id="runSub" class="mono">channel_margin_2024.csv · 第 6 / 6 阶段</span></p>
+      </div>
+      <ol class="stream" id="runStream"></ol>
+    </section>
+
+    <!-- 视图 5：报告 -->
+    <section class="pane hidden" id="paneReport" data-pane="report">
+      <div class="session-title">
+        <h1>报告</h1>
+        <span class="status status--warn" title="SUCCESS_WITH_WARNINGS"><span class="glyph" aria-hidden="true">△</span>带警告完成</span>
+        <p class="sub"><span class="mono">W-2208</span><span class="sep">·</span><span>报告是同一条指令流的终点产物，不另开文档站</span></p>
+      </div>
+      <div class="stream report-body">
+        <h2 class="report-title">2024 Q4 渠道毛利率结构：线下渠道拖累整体，9 月出现单点异常</h2>
+        <p class="report-meta">
+          <span>生成时间 2026-10-13 16:20</span><span>数据截至 2024-12-31</span>
+          <span>整条任务总耗时 4 分 12 秒</span><span>大模型撰写 llm_used=true</span>
+        </p>
+        <p class="report-summary">四季度整体毛利率 31.4%，环比下降 1.8 个百分点；下降几乎全部来自线下经销渠道（-4.2 个百分点），线上直营反而小幅改善。9 月的异常低值集中在两个区域，样本量偏小，结论按警告处理。</p>
+
+        <section class="report-section">
+          <h3><span class="no">01</span>毛利率的渠道结构<span class="status status--warn" title="SUCCESS_WITH_WARNINGS"><span class="glyph" aria-hidden="true">△</span>校验：0 错误 · 2 警告 · 1 提示</span></h3>
+          <p>线下经销 Q4 毛利率 22.6%，显著低于四组均值 31.4%，与均值差 -8.8 个百分点<button class="cite" data-src="src-T1" aria-label="跳转到来源 T1">[T1]</button>；线上直营 38.1%，环比 +0.6 个百分点<button class="cite" data-src="src-T2" aria-label="跳转到来源 T2">[T2]</button>。收入占比前三的渠道贡献了毛利的 71.3%<button class="cite" data-src="src-T3" aria-label="跳转到来源 T3">[T3]</button>。</p>
+          <p class="dq">数据质量说明：channel 字段有 4 行缺失，聚合时按"未知渠道"单独成组，未并入任何已知渠道。</p>
+        </section>
+
+        <figure class="chart-frame chart-frame--compact">
+          <p class="head"><span class="label">pie 饼图</span><span class="name">Q4 毛利构成（按渠道）</span></p>
+          <svg viewBox="0 0 300 150" role="img" aria-label="Q4 毛利构成饼图：线上直营 38%、线上经销 26%、线下直营 20%、线下经销与未知渠道 16%（占位样例）">
+            <path d="M120 78 L120 30 A48 48 0 0 1 152.9 113 Z" fill="#2F3742"/>
+            <path d="M120 78 L152.9 113 A48 48 0 0 1 83 108.6 Z" fill="#55616F"/>
+            <path d="M120 78 L83 108.6 A48 48 0 0 1 88.4 40.9 Z" fill="#7E8A97"/>
+            <path d="M120 78 L88.4 40.9 A48 48 0 0 1 120 30 Z" fill="#AAB4BF"/>
+            <text x="182" y="42" font-size="10" fill="#5A5C63">线上直营 38%</text>
+            <text x="182" y="60" font-size="10" fill="#5A5C63">线上经销 26%</text>
+            <text x="182" y="78" font-size="10" fill="#5A5C63">线下直营 20%</text>
+            <text x="182" y="96" font-size="10" fill="#5A5C63">线下经销+未知 16%</text>
+          </svg>
+          <figcaption class="src">真实接口：GET /api/workflows/W-2208/charts/margin_structure.png（PNG 位图）· 计算来自 T1</figcaption>
+        </figure>
+
+        <section class="report-section">
+          <h3><span class="no">02</span>9 月异常与置信度</h3>
+          <p>9 月毛利率降至 27.9%，为四季度最低<button class="cite" data-src="src-T4" aria-label="跳转到来源 T4">[T4]</button>；同月折扣率与毛利率呈中负相关（r = -0.41）<button class="cite" data-src="src-T5" aria-label="跳转到来源 T5">[T5]</button>。该月单渠道样本为 6 行，波动可能被小样本放大，因此校验给出警告而非结论。</p>
+          <div class="error-rule hidden" id="reportErrorRule"></div>
+        </section>
+
+        <table class="stackable">
+          <caption>分组结果来自 group_aggregate（T1）与 compare_groups（T2），数值为占位样例。</caption>
+          <thead><tr><th scope="col">渠道</th><th scope="col">Q4 毛利率</th><th scope="col">与均值差</th><th scope="col">收入占比</th></tr></thead>
+          <tbody>
+            <tr><td data-label="渠道">线上直营</td><td class="num" data-label="Q4 毛利率">38.1%</td><td class="num" data-label="与均值差">+6.7</td><td class="num" data-label="收入占比">29%</td></tr>
+            <tr><td data-label="渠道">线上经销</td><td class="num" data-label="Q4 毛利率">32.0%</td><td class="num" data-label="与均值差">+0.6</td><td class="num" data-label="收入占比">26%</td></tr>
+            <tr><td data-label="渠道">线下直营</td><td class="num" data-label="Q4 毛利率">30.5%</td><td class="num" data-label="与均值差">-0.9</td><td class="num" data-label="收入占比">23%</td></tr>
+            <tr><td data-label="渠道">线下经销</td><td class="num" data-label="Q4 毛利率">22.6%</td><td class="num" data-label="与均值差">-8.8</td><td class="num" data-label="收入占比">18%</td></tr>
+            <tr><td data-label="渠道">未知渠道</td><td class="num" data-label="Q4 毛利率">28.4%</td><td class="num" data-label="与均值差">-3.0</td><td class="num" data-label="收入占比">4%</td></tr>
+          </tbody>
+        </table>
+
+        <div class="sources">
+          <h3>来源（citations）</h3>
+          <ol id="sourceList">
+            <li class="source-row" id="src-T1"><p><span class="id">T1</span> · <button type="button" class="btn btn--quiet tool-jump" data-task="T1">group_aggregate</button> · 按 channel 分组汇总 gross_margin · 数据集 channel_margin_2024.csv · 列 channel/gross_margin · 共 128 行参与计算</p></li>
+            <li class="source-row" id="src-T2"><p><span class="id">T2</span> · <button type="button" class="btn btn--quiet tool-jump" data-task="T2">compare_groups</button> · 按 channel 分组比较 gross_margin · 列 channel/gross_margin/delta_to_mean</p></li>
+            <li class="source-row" id="src-T3"><p><span class="id">T3</span> · <button type="button" class="btn btn--quiet tool-jump" data-task="T3">top_n</button> · 按 revenue 从大到小取前 3 行 · 阈值 71.3% 由返回行累加得出</p></li>
+            <li class="source-row" id="src-T4"><p><span class="id">T4</span> · <button type="button" class="btn btn--quiet tool-jump" data-task="T4">time_series_summary</button> · 按月汇总 gross_margin · 列 period/gross_margin_avg</p></li>
+            <li class="source-row" id="src-T5"><p><span class="id">T5</span> · <button type="button" class="btn btn--quiet tool-jump" data-task="T5">correlation</button> · 数值列两两相关系数 · discount_rate × gross_margin</p></li>
+          </ol>
+        </div>
+
+        <div class="validation">
+          <h3>校验结果 · <span class="status status--warn" title="SUCCESS_WITH_WARNINGS"><span class="glyph" aria-hidden="true">△</span>带警告完成</span></h3>
+          <div class="v-row warn"><span class="sev"><span class="glyph" aria-hidden="true">△</span>warning</span><span>01 节「71.3%」：前 3 行累加基数与全量收入口径可能不一致，建议限定 same-period 复核（T3）。</span></div>
+          <div class="v-row warn"><span class="sev"><span class="glyph" aria-hidden="true">△</span>warning</span><span>02 节「27.9%」：9 月该渠道仅 6 行样本，聚合值不稳定（T4）。</span></div>
+          <div class="v-row info"><span class="sev"><span class="glyph" aria-hidden="true">i</span>info</span><span>01 节：r = -0.41 属中等强度相关，报告未使用因果表述（T5）。</span></div>
+        </div>
+
+        <p class="hint"><button type="button" class="btn btn--quiet" data-view-jump="workbench">回到这次会话继续问</button></p>
+      </div>
+    </section>
+
+    <!-- 视图 6：空 / 加载 / 错误三态 -->
+    <section class="pane hidden" id="paneStates" data-pane="states">
+      <div class="session-title">
+        <h1>空态 · 加载态 · 错误态</h1>
+        <p class="sub"><span>空态区分三种成因，绝不把"读取失败"伪装成"还没有数据"</span></p>
+      </div>
+      <div class="stream">
+        <div class="state-grid">
+          <div class="state-cell">
+            <h3>成因一 · 还没有数据</h3>
+            <div class="empty">
+              <p class="glyph" aria-hidden="true">○</p>
+              <p>暂无数据集</p>
+              <p class="hint">上传第一份市场数据（CSV / Excel），开始第一次分析</p>
+              <div class="acts"><button type="button" class="btn btn--primary" id="btnEmptyUpload">上传数据集</button></div>
+            </div>
+            <p class="hint">接口：GET /api/datasets 返回空列表</p>
+          </div>
+          <div class="state-cell">
+            <h3>成因二 · 筛选无结果</h3>
+            <div class="empty">
+              <p class="glyph" aria-hidden="true">—</p>
+              <p>没有文件名包含「2025」的数据集</p>
+              <p class="hint">换个关键词试试，或清空搜索条件 <span class="mono">q</span> 查看全部数据集</p>
+              <div class="acts"><button type="button" class="btn" id="btnClearQ">清空搜索条件 q</button></div>
+            </div>
+            <p class="hint">接口：GET /api/datasets?q=2025 · q 为文件名子串，≤200 字</p>
+          </div>
+          <div class="state-cell">
+            <h3>成因三 · 读取失败</h3>
+            <div class="errbox">
+              <p class="code">GET /api/datasets · 500 INTERNAL_ERROR</p>
+              <p>数据集列表读取失败：服务暂时无法访问，已保留上一次的列表内容。</p>
+              <div class="acts" style="display:flex;gap:8px"><button type="button" class="btn" data-view-jump="runs">查看失败运行的指令流形态</button></div>
+            </div>
+            <p class="hint">错误文字是后端 <span class="mono">error</span> 字段原文；界面不把它伪装成「暂无数据」，也不谎报已恢复。</p>
+          </div>
+          <div class="state-cell">
+            <h3>加载态 · 骨架屏（轮询期间不闪烁）</h3>
+            <div class="skeleton" role="status" aria-live="polite">
+              <span class="hint">正在读取任务简报 · 每 1000ms 查询运行状态</span>
+              <i></i><i></i><i></i>
+            </div>
+            <p class="hint">GET /api/workflows/W-2214 · 同状态重复轮询不重绘</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 数据集面板（composer 芯片唤出） -->
+    <div class="dataset-panel" id="datasetPanel" data-open="false" role="dialog" aria-label="选择数据集">
+      <div class="head">
+        <h3>选择数据集 · GET /api/datasets</h3>
+        <button type="button" class="close" id="dsClose">关闭</button>
+      </div>
+      <div class="tools">
+        <label for="dsQuery" class="hint">文件名搜索 <span class="mono">q</span></label>
+        <input type="search" id="dsQuery" placeholder="例如 market_2024" maxlength="200">
+        <label for="dsSort" class="hint">sort</label>
+        <select id="dsSort"><option value="uploaded_at" selected>uploaded_at</option><option value="filename">filename</option><option value="rows">rows</option></select>
+        <label for="dsOrder" class="hint">order</label>
+        <select id="dsOrder"><option value="desc" selected>desc</option><option value="asc">asc</option></select>
+        <button type="button" class="btn" id="btnUpload">上传数据集</button>
+      </div>
+      <ul id="datasetRows"></ul>
+      <p class="hint" id="dsEmptyHint">接口只有 upload / get / profile / list：没有删除、重命名、覆盖。</p>
+    </div>
+  </div>
+
+  <aside class="col-rail" id="colRail" aria-label="运行轨道">
+    <div class="rail">
+      <h2>阶段轨道</h2>
+      <p class="count"><span id="railStep">3</span> / <span id="railTotal">6</span><small> 阶段</small></p>
+      <ol class="rail-nodes" id="railNodes"></ol>
+      <p class="workflow-status"><span class="status status--run" title="EXECUTING" id="railWorkflowStatus"><span class="glyph" aria-hidden="true">■</span>正在计算</span></p>
+      <div class="poll">
+        <span>每 1000ms 查询运行状态</span>
+        <span id="railLastUpdate">上次更新 0 秒前</span>
+        <span>「上次更新」由前端本地计时，不来自接口时间戳</span>
+      </div>
+      <div class="artifacts">
+        <span><b>3</b>图表</span>
+        <span><b>1</b>报告</span>
+        <span><b>2</b>校验问题</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script type="text/javascript">
+(function () {
+  "use strict";
+
+  var POLL_INTERVAL_MS = 1000;
+  var TERMINAL = ["SUCCESS", "SUCCESS_WITH_WARNINGS", "FAILED"];
+
+  var STEP_NAMES = ["读取数据", "制定分析计划", "计算", "生成图表", "撰写报告", "校验数字"];
+  var WORKFLOW_STATUS_TEXT = {
+    PENDING: "等待中",
+    PROFILING: "正在读取数据",
+    PLANNING: "正在制定分析计划",
+    EXECUTING: "正在计算",
+    CHARTING: "正在出图",
+    REPORTING: "正在写报告中",
+    VALIDATING: "正在校验中",
+    SUCCESS: "已完成",
+    SUCCESS_WITH_WARNINGS: "带警告完成",
+    FAILED: "失败"
+  };
+  var NODE = {
+    waiting: { glyph: "\u25CB", text: "等待执行", cls: "is-waiting", statusCls: "status--pending", raw: "PENDING" },
+    active: { glyph: "\u25A0", text: "正在执行", cls: "is-active", statusCls: "status--run", raw: "RUNNING" },
+    done: { glyph: "\u2713", text: "已完成", cls: "is-done", statusCls: "status--ok", raw: "SUCCESS" },
+    failed: { glyph: "\u2715", text: "执行失败", cls: "is-failed", statusCls: "status--fail", raw: "FAILED" },
+    skipped: { glyph: "--", text: "未执行", cls: "is-skipped", statusCls: "status--skip", raw: "SKIPPED" }
+  };
+  var TASK_STATUS = {
+    PENDING: { glyph: "\u25CB", text: "等待执行", cls: "status--pending" },
+    RUNNING: { glyph: "\u25A0", text: "正在执行", cls: "status--run" },
+    SUCCESS: { glyph: "\u2713", text: "已完成", cls: "status--ok" },
+    RETRYING: { glyph: "\u21C4", text: "重试中", cls: "status--run" },
+    FAILED: { glyph: "\u2715", text: "执行失败", cls: "status--fail" },
+    SKIPPED: { glyph: "--", text: "已跳过", cls: "status--skip" }
+  };
+  var WF_CHIP = {
+    PENDING: { cls: "status--pending", glyph: "\u25CB" },
+    PROFILING: { cls: "status--run", glyph: "\u25A0" },
+    PLANNING: { cls: "status--run", glyph: "\u25A0" },
+    EXECUTING: { cls: "status--run", glyph: "\u25A0" },
+    CHARTING: { cls: "status--run", glyph: "\u25A0" },
+    REPORTING: { cls: "status--run", glyph: "\u25A0" },
+    VALIDATING: { cls: "status--run", glyph: "\u25A0" },
+    SUCCESS: { cls: "status--ok", glyph: "\u2713" },
+    SUCCESS_WITH_WARNINGS: { cls: "status--warn", glyph: "\u25B3" },
+    FAILED: { cls: "status--fail", glyph: "\u2715" }
+  };
+
+  var VIEWS = ["login", "workbench", "analysis", "runs", "report", "states"];
+  var PANE = {
+    workbench: "paneWorkbench",
+    analysis: "paneAnalysis",
+    runs: "paneRuns",
+    report: "paneReport",
+    states: "paneStates"
+  };
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (text !== undefined && text !== null) { n.textContent = text; }
+    return n;
+  }
+
+  var currentView = "workbench";
+
+  function setView(name, pushHash) {
+    if (VIEWS.indexOf(name) === -1) { name = "workbench"; }
+    currentView = name;
+    var isLogin = name === "login";
+    $("viewLogin").classList.toggle("hidden", !isLogin);
+    $("shell").classList.toggle("hidden", isLogin);
+    VIEWS.forEach(function (v) {
+      var btn = document.querySelector('.vswitch button[data-view="' + v + '"]');
+      if (btn) { btn.setAttribute("aria-current", v === name ? "true" : "false"); }
+    });
+    Object.keys(PANE).forEach(function (v) {
+      $(PANE[v]).classList.toggle("hidden", v !== name);
+    });
+    if (!isLogin) { renderViewRail(name); }
+    if (pushHash !== false) {
+      try { if (history.replaceState) { history.replaceState(null, "", "#" + name); } } catch (e) { /* file:// 下不允许改写 hash 状态 */ }
+    }
+    var stream = document.querySelector("#" + PANE[name] + " .stream");
+    if (stream) { stream.scrollTop = 0; }
+  }
+
+  /* ---------------- 右轨：只有 step_index / total_steps ---------------- */
+
+  var RAIL = {
+    workbench: {
+      stepIndex: 3, total: 6, wf: "EXECUTING", wfText: "正在计算",
+      nodes: ["done", "done", "active", "waiting", "waiting", "waiting"],
+      artifacts: { charts: 0, report: 0, issues: 0 }
+    },
+    analysis: {
+      stepIndex: 0, total: 6, wf: "PENDING", wfText: "等待中",
+      nodes: ["waiting", "waiting", "waiting", "waiting", "waiting", "waiting"],
+      artifacts: { charts: 0, report: 0, issues: 0 }
+    },
+    runs: {
+      stepIndex: 6, total: 6, wf: "SUCCESS_WITH_WARNINGS", wfText: "带警告完成",
+      nodes: ["done", "done", "done", "done", "done", "done"],
+      artifacts: { charts: 2, report: 1, issues: 3 }
+    },
+    report: {
+      stepIndex: 6, total: 6, wf: "SUCCESS_WITH_WARNINGS", wfText: "带警告完成",
+      nodes: ["done", "done", "done", "done", "done", "done"],
+      artifacts: { charts: 2, report: 1, issues: 3 }
+    },
+    states: {
+      stepIndex: 0, total: 6, wf: "PENDING", wfText: "无运行",
+      nodes: ["waiting", "waiting", "waiting", "waiting", "waiting", "waiting"],
+      artifacts: { charts: 0, report: 0, issues: 0 }
+    }
+  };
+
+  function renderRail(cfg) {
+    $("railStep").textContent = String(cfg.stepIndex);
+    $("railTotal").textContent = String(cfg.total);
+    var list = $("railNodes");
+    list.textContent = "";
+    cfg.nodes.forEach(function (stateKey, i) {
+      var meta = NODE[stateKey];
+      var li = el("li", "rail-node " + meta.cls);
+      li.setAttribute("title", meta.raw);
+      var g = el("span", "g", meta.glyph);
+      g.setAttribute("aria-hidden", "true");
+      li.appendChild(g);
+      var box = el("div");
+      box.appendChild(el("p", "n", STEP_NAMES[i]));
+      box.appendChild(el("p", "s", meta.text));
+      if (stateKey === "active") { box.appendChild(el("div", "scan")); }
+      li.appendChild(box);
+      list.appendChild(li);
+    });
+    var chip = $("railWorkflowStatus");
+    var vis = WF_CHIP[cfg.wf] || WF_CHIP.PENDING;
+    chip.className = "status " + vis.cls;
+    chip.setAttribute("title", cfg.wf);
+    chip.textContent = "";
+    var glyph = el("span", "glyph", cfg.wfText === "无运行" ? "\u25CB" : vis.glyph);
+    glyph.setAttribute("aria-hidden", "true");
+    chip.appendChild(glyph);
+    chip.appendChild(document.createTextNode(cfg.wfText));
+    var arts = document.querySelector(".rail .artifacts");
+    arts.textContent = "";
+    [["图表", cfg.artifacts.charts], ["报告", cfg.artifacts.report], ["校验问题", cfg.artifacts.issues]].forEach(function (pair) {
+      var line = el("span");
+      line.appendChild(el("b", null, String(pair[1])));
+      line.appendChild(document.createTextNode(pair[0]));
+      arts.appendChild(line);
+    });
+  }
+
+  function renderViewRail(name) {
+    if (name === "runs") { renderRail(RAIL.runs[runFacet === "fail" ? "failKey" : "okKey"] || RAIL.runs.failKey); return; }
+    renderRail(RAIL[name]);
+  }
+
+  var lastUpdateSeconds = 0;
+  setInterval(function () {
+    lastUpdateSeconds += 1;
+    var node = $("railLastUpdate");
+    if (node) { node.textContent = "上次更新 " + lastUpdateSeconds + " 秒前"; }
+  }, POLL_INTERVAL_MS);
+  function touchPoll() { lastUpdateSeconds = 0; }
+
+  /* ---------------- 左：分析会话列表（history 只有 limit/offset） ---------------- */
+
+  var SESSION_SEED = [
+    { q: "华东市场 Q4 份额变化与主要驱动因素", st: "EXECUTING", stText: "正在计算", ds: "market_2024_q4.csv", t: "今天 14:22" },
+    { q: "各渠道毛利率对比与异常月份", st: "SUCCESS_WITH_WARNINGS", stText: "带警告完成", ds: "channel_margin_2024.csv", t: "今天 10:05" },
+    { q: "竞品价格带与销量相关性", st: "FAILED", stText: "失败", ds: "competitor_price.csv", t: "昨天 17:48" },
+    { q: "新品在三线城市的渗透率", st: "SUCCESS", stText: "已完成", ds: "new_product_2024.csv", t: "昨天 11:30" },
+    { q: "整体市场规模月度走势", st: "SUCCESS", stText: "已完成", ds: "market_size_monthly.csv", t: "10-13 16:20" },
+    { q: "分区域看客单价与复购率的关系", st: "SUCCESS_WITH_WARNINGS", stText: "带警告完成", ds: "customer_repeat.csv", t: "10-13 09:12" },
+    { q: "线上渠道促销前后的量价关系", st: "PENDING", stText: "等待中", ds: "promo_online.csv", t: "10-12 20:14" },
+    { q: "华南与华北的品类结构差异", st: "SUCCESS", stText: "已完成", ds: "region_category.csv", t: "10-12 15:40" },
+    { q: "经销商库存周转与折扣率的相关性", st: "SUCCESS", stText: "已完成", ds: "dealer_inventory.csv", t: "10-11 18:02" },
+    { q: "头部五个品牌的市场份额排名", st: "SUCCESS_WITH_WARNINGS", stText: "带警告完成", ds: "brand_share.csv", t: "10-11 10:26" },
+    { q: "季度营收同比：哪些区域拖累了整体", st: "SUCCESS", stText: "已完成", ds: "revenue_yoy.csv", t: "10-10 17:55" },
+    { q: "会员分层后的客单价分布", st: "SUCCESS", stText: "已完成", ds: "member_tier.csv", t: "10-10 14:11" },
+    { q: "进口品牌在高端价格带的占比变化", st: "FAILED", stText: "失败", ds: "import_premium.csv", t: "10-09 19:33" },
+    { q: "门店类型对毛利率的影响", st: "SUCCESS", stText: "已完成", ds: "store_type.csv", t: "10-09 11:08" },
+    { q: "促销活动对销量的滞后效应", st: "SUCCESS_WITH_WARNINGS", stText: "带警告完成", ds: "promo_lag.csv", t: "10-08 16:47" },
+    { q: "各产品线毛利贡献排名", st: "SUCCESS", stText: "已完成", ds: "product_line.csv", t: "10-08 09:20" },
+    { q: "西南市场是否到了增长拐点", st: "PENDING", stText: "等待中", ds: "southwest_growth.csv", t: "10-07 18:05" },
+    { q: "客户流失率与投诉类型的关系", st: "SUCCESS", stText: "已完成", ds: "churn_complaint.csv", t: "10-07 13:42" },
+    { q: "线上线下价格一致性检查", st: "SUCCESS_WITH_WARNINGS", stText: "带警告完成", ds: "price_consistency.csv", t: "10-06 15:19" },
+    { q: "供应商交付准时率对缺货的影响", st: "SUCCESS", stText: "已完成", ds: "supplier_otd.csv", t: "10-06 10:03" }
+  ];
+  var PAGE_SIZE = 20;
+  var TOTAL_SESSIONS = 47;
+  var page = 0;
+
+  function sessionsForPage(p) {
+    var start = p * PAGE_SIZE;
+    var count = Math.min(PAGE_SIZE, TOTAL_SESSIONS - start);
+    var out = [];
+    for (var i = 0; i < count; i += 1) {
+      var seed = SESSION_SEED[(start + i) % SESSION_SEED.length];
+      out.push({ q: seed.q, st: seed.st, stText: seed.stText, ds: seed.ds, t: seed.t, id: "W-" + (2100 + start + i) });
+    }
+    return out;
+  }
+
+  function statusSpan(st, text) {
+    var vis = WF_CHIP[st] || WF_CHIP.PENDING;
+    var s = el("span", "status " + vis.cls);
+    s.setAttribute("title", st);
+    var g = el("span", "glyph", vis.glyph);
+    g.setAttribute("aria-hidden", "true");
+    s.appendChild(g);
+    s.appendChild(document.createTextNode(text));
+    return s;
+  }
+
+  function renderSessions() {
+    var list = $("sessionList");
+    list.textContent = "";
+    sessionsForPage(page).forEach(function (s, i) {
+      var li = el("li");
+      var btn = el("button", "session-item");
+      btn.type = "button";
+      if (page === 0 && i === 0) { btn.setAttribute("aria-current", "true"); }
+      var q = el("p", "q", s.q);
+      var meta = el("p", "meta");
+      meta.appendChild(statusSpan(s.st, s.stText));
+      meta.appendChild(el("span", "mono", s.ds));
+      meta.appendChild(el("span", "mono", s.t));
+      btn.appendChild(q);
+      btn.appendChild(meta);
+      btn.addEventListener("click", function () {
+        Array.prototype.forEach.call(list.children, function (c) {
+          var b = c.firstChild;
+          if (b === btn) { b.setAttribute("aria-current", "true"); } else { b.removeAttribute("aria-current"); }
+        });
+        $("wbSessionTitle").textContent = s.q;
+        $("ctxSession").textContent = "分析会话 · " + s.q;
+        $("ctxDataset").textContent = s.ds;
+        $("ctxWorkflow").textContent = s.id;
+        var chip = $("wbSessionStatus");
+        var fresh = statusSpan(s.st, s.stText);
+        chip.className = fresh.className;
+        chip.setAttribute("title", s.st);
+        chip.textContent = "";
+        Array.prototype.forEach.call(fresh.childNodes, function (n) { chip.appendChild(n.cloneNode(true)); });
+        closeSessionsOverlay();
+        setView("workbench");
+      });
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+    var from = page * PAGE_SIZE + 1;
+    var to = Math.min((page + 1) * PAGE_SIZE, TOTAL_SESSIONS);
+    $("pagerText").textContent = "第 " + from + "\u2013" + to + " 条，共 " + TOTAL_SESSIONS + " 条（limit=20 · offset=" + page * PAGE_SIZE + "）";
+    $("btnPrevPage").disabled = page === 0;
+    $("btnNextPage").disabled = to >= TOTAL_SESSIONS;
+  }
+
+  $("btnPrevPage").addEventListener("click", function () { if (page > 0) { page -= 1; renderSessions(); } });
+  $("btnNextPage").addEventListener("click", function () { if ((page + 1) * PAGE_SIZE < TOTAL_SESSIONS) { page += 1; renderSessions(); } });
+
+  /* ---------------- 数据集面板（q / sort / order / limit / offset 全部真实） ---------------- */
+
+  var DATASETS = [
+    { filename: "market_2024_q4.csv", rows: 128, cols: 24, uploaded_at: "2026-10-16 13:58" },
+    { filename: "channel_margin_2024.csv", rows: 342, cols: 11, uploaded_at: "2026-10-15 18:20" },
+    { filename: "competitor_price.csv", rows: 96, cols: 8, uploaded_at: "2026-10-15 09:02" },
+    { filename: "new_product_2024.xlsx", rows: 512, cols: 17, uploaded_at: "2026-10-14 21:44" },
+    { filename: "market_size_monthly.csv", rows: 60, cols: 6, uploaded_at: "2026-10-12 15:30" },
+    { filename: "customer_repeat.csv", rows: 1024, cols: 9, uploaded_at: "2026-10-11 10:07" }
+  ];
+  var selectedDataset = DATASETS[0];
+
+  function renderDatasetRows() {
+    var q = $("dsQuery").value.trim().toLowerCase();
+    var sort = $("dsSort").value;
+    var order = $("dsOrder").value === "asc" ? 1 : -1;
+    var rows = DATASETS.filter(function (d) { return q === "" || d.filename.toLowerCase().indexOf(q) !== -1; });
+    rows.sort(function (a, b) {
+      var x = a[sort], y = b[sort];
+      if (typeof x === "number") { return (x - y) * order; }
+      return String(x).localeCompare(String(y)) * order;
+    });
+    var list = $("datasetRows");
+    list.textContent = "";
+    if (DATASETS.length === 0) {
+      list.appendChild(emptyRow("暂无数据集", "上传数据集，开始第一次分析", null));
+    } else if (rows.length === 0) {
+      list.appendChild(emptyRow("没有文件名包含「" + q + "」的数据集", "换一个关键词，或清空搜索条件 q", function () {
+        $("dsQuery").value = ""; renderDatasetRows();
+      }));
+    } else {
+      rows.forEach(function (d) {
+        var li = el("li", "dataset-row");
+        var box = el("div");
+        box.appendChild(el("p", "f", d.filename));
+        box.appendChild(el("p", "m", d.rows + " 行 · " + d.cols + " 列 · " + d.uploaded_at));
+        var btn = el("button", "btn", "选用");
+        btn.type = "button";
+        btn.addEventListener("click", function () {
+          selectedDataset = d;
+          $("anDatasetValue").textContent = d.filename;
+          $("wbDatasetChip").querySelector(".v").textContent = d.filename;
+          $("ctxDataset").textContent = d.filename;
+          closeDatasetPanel();
+          validateSubmit();
+        });
+        li.appendChild(box);
+        li.appendChild(btn);
+        list.appendChild(li);
+      });
+    }
+    $("dsEmptyHint").textContent = "limit=20 · offset=0 · 接口只有 upload / get / profile / list：没有删除、重命名、覆盖。";
+  }
+
+  function emptyRow(title, sub, action) {
+    var li = el("li", "dataset-row");
+    var box = el("div");
+    box.appendChild(el("p", "f", title));
+    box.appendChild(el("p", "m", sub));
+    if (action) {
+      var b = el("button", "btn btn--quiet", "清空搜索条件 q");
+      b.type = "button";
+      b.addEventListener("click", action);
+      box.appendChild(b);
+    }
+    li.appendChild(box);
+    li.appendChild(el("span", "m", "GET /api/datasets"));
+    return li;
+  }
+
+  function openDatasetPanel() {
+    $("datasetPanel").setAttribute("data-open", "true");
+    $("dsQuery").focus();
+  }
+  function closeDatasetPanel() {
+    $("datasetPanel").setAttribute("data-open", "false");
+  }
+  $("anDatasetChip").addEventListener("click", function () {
+    var open = $("datasetPanel").getAttribute("data-open") === "true";
+    if (open) { closeDatasetPanel(); } else { setView("analysis"); openDatasetPanel(); }
+    this.setAttribute("aria-expanded", String(!open));
+  });
+  $("wbDatasetChip").addEventListener("click", function () {
+    var open = $("datasetPanel").getAttribute("data-open") === "true";
+    if (open) { closeDatasetPanel(); } else { openDatasetPanel(); }
+    this.setAttribute("aria-expanded", String(!open));
+  });
+  $("dsClose").addEventListener("click", closeDatasetPanel);
+  $("dsQuery").addEventListener("input", renderDatasetRows);
+  $("dsSort").addEventListener("change", renderDatasetRows);
+  $("dsOrder").addEventListener("change", renderDatasetRows);
+  $("btnUpload").addEventListener("click", function () {
+    var n = DATASETS.length + 1;
+    DATASETS.unshift({ filename: "uploaded_batch_" + n + ".csv", rows: 64 + n, cols: 7, uploaded_at: "刚刚" });
+    renderDatasetRows();
+  });
+
+  /* ---------------- 市场分析：202 已受理 + 1000ms 轮询 ---------------- */
+
+  var AN_TASKS = [
+    { id: "T1", tool: "describe_dataset", kind: "describe", title: "数据集整体画像" },
+    { id: "T2", tool: "missing_values", kind: "missing", title: "检查每一列的缺失值与重复行" },
+    { id: "T3", tool: "group_aggregate", kind: "aggregate", title: "按 channel 分组汇总 gross_margin" },
+    { id: "T4", tool: "top_n", kind: "aggregate", title: "按 gross_margin 从大到小取前 5 行" },
+    { id: "T5", tool: "correlation", kind: "correlation", title: "计算数值列两两之间的相关系数" },
+    { id: "T6", tool: "time_series_summary", kind: "trend", title: "按月汇总 revenue 的走势" }
+  ];
+  var STAGE_WF = ["PROFILING", "PLANNING", "EXECUTING", "CHARTING", "REPORTING", "VALIDATING"];
+  var tick = 0;
+  var pollTimer = null;
+  var taskNodes = {};
+
+  function validateSubmit() {
+    var len = $("anQuestion").value.trim().length;
+    var counter = $("anCounter");
+    counter.textContent = len + " / 500";
+    var bad = len < 2 || len > 500;
+    counter.classList.toggle("bad", bad);
+    var noDs = !selectedDataset;
+    $("anSubmit").disabled = bad || noDs;
+    var hint = $("anSubmitHint");
+    hint.className = "hint" + ((bad || noDs) ? " hint--stop" : "");
+    if (noDs && bad) { hint.textContent = "需要选择数据集，且问题长度 2–500 字（当前 " + len + "）"; }
+    else if (noDs) { hint.textContent = "需要先选择数据集：点上方「数据集」芯片选用"; }
+    else if (len < 2) { hint.textContent = "问题至少 2 个字（当前 " + len + "），后端 question 校验 2–500"; }
+    else if (len > 500) { hint.textContent = "问题超过 500 字，后端会拒绝（当前 " + len + "）"; }
+    else { hint.textContent = "提交 POST /api/analysis，返回 202 表示已受理进入队列，不代表分析完成"; }
+  }
+  $("anQuestion").addEventListener("input", validateSubmit);
+
+  function taskCard(t) {
+    var art = el("article", "task-card");
+    art.id = "an-" + t.id;
+    var head = el("header");
+    head.appendChild(el("span", "tid", t.id));
+    head.appendChild(el("span", "tool", t.tool));
+    var st = statusSpanFromTask("PENDING");
+    st.className = "status status--pending";
+    head.appendChild(st);
+    art.appendChild(head);
+    art.appendChild(el("p", "title", t.title));
+    var foot = el("p", "foot");
+    foot.appendChild(el("span", "tag", "kind: " + t.kind));
+    foot.appendChild(el("span", null, "输入 / 输出摘要在任务返回后写入 description"));
+    art.appendChild(foot);
+    return art;
+  }
+
+  function statusSpanFromTask(taskStatus) {
+    var meta = TASK_STATUS[taskStatus];
+    var s = el("span", "status " + meta.cls);
+    s.setAttribute("title", taskStatus);
+    var g = el("span", "glyph", meta.glyph);
+    g.setAttribute("aria-hidden", "true");
+    s.appendChild(g);
+    s.appendChild(document.createTextNode(meta.text));
+    return s;
+  }
+
+  function setTaskStatus(task, next) {
+    var card = $("an-" + task.id);
+    if (!card) { return; }
+    var holder = card.querySelector("header .status");
+    if (holder.getAttribute("title") === next) { return; }
+    holder.className = "";
+    holder.parentNode.replaceChild(statusSpanFromTask(next), holder);
+    card.classList.add("is-changed");
+    window.setTimeout(function () { card.classList.remove("is-changed"); }, POLL_INTERVAL_MS);
+  }
+
+  function agentTurn(who, text) {
+    var li = el("li", "turn turn--agent");
+    li.appendChild(el("p", "who", who));
+    li.appendChild(el("p", null, text));
+    return li;
+  }
+
+  $("anSubmit").addEventListener("click", function () {
+    if ($("anSubmit").disabled) { return; }
+    var stream = $("anStream");
+    var question = $("anQuestion").value.trim();
+    var steps = Number($("anSteps").value);
+    stream.textContent = "";
+    tick = 0;
+    RAIL.analysis.stepIndex = 0;
+    RAIL.analysis.wf = "PENDING";
+    RAIL.analysis.wfText = "等待中";
+    RAIL.analysis.nodes = ["waiting", "waiting", "waiting", "waiting", "waiting", "waiting"];
+    RAIL.analysis.artifacts = { charts: 0, report: 0, issues: 0 };
+
+    var userTurn = el("li", "turn turn--user");
+    userTurn.appendChild(el("p", "who", "我 · 刚刚"));
+    userTurn.appendChild(el("p", "body", question));
+    stream.appendChild(userTurn);
+
+    var receipt = el("li", "turn");
+    var box = el("div", "receipt");
+    box.setAttribute("role", "status");
+    box.setAttribute("aria-live", "polite");
+    box.id = "anReceipt";
+    var kv = el("p", "kv");
+    kv.appendChild(document.createTextNode("HTTP "));
+    kv.appendChild(el("b", null, "202 已受理"));
+    kv.appendChild(document.createTextNode(" · workflow_id "));
+    kv.appendChild(el("b", null, "W-2215"));
+    kv.appendChild(document.createTextNode(" · dataset_id "));
+    kv.appendChild(el("b", null, selectedDataset.filename));
+    kv.appendChild(document.createTextNode(" · max_steps "));
+    kv.appendChild(el("b", null, String(steps)));
+    box.appendChild(kv);
+    box.appendChild(el("p", "kv", "已进入队列，运行结果每 1000ms 查询一次：GET /api/workflows/W-2215"));
+    box.appendChild(statusSpanFromTask("PENDING"));
+    receipt.appendChild(box);
+    stream.appendChild(receipt);
+
+    var plan = agentTurn("Agent · 规划", "已受理，先建立画像与数据质量基线，再按 " + steps + " 步计划推进；步数用尽即停止扩展。");
+    stream.appendChild(plan);
+
+    taskNodes = {};
+    var shown = Math.min(steps, AN_TASKS.length);
+    for (var i = 0; i < shown; i += 1) {
+      var li = el("li", "turn");
+      var card = taskCard(AN_TASKS[i]);
+      li.appendChild(card);
+      stream.appendChild(li);
+      taskNodes[AN_TASKS[i].id] = card;
+    }
+    $("anSubmit").disabled = true;
+    $("anSubmitHint").textContent = "已提交，等待轮询推进 · 同一数据集上的追问会作为一次新的分析运行提交";
+    if (pollTimer) { window.clearTimeout(pollTimer); }
+    pollTimer = window.setTimeout(pollOnce, POLL_INTERVAL_MS);
+    touchPoll();
+    stream.scrollTop = stream.scrollHeight;
+  });
+
+  function pollOnce() {
+    var shown = Math.min(Number($("anSteps").value), AN_TASKS.length);
+    tick += 1;
+    touchPoll();
+    var wf = tick > shown ? "SUCCESS_WITH_WARNINGS" : STAGE_WF[Math.min(tick - 1, 5)];
+    RAIL.analysis.wf = tick > shown ? "SUCCESS_WITH_WARNINGS" : wf;
+    RAIL.analysis.wfText = WORKFLOW_STATUS_TEXT[RAIL.analysis.wf];
+    RAIL.analysis.stepIndex = Math.min(tick, 6);
+    RAIL.analysis.nodes = [];
+    for (var i = 0; i < 6; i += 1) {
+      if (tick > 6) { RAIL.analysis.nodes.push("done"); }
+      else if (i < tick - 1) { RAIL.analysis.nodes.push("done"); }
+      else if (i === tick - 1) { RAIL.analysis.nodes.push("active"); }
+      else { RAIL.analysis.nodes.push("waiting"); }
+    }
+    for (var j = 0; j < shown; j += 1) {
+      var t = AN_TASKS[j];
+      if (tick > shown) { setTaskStatus(t, "SUCCESS"); }
+      else if (j < tick - 1) { setTaskStatus(t, "SUCCESS"); }
+      else if (j === tick - 1) { setTaskStatus(t, "RUNNING"); }
+      else { setTaskStatus(t, "PENDING"); }
+    }
+    if (currentView === "analysis") {
+      renderRail(RAIL.analysis);
+      var chip2 = $("anStatusChip");
+      var vis2 = WF_CHIP[RAIL.analysis.wf] || WF_CHIP.PENDING;
+      chip2.className = "status " + vis2.cls;
+      chip2.setAttribute("title", RAIL.analysis.wf);
+      chip2.textContent = "";
+      var g2 = el("span", "glyph", vis2.glyph);
+      g2.setAttribute("aria-hidden", "true");
+      chip2.appendChild(g2);
+      chip2.appendChild(document.createTextNode(RAIL.analysis.wfText));
+    }
+    var stream = $("anStream");
+
+    if (tick === 3 && currentView === "analysis") {
+      stream.appendChild(agentTurn("Agent · 计算", "group_aggregate 返回 5 组，最大组占 38.1%；这一句只在状态推进时出现一次，同状态重复轮询不重绘。"));
+    }
+    if (tick === shown + 1) {
+      var artLi = el("li", "turn");
+      var block = el("div", "artifact-block");
+      block.appendChild(chartFrame("各渠道毛利率对比", "bar", "GET /api/workflows/W-2215/charts/gross_margin_by_channel.png"));
+      block.appendChild(chartFrame("月度毛利率走势", "line", "GET /api/workflows/W-2215/charts/margin_trend.png"));
+      block.appendChild(chartFrame("折扣率与毛利率散点", "scatter", "GET /api/workflows/W-2215/charts/discount_vs_margin.png"));
+      var rc = el("article", "report-card");
+      rc.appendChild(el("p", "mark", "REPORT"));
+      rc.appendChild(el("h3", null, "渠道毛利率结构与 9 月异常"));
+      rc.appendChild(el("p", null, "摘要首句：四季度整体毛利率 31.4%，环比下降 1.8 个百分点，下降主要来自线下经销渠道。"));
+      rc.appendChild(el("p", null, "cites: T1 · T2 · T3 · T4 · T5"));
+      var acts = el("p", "acts");
+      var open = el("button", "btn btn--primary", "查看报告");
+      open.type = "button";
+      open.addEventListener("click", function () { setView("report"); });
+      acts.appendChild(open);
+      rc.appendChild(acts);
+      block.appendChild(rc);
+      artLi.appendChild(block);
+      stream.appendChild(artLi);
+
+      var close = agentTurn("Agent · 收口", "运行结束：状态 带警告完成（SUCCESS_WITH_WARNINGS），共 3 张图表、1 份报告、3 条校验问题。整条任务总耗时只在报告页作为元信息出现一次。");
+      stream.appendChild(close);
+      RAIL.analysis.artifacts = { charts: 3, report: 1, issues: 3 };
+      if (currentView === "analysis") { renderRail(RAIL.analysis); }
+      var last = $("anReceipt");
+      if (last) {
+        var chip = last.querySelector(".status");
+        if (chip) { chip.parentNode.replaceChild(statusSpanFromTask("SUCCESS"), chip); }
+      }
+      validateSubmit();
+      return;
+    }
+    pollTimer = window.setTimeout(pollOnce, POLL_INTERVAL_MS);
+  }
+
+  function chartFrame(name, type, path) {
+    var TYPE_TEXT = { bar: "bar 柱状图", line: "line 折线图", pie: "pie 饼图", scatter: "scatter 散点图" };
+    var fig = el("figure", "chart-frame");
+    var head = el("p", "head");
+    head.appendChild(el("span", "label", TYPE_TEXT[type] || type));
+    head.appendChild(el("span", "name", name));
+    fig.appendChild(head);
+    var grid = "";
+    [30, 60, 90, 120].forEach(function (y) {
+      grid += '<line x1="36" y1="' + y + '" x2="404" y2="' + y + '" stroke="#D2D9E0" stroke-width="1"/>';
+    });
+    var marks = "";
+    if (type === "bar") {
+      [58, 92, 126, 160, 194].forEach(function (x, i) {
+        var h = [64, 42, 54, 30, 20][i];
+        marks += '<rect x="' + x + '" y="' + (120 - h) + '" width="26" height="' + h + '" fill="' + ["#2F3742", "#55616F", "#7E8A97", "#AAB4BF", "#2F3742"][i] + '"/>';
+      });
+    } else if (type === "scatter") {
+      [[60, 108], [96, 92], [128, 100], [168, 74], [204, 86], [240, 58], [286, 66], [330, 44], [372, 52]].forEach(function (p, i) {
+        marks += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="3.5" fill="' + (i % 3 === 0 ? "#2F3742" : "#7E8A97") + '"/>';
+      });
+    } else {
+      var pts = "36,96 110,84 184,110 258,70 332,58 404,66";
+      marks += '<polyline points="' + pts + '" fill="none" stroke="#2F3742" stroke-width="2"/>';
+      pts.split(" ").forEach(function (p) {
+        var xy = p.split(",");
+        marks += '<circle cx="' + xy[0] + '" cy="' + xy[1] + '" r="2.5" fill="#55616F"/>';
+      });
+    }
+    var ticks = "";
+    ["10月", "11月", "12月", "1月"].forEach(function (t, i) {
+      ticks += '<text x="' + (60 + i * 100) + '" y="136" font-size="10" fill="#5A5C63">' + t + "</text>";
+    });
+    var wrap = el("div");
+    wrap.innerHTML = '<svg viewBox="0 0 420 150" role="img" aria-label="' + name + '（占位样例，真实为后端 PNG 位图）">'
+      + grid + marks
+      + '<line x1="36" y1="120" x2="404" y2="120" stroke="#CFCCC4" stroke-width="1"/>'
+      + ticks + "</svg>";
+    fig.appendChild(wrap);
+    fig.appendChild(el("figcaption", "src", "真实接口：" + path + "（PNG 位图，原型内用等比灰阶线稿占位）"));
+    return fig;
+  }
+
+  /* ---------------- Agent 运行视图 ---------------- */
+
+  var runFacet = "warn";
+  var RUN_TASKS = {
+    warn: [
+      { id: "T1", tool: "describe_dataset", kind: "describe", st: "SUCCESS", title: "数据集整体画像", note: "11 列 · 342 行" },
+      { id: "T2", tool: "compare_groups", kind: "compare", st: "SUCCESS", title: "按 channel 分组比较 gross_margin", note: "5 组 · 含与各组均值的差值" },
+      { id: "T3", tool: "top_n", kind: "aggregate", st: "SUCCESS", title: "按 revenue 从大到小取前 3 行", note: "占收入 71.3%" },
+      { id: "T4", tool: "time_series_summary", kind: "trend", st: "SUCCESS", title: "按月汇总 gross_margin 的走势", note: "9 月单点低值 27.9%" },
+      { id: "T5", tool: "correlation", kind: "correlation", st: "SUCCESS", title: "计算数值列两两之间的相关系数", note: "discount_rate × gross_margin r = -0.41" },
+      { id: "T6", tool: "missing_values", kind: "missing", st: "SUCCESS", title: "检查每一列的缺失值与重复行", note: "channel 缺 4 行，聚合时单列「未知渠道」组" }
+    ],
+    fail: [
+      { id: "T1", tool: "describe_dataset", kind: "describe", st: "SUCCESS", title: "数据集整体画像", note: "8 列 · 96 行" },
+      { id: "T2", tool: "missing_values", kind: "missing", st: "SUCCESS", title: "检查每一列的缺失值与重复行", note: "competitor 列缺 2 行" },
+      { id: "T3", tool: "group_aggregate", kind: "aggregate", st: "SUCCESS", title: "按 price_band 分组汇总 sales_units", note: "4 组" },
+      { id: "T4", tool: "top_n", kind: "aggregate", st: "FAILED", title: "按 sales_units 从大到小取前 n 行", error: "参数校验未通过：n 必须是 1–100 的正整数，模型给出 0（工具未执行）" },
+      { id: "T5", tool: "correlation", kind: "correlation", st: "SKIPPED", title: "计算数值列两两之间的相关系数", note: "依赖 T4，T4 失败后被跳过" },
+      { id: "T6", tool: "time_series_summary", kind: "trend", st: "SKIPPED", title: "按月汇总 sales_units 的走势", note: "依赖 T4，T4 失败后被跳过" }
+    ]
+  };
+  RAIL.runs = {
+    okKey: { stepIndex: 6, total: 6, wf: "SUCCESS_WITH_WARNINGS", wfText: "带警告完成", nodes: ["done", "done", "done", "done", "done", "done"], artifacts: { charts: 2, report: 1, issues: 3 } },
+    failKey: { stepIndex: 3, total: 6, wf: "FAILED", wfText: "失败", nodes: ["done", "done", "done", "failed", "skipped", "skipped"], artifacts: { charts: 0, report: 0, issues: 1 } }
+  };
+
+  function taskCardForRun(t) {
+    var li = el("li", "turn");
+    var art = el("article", "task-card");
+    art.id = "task-" + t.id;
+    var head = el("header");
+    head.appendChild(el("span", "tid", t.id));
+    head.appendChild(el("span", "tool", t.tool));
+    head.appendChild(statusSpanFromTask(t.st));
+    art.appendChild(head);
+    art.appendChild(el("p", "title", t.title));
+    var foot = el("p", "foot");
+    foot.appendChild(el("span", "tag", "kind: " + t.kind));
+    foot.appendChild(el("span", null, t.note || ""));
+    art.appendChild(foot);
+    if (t.error) {
+      art.appendChild(el("p", "err-text", t.error));
+    } else {
+      var d = el("details", "task-io");
+      var s = el("summary", null, "输入 / 输出摘要");
+      d.appendChild(s);
+      d.appendChild(el("p", null, (t.note || "见 description 字段") + " · status=" + t.st));
+      art.appendChild(d);
+    }
+    li.appendChild(art);
+    return li;
+  }
+
+  function renderRun() {
+    var stream = $("runStream");
+    stream.textContent = "";
+    var isFail = runFacet === "fail";
+    $("runTitle").textContent = isFail ? "竞品价格带与销量相关性" : "各渠道毛利率对比与异常月份";
+    $("runSub").textContent = (isFail ? "competitor_price.csv · W-2211 · 第 3 / 6 阶段（失败在第 4 步截断）"
+      : "channel_margin_2024.csv · W-2208 · 第 6 / 6 阶段");
+
+    var userTurn = el("li", "turn turn--user");
+    userTurn.appendChild(el("p", "who", isFail ? "我 · 昨天 17:48" : "我 · 今天 10:05"));
+    userTurn.appendChild(el("p", "body", isFail ? "各价格带的销量排名，前 10 名分别是谁？" : "各渠道毛利率对比，重点看 9 月的异常月份"));
+    stream.appendChild(userTurn);
+
+    if (isFail) {
+      var errTurn = el("li", "turn turn--error");
+      errTurn.appendChild(el("p", "who", "运行失败 · FAILED"));
+      errTurn.appendChild(el("p", null, "T4 top_n 执行失败后，依赖它的 T5 / T6 被标记为已跳过；后端没有给出可重试的错误码（不是 SERVICE_UNAVAILABLE），这类失败只能调整问题或步数后重新发起一次新的分析。"));
+      var acts = el("p", "acts");
+      var jump = el("button", "btn", "回到输入框重新发起");
+      jump.type = "button";
+      jump.addEventListener("click", function () { setView("analysis"); $("anQuestion").focus(); });
+      acts.appendChild(jump);
+      errTurn.appendChild(acts);
+      stream.appendChild(errTurn);
+    }
+
+    RUN_TASKS[isFail ? "fail" : "warn"].forEach(function (t) { stream.appendChild(taskCardForRun(t)); });
+
+    if (!isFail) {
+      var block = el("li", "turn");
+      var wrap = el("div", "artifact-block");
+      wrap.appendChild(chartFrame("各渠道毛利率对比", "bar", "GET /api/workflows/W-2208/charts/margin_by_channel.png"));
+      wrap.appendChild(chartFrame("月度毛利率走势", "line", "GET /api/workflows/W-2208/charts/margin_trend.png"));
+      var rc = el("article", "report-card");
+      rc.appendChild(el("p", "mark", "REPORT"));
+      rc.appendChild(el("h3", null, "2024 Q4 渠道毛利率结构"));
+      rc.appendChild(el("p", null, "摘要：整体毛利率 31.4%，线下经销 -8.8 个百分点拖累整体；9 月异常样本仅 6 行，按警告处理。"));
+      var a2 = el("p", "acts");
+      var open = el("button", "btn btn--primary", "查看报告");
+      open.type = "button";
+      open.addEventListener("click", function () { setView("report"); });
+      a2.appendChild(open);
+      rc.appendChild(a2);
+      wrap.appendChild(rc);
+      block.appendChild(wrap);
+      stream.appendChild(block);
+    }
+    renderViewRail("runs");
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll(".facet button[data-run]"), function (b) {
+    b.addEventListener("click", function () {
+      runFacet = b.getAttribute("data-run");
+      Array.prototype.forEach.call(document.querySelectorAll(".facet button[data-run]"), function (o) {
+        o.setAttribute("aria-pressed", String(o === b));
+      });
+      renderRun();
+    });
+  });
+
+  /* ---------------- 报告：cites 角标 ↔ 来源行 ---------------- */
+
+  Array.prototype.forEach.call(document.querySelectorAll(".cite"), function (c) {
+    c.addEventListener("click", function () {
+      var target = $(c.getAttribute("data-src"));
+      if (!target) { return; }
+      Array.prototype.forEach.call(document.querySelectorAll(".source-row.active"), function (r) { r.classList.remove("active"); });
+      target.classList.add("active");
+      target.scrollIntoView({ block: "center" });
+    });
+    c.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); c.click(); }
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll(".tool-jump"), function (b) {
+    b.addEventListener("click", function () {
+      setView("runs");
+      if (runFacet !== "warn") {
+        runFacet = "warn";
+        Array.prototype.forEach.call(document.querySelectorAll(".facet button[data-run]"), function (o) {
+          o.setAttribute("aria-pressed", String(o.getAttribute("data-run") === "warn"));
+        });
+        renderRun();
+      }
+      var card = $("task-" + b.getAttribute("data-task"));
+      if (card) { card.scrollIntoView({ block: "center" }); }
+    });
+  });
+
+  /* ---------------- 登录视图：needs_bootstrap / 401 / 429 ---------------- */
+
+  var throttleTimer = null;
+  function setLoginState(name) {
+    var isBootstrap = name === "bootstrap";
+    $("bootstrapFlag").hidden = !isBootstrap;
+    $("confirmWrap").classList.toggle("hidden", !isBootstrap);
+    $("loginTitle").textContent = isBootstrap ? "初始化：创建第一个管理员账户" : "欢迎回来";
+    $("loginLead").textContent = isBootstrap
+      ? "当前系统还没有管理员，本表单只用于首次建号，建成后会进入常规登录。"
+      : "登录后回到上一次的会话，可以接着问。";
+    var submit = $("loginSubmit");
+    submit.textContent = isBootstrap ? "创建管理员" : "登录";
+    submit.disabled = false;
+    submit.style.width = "100%";
+    $("loginErr").classList.add("hidden");
+    var hint = $("loginHint");
+    hint.className = "hint";
+    hint.textContent = isBootstrap
+      ? "接口：POST /auth/bootstrap · 前端只做两次密码一致性校验，强度交给后端"
+      : "接口：POST /auth/login · 会话 Cookie mis_session（HttpOnly）";
+    if (throttleTimer) { window.clearInterval(throttleTimer); throttleTimer = null; }
+    if (name === "unauthorized") {
+      $("loginErr").classList.remove("hidden");
+      hint.textContent = "接口返回 401：不区分「用户不存在 / 密码错」，也不显示剩余尝试次数";
+    }
+    if (name === "throttled") {
+      var left = 28;
+      submit.disabled = true;
+      hint.className = "hint hint--stop";
+      hint.textContent = "操作过于频繁，请在 " + left + " 秒后重试（Retry-After: 28）";
+      throttleTimer = window.setInterval(function () {
+        left -= 1;
+        if (left <= 0) {
+          window.clearInterval(throttleTimer);
+          throttleTimer = null;
+          submit.disabled = false;
+          hint.className = "hint";
+          hint.textContent = "限流计时结束，可以再次提交 · POST /auth/login";
+        } else {
+          hint.textContent = "操作过于频繁，请在 " + left + " 秒后重试（Retry-After: 28）";
+        }
+      }, 1000);
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-login-state]"), function (b) {
+    b.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll("[data-login-state]"), function (o) {
+        o.setAttribute("aria-pressed", String(o === b));
+      });
+      setLoginState(b.getAttribute("data-login-state"));
+    });
+  });
+  $("loginForm").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    setLoginState("unauthorized");
+    Array.prototype.forEach.call(document.querySelectorAll("[data-login-state]"), function (o) {
+      o.setAttribute("aria-pressed", String(o.getAttribute("data-login-state") === "unauthorized"));
+    });
+  });
+
+  /* ---------------- 顶栏 / 浮层 / 窄屏 ---------------- */
+
+  Array.prototype.forEach.call(document.querySelectorAll(".vswitch button[data-view]"), function (b) {
+    b.addEventListener("click", function () { setView(b.getAttribute("data-view")); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-view-jump]"), function (b) {
+    b.addEventListener("click", function () {
+      var v = b.getAttribute("data-view-jump");
+      setView(v);
+      if (v === "states") { window.scrollTo(0, 0); }
+      if (v === "analysis") { $("anQuestion").focus(); }
+    });
+  });
+
+  $("btnAccount").addEventListener("click", function () {
+    var open = $("accountPop").getAttribute("data-open") === "true";
+    $("accountPop").setAttribute("data-open", String(!open));
+    this.setAttribute("aria-expanded", String(!open));
+  });
+  $("pwdForm").addEventListener("submit", function (ev) { ev.preventDefault(); });
+  $("btnLogout").addEventListener("click", function () {
+    $("accountPop").setAttribute("data-open", "false");
+    $("btnAccount").setAttribute("aria-expanded", "false");
+    setView("login");
+  });
+
+  function closeSessionsOverlay() {
+    if (window.matchMedia("(max-width:860px)").matches) {
+      $("colSessions").setAttribute("aria-hidden", "true");
+      $("btnSessions").setAttribute("aria-expanded", "false");
+    }
+  }
+  $("btnSessions").addEventListener("click", function () {
+    var hidden = $("colSessions").getAttribute("aria-hidden") === "true";
+    $("colSessions").setAttribute("aria-hidden", String(!hidden));
+    this.setAttribute("aria-expanded", String(hidden));
+  });
+
+  $("btnNewSession").addEventListener("click", function () { setView("analysis"); });
+  $("btnNewAnalysis").addEventListener("click", function () { setView("analysis"); });
+  $("btnEmptyUpload").addEventListener("click", function () {
+    setView("analysis");
+    openDatasetPanel();
+  });
+  $("btnClearQ").addEventListener("click", function () {
+    setView("analysis");
+    $("dsQuery").value = "";
+    renderDatasetRows();
+    openDatasetPanel();
+  });
+
+  $("wbAsk").addEventListener("click", function () {
+    var v = $("wbInput").value.trim();
+    if (v.length < 2 || v.length > 500) { return; }
+    var li = el("li", "turn turn--user");
+    li.appendChild(el("p", "who", "我 · 刚刚"));
+    li.appendChild(el("p", "body", v));
+    $("wbStream").appendChild(li);
+    $("wbInput").value = "";
+    $("wbStream").scrollTop = $("wbStream").scrollHeight;
+  });
+
+  document.addEventListener("click", function (ev) {
+    if (!ev.target.closest("#accountPop") && !ev.target.closest("#btnAccount")) {
+      $("accountPop").setAttribute("data-open", "false");
+      $("btnAccount").setAttribute("aria-expanded", "false");
+    }
+    if (!ev.target.closest("#datasetPanel") && !ev.target.closest("#wbDatasetChip") && !ev.target.closest("#anDatasetChip")) {
+      closeDatasetPanel();
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      closeDatasetPanel();
+      $("accountPop").setAttribute("data-open", "false");
+      closeSessionsOverlay();
+    }
+  });
+
+  /* ---------------- 启动 ---------------- */
+
+  renderSessions();
+  renderDatasetRows();
+  renderRun();
+  validateSubmit();
+  setLoginState("normal");
+  var initial = (location.hash || "").replace("#", "");
+  setView(VIEWS.indexOf(initial) === -1 ? "workbench" : initial);
+  if (window.matchMedia("(max-width:860px)").matches) { $("colSessions").setAttribute("aria-hidden", "true"); }
+  RAIL.workbench.stepIndex = 3;
+  renderViewRail(currentView);
+})();
+</script>
+</body>
+</html>

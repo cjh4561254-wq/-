@@ -119,6 +119,52 @@ class Settings(BaseSettings):
     # "历史名字 + 新名字"用的，归档库没有历史包袱）。
     db_path: str = "data/db/app.db"
 
+    # ---------------- 账号与会话（真实认证） ----------------
+    #
+    # 为什么是**另一个**库文件而不是复用 `db_path`：
+    # `DB_PATH` 为空串 = 明确关闭归档。而认证不可关闭（关掉就没有登录了）。
+    # 放同一个文件会出现"为了关归档而清空 DB_PATH，结果连账号库一起挪走"的连带伤害。
+    # 两个库各自独立，谁也关不掉谁。`.gitignore` 里 `data/db/*` 已经覆盖了
+    # `auth.db` 与写事务期间的 `auth.db-journal`。
+    auth_db_path: str = "data/db/auth.db"
+
+    # 会话 cookie 的名字。带项目前缀而不是通用的 `session`：
+    # 本机 127.0.0.1 上常同时跑着好几个项目（本机就有 8000 端口的另一个项目），
+    # 通用的 `session` 会和别人的 cookie 撞名，互相覆盖。
+    auth_cookie_name: str = "mis_session"
+
+    # `Secure` 标志。**本机开发必须是 False** —— 服务跑在 http://127.0.0.1，
+    # 带 Secure 的 cookie 浏览器根本不会回传，表现是"登录成功但立刻又变未登录"。
+    # 部署到 HTTPS 时**必须**设成 True（`AUTH_COOKIE_SECURE=1`），
+    # 否则会话 token 会以明文走在网络上。
+    auth_cookie_secure: bool = False
+
+    # 会话有效期。默认 8 小时 = 一个工作日，不是 30 天：
+    # 这是一个能看全部业务数据的后台，会话过期时间越长，token 被拿走的窗口越大。
+    auth_session_seconds: int = Field(default=8 * 3600, gt=60, le=30 * 24 * 3600)
+
+    # PBKDF2-HMAC-SHA256 的迭代次数。
+    # 240000 是**刻意选慢**的：单次约 0.1 秒，用户登录时感觉不到，
+    # 但让离线暴力破解的成本高了几个数量级。
+    # 这个值会**随每个账号存进库**，所以以后调高它不会让老账号登不进来。
+    auth_pbkdf2_iterations: int = Field(default=240_000, ge=1000, le=10_000_000)
+
+    # 登录失败限流：连续失败 auth_max_failed_attempts 次后锁 auth_lockout_seconds 秒。
+    # 这是**按用户名**计的（内存里），不是按 IP —— 本机场景下按 IP 没有意义。
+    auth_max_failed_attempts: int = Field(default=5, ge=2, le=100)
+    auth_lockout_seconds: int = Field(default=300, gt=0, le=24 * 3600)
+
+    @property
+    def auth_db_file(self) -> Path:
+        """账号库文件的绝对路径。
+
+        与 `db_file` 同一个坑：`Path("")` 是 `.`，空串会返回**项目根目录**。
+        调用方必须先判断认证是否开启 —— 便捷入口 `app.data.users.get_auth_store()`
+        已经把这一层处理掉了（`auth_db_path` 为空时返回 `None`）。
+        """
+        p = Path(self.auth_db_path)
+        return p if p.is_absolute() else PROJECT_ROOT / p
+
     @property
     def upload_path(self) -> Path:
         """上传目录的绝对路径。"""
@@ -181,3 +227,24 @@ def get_settings() -> Settings:
 def reset_settings_cache() -> None:
     """测试修改配置后清缓存，下一次 get_settings() 会重新读取。"""
     get_settings.cache_clear()
+
+
+def current_settings() -> Settings:
+    """在**调用时刻**取当前配置。
+
+    与直接 `get_settings()` 的差别只有一个，但很关键：这个函数通过模块全局
+    去取 `get_settings`，所以 `monkeypatch.setattr(config, "get_settings", fake)`
+    能生效；而 `from app.config import get_settings` 会在导入时就把**那个函数对象**
+    绑死，之后谁替换 `config.get_settings` 都影响不到它。
+
+    为什么需要它：`app/data/users.py` 的 `get_auth_store()` 必须读**当前**配置
+    （测试用 AUTH_DB_PATH 做隔离，每个用例一个临时账号库）。如果它绑死导入期的
+    `get_settings`，测试里"换了一个空库"会被无视 —— 实测表现就是
+    `test_bootstrap_creates_first_admin_and_logs_in` 拿到 403
+    "账号库已经有账号了"（它其实查的是上一个用例的库），
+    以及 `get_auth_store()` 在 `auth_db_path=""` 时仍然返回一个 store。
+
+    为什么不在 users.py 里写 `config.get_settings()`：那样每个数据层模块都要
+    多一个 `import app.config` 并记住"要动态取"。放在配置模块里只有一处。
+    """
+    return get_settings()

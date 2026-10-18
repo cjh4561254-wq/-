@@ -131,6 +131,35 @@ if _TEMP_ENV_SETUP_OK:
     tempfile.tempdir = None
 
 
+# ── 认证：给测试会话一个**确定存在**的账号库 ────────────────────────────────
+# 背景：登录功能给业务路由挂上了 `Depends(require_user)`，没配账号库时
+# `get_auth_store()` 返回 None，路由层会翻译成 503 —— 那样几十个业务用例会以
+# "服务不可用"收场，看起来像功能坏了，实际是**测试环境没给账号库**。
+#
+# 所以这里在导入任何 app 模块之前先把 `AUTH_DB_PATH` 钉到 `.tmp/auth-test/auth.db`，
+# 于是模块级的 `AUTH_DB_PATH = os.getenv(...)` 读到的就是一个固定文件。
+#
+# ⚠️ **必须写成相对路径**（2026-10-16 实修，别改回 `(TEMP_DIR / ...).resolve()`）：
+# `Settings.auth_db_file` 是按**当前进程的 PROJECT_ROOT** 解析相对路径的，所以
+# 相对值在"真仓库"里落到真仓库的 `.tmp/`，在 `tests/test_check_docs.py` 造的
+# **镜像仓库**里就落到镜像的 `.tmp/` —— 一份环境变量，两处正确落点。
+# 写成绝对路径会踩两个坑，都实测到了：
+#   1. **跨仓库串库**。`_child_env()` 复制 os.environ，于是镜像子进程拿着真仓库的
+#      绝对路径去连真仓库的 `.tmp/auth-test/auth.db`（实测镜像日志里出现
+#      `账号库就绪: D:\个人项目01\ai-data-analyst-agent\.tmp\auth-test\auth.db`）。
+#      镜像的隔离性从此是假的：它的绿灯依赖真仓库里那份文件的状态。
+#   2. **镜像里的业务用例集体 401**。镜像只有空账号库（真库不在镜像里），
+#      `resolve_session()` 查不到会话 → `check_docs.py` 的 8 个投喂用例全红 →
+#      12 个镜像变异用例连锁 ERROR。
+#
+# `.tmp/auth-test` 这一级目录**不能省**：`AuthStore` 的测试辅助代码会按真实路径
+# 造账号/签会话，而目录由 `AuthStore._connect()` 用 parents=True 自建；
+# 但 `data/db/auth.db` 那种"父目录被别的东西占成文件"的情况没必要在这里重演。
+AUTH_DB_PATH = Path(".tmp") / "auth-test" / "auth.db"
+if _TEMP_ENV_SETUP_OK:
+    os.environ["AUTH_DB_PATH"] = str(AUTH_DB_PATH)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """两个钩子动作合并在这里。**这里必须只有一个 `pytest_configure`。**
 
@@ -248,3 +277,70 @@ def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch):
     clear_settings_cache()
     yield
     clear_settings_cache()
+
+
+# ── 认证：让 `TestClient` 默认"已登录" ──────────────────────────────────────
+# 为什么是**补丁 TestClient**而不是"改 30 处调用点"：
+#   登录功能上线后，`TestClient(app)` 不再能直接访问业务路由（401）。要让它们通过，
+#   有两条路：① 把 30 多个测试文件里的 client 逐个换成"已登录的 client"；
+#   ② 在测试环境里让"新建的 client"默认带上一条真实会话。
+#   选 ②，理由有三条：
+#     1. 用例的**意图**是"测某个业务行为"，不是"测未登录会被拒"。让每个人先写三行
+#        登录样板，只会让真正要测的断言离题更远。
+#     2. 未登录行为有**专门的**用例覆盖：tests/test_auth_api.py 里显式用
+#        `TestClient(app, cookies={...})` 构造"没 cookie / 坏 cookie / 过期 cookie"
+#        三种客户，需求里"未登录必须 401"这条断言强度一点没降。
+#     3. 改 30 个文件会同时踩到别的队友正在改的文件（并行写冲突）。
+#
+# 补丁只在**测试进程内**生效：它改的是 `starlette.testclient.TestClient` 这个类对象，
+# 产品代码（uvicorn 起的 app）碰不到它。
+#
+# 覆盖 `request` 而不是 `__init__`：模块级 `client = TestClient(app)` 在**收集阶段**
+# 就构造好了，那时账号库还不一定有（用例自己的 fixture 可能换路径），
+# 所以在"真的要发请求"的那一刻再补 cookie 最稳。`__enter__` 不重写 —— lifespan
+# 由原来的实现照常跑，我们只是保证 cookie 在 jar 里。
+def _patch_testclient_for_auth() -> None:
+    from starlette.testclient import TestClient
+
+    from tests import auth_support
+
+    if getattr(TestClient, "_dsh_auth_patched", False):  # pragma: no cover - 防御
+        return
+
+    original_request = TestClient.request
+
+    def request(self, *args, **kwargs):
+        # `mark_client_as_anonymous()` 打上的标记：这个 client 就是要"没登录"，
+        # 不许补会话（否则 `cookies.clear()` 会被下一次请求重新填满）。
+        if not getattr(self, "_dsh_no_auto_session", False):
+            auth_support.attach_session_cookie(self)
+        return original_request(self, *args, **kwargs)
+
+    TestClient.request = request
+    TestClient._dsh_auth_patched = True  # type: ignore[attr-defined]
+
+
+# autouse 但**不取任何夹具参数**：它只挂补丁，不碰账号库。
+# 账号库是按需建的（第一个真发请求的用例里建），这样"只跑一条纯函数用例"时
+# 不必付一次 PBKDF2 的代价。
+@pytest.fixture(autouse=True, scope="session")
+def _auto_login_test_clients():
+    """整个测试会话内，新建的 `TestClient` 都自动带上测试账号的真实会话。"""
+    if _TEMP_ENV_SETUP_OK:
+        _patch_testclient_for_auth()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_store_cache():
+    """每个用例前后各清一次账号库缓存。
+
+    与上面清 settings 缓存同理：`get_auth_store()` 带 `lru_cache`，而用例可能
+    `monkeypatch.setenv("AUTH_DB_PATH", ...)` 换成临时库；不清的话下一个用例
+    还在用上一个用例的库（本项目在配置缓存上真踩过这个坑）。
+    """
+    from app.data.users import reset_auth_store_cache
+
+    reset_auth_store_cache()
+    yield
+    reset_auth_store_cache()

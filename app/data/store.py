@@ -45,7 +45,7 @@
 import math
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -58,6 +58,22 @@ PREVIEW_ROWS = 5
 
 # dataset_id 的合法形态：uuid4().hex，32 位小写十六进制。
 _DATASET_ID_PATTERN = re.compile(r"\A[0-9a-f]{32}\Z")
+
+# 数据集列表的排序白名单：**接口参数名 → 取值函数**。
+#
+# 为什么不直接用 pydantic 的字段名（created_at / original_filename / row_count）：
+# 接口要对前端友好，所以用 `uploaded_at` / `filename` / `rows` 这三个名字
+# （前端 `app/web/app.js:982-1004` 已经按这三个名字在传参）。两套名字的对应
+# 关系只在这里写一次，别处不许再抄一份 —— 抄出来的映射迟早会分叉。
+#
+# 为什么 `filename` 用小写做排序键：用户在界面上看到的是文件名列的字母序，
+# 而 ASCII 里大写字母排在小写前面，直接按原串排会得到 "Zebra" 在 "apple" 之前
+# 这种"看起来没排"的结果。中文文件名不受影响（没有大小写）。
+_SORT_KEYS: dict[str, "Callable[[Dataset], object]"] = {
+    "uploaded_at": lambda item: item.created_at,
+    "filename": lambda item: item.original_filename.lower(),
+    "rows": lambda item: item.row_count,
+}
 
 
 def build_stored_filename(dataset_id: str, file_ext: str) -> str:
@@ -130,6 +146,9 @@ class DatasetStore:
         file_ext: str,
         size_bytes: int,
         sha256: str,
+        *,
+        owner_user_id: int | None = None,
+        owner_username: str | None = None,
     ) -> Dataset:
         """登记一份新数据：记元信息 + 记住 DataFrame，返回 `Dataset`。
 
@@ -144,6 +163,12 @@ class DatasetStore:
 
         `original_filename` 只作为**说明文字**存进元信息，绝不参与拼路径 ——
         用户上传的名字里可能有 `../../` 之类的东西。
+
+        `owner_user_id` / `owner_username` 必须是**关键字参数**（所以前面有个 `*`）：
+        它是数据隔离的依据，而位置参数一旦允许，就会有人按顺序传错一个 int
+        而完全不报错 —— 把别人的数据标成自己的，是查不回来的事故。
+        默认 `None`（没有归属）是给"改造前的老调用方"和测试留的退路，
+        路由层**一定**显式传当前登录用户。
 
         返回的 `Dataset.has_profile` 一定是 False：画像要等 profiler 算完，
         再通过 `set_profile` 补上（这样前端能分辨"还没算"和"算完了是空的"）。
@@ -163,6 +188,8 @@ class DatasetStore:
             column_count=int(df.shape[1]),
             created_at=datetime.now(timezone.utc),
             has_profile=False,
+            owner_user_id=owner_user_id,
+            owner_username=owner_username,
             stored_filename=build_stored_filename(dataset_id, file_ext),
             file_ext=file_ext,
             size_bytes=int(size_bytes),
@@ -177,7 +204,12 @@ class DatasetStore:
         return dataset
 
     def get(self, dataset_id: str) -> Dataset | None:
-        """取元信息；不存在返回 None（由调用方决定是 404 还是别的处理）。"""
+        """取元信息；不存在返回 None（由调用方决定是 404 还是别的处理）。
+
+        **注意：这里不做归属判断**（"谁的数据"不在数据层的职责里，
+        而且它拿不到登录用户）—— 归属判定在 `app/api/ownership.py`。
+        任何直接调 `get()` 就返回给用户的写法都是越权漏洞。
+        """
         return self._datasets.get(dataset_id)
 
     def get_frame(self, dataset_id: str) -> pd.DataFrame | None:
@@ -187,6 +219,66 @@ class DatasetStore:
         每次取都复制一份等于把内存翻倍。所以调用方只读，不要就地修改它。
         """
         return self._frames.get(dataset_id)
+
+    def list_owned(
+        self,
+        owner_user_id: int,
+        *,
+        sort: str = "uploaded_at",
+        order: str = "desc",
+        query: str | None = None,
+    ) -> list[Dataset]:
+        """某个用户名下的数据集，排序后返回（分页在路由层切片）。
+
+        为什么归属判定写成"精确匹配 user_id"、而不是"owner 为空也算我的"：
+        进程内单例里可能有改造之前登记的、没有归属的数据。**没有归属 = 谁也不给看**，
+        是这里唯一安全的选择 —— 反过来（无归属者视为公共数据）会让升级后
+        老数据对所有登录用户可见，那正是本次改造要堵掉的洞。
+
+        为什么返回新列表：调用方会切片。直接给出内部列表的引用，
+        调用方一个 `pop()` 就能改掉仓库内部状态（`registry.list_all()` 同一个理由）。
+
+        为什么排序参数放在**数据层**而不是路由层：路由层拿到的已经是切好片的
+        一页。先切页再排序，只会在这一页内部重排 —— 翻到第 2 页顺序就乱了，
+        而且没有报错（"看起来对"）。所以必须"先全量排、再切页"。
+
+        `query` 是文件名的子串筛选（大小写不敏感，`None` / 空白串 = 不筛）。
+        它同样必须在数据层做：路由层的 `total` 是 `count_owned()` 算的，
+        若筛选只在路由层切页之后做，`total` 会与 `items` 对不上（前端页数就错了）。
+
+        `sort` / `order` 的合法值由路由层用 `Literal` 校验（非法值 422），
+        这里对未知值退化为默认（`uploaded_at`/`desc`），不抛异常：
+        数据层不该依赖 HTTP 层的校验结果，也不该在排序上再发明一套错误。
+        """
+        owned = [
+            item for item in self._datasets.values() if item.owner_user_id == owner_user_id
+        ]
+        if query is not None:
+            needle = query.strip().lower()
+            if needle:
+                # 用户看到的是原始文件名（大小写混用），所以两边都转小写再比。
+                owned = [item for item in owned if needle in item.original_filename.lower()]
+        keys = _SORT_KEYS.get(sort, _SORT_KEYS["uploaded_at"])
+        # 排序键里都追加 `dataset_id` 兜底：同一个排序列上取值相同的两条
+        # （空库里的同名文件、同样行数的两个文件）若只按该列排，顺序取决于
+        # dict 插入顺序 —— "分页跨页错位/同一页里顺序抖动"就是这么来的。
+        # dataset_id 是 uuid4，全局唯一，所以它一进键，顺序就完全确定了。
+        primary, reverse = keys, order != "asc"
+        owned.sort(key=lambda item: (primary(item), item.dataset_id), reverse=reverse)
+        return owned
+
+    def count_owned(self, owner_user_id: int, *, query: str | None = None) -> int:
+        """某个用户名下的数据集条数（列表接口的 `total` 用它，别用 `len(list_owned(...))`）。
+
+        为什么单独一个方法：`total` 必须是**过滤后的总数**，而不是"这一页有几条"。
+        前端靠它算页数；两者混在一起，第 2 页之后页码就会算错。
+
+        `query` 的语义必须与 `list_owned()` **完全一致**，否则 `total` 会大于
+        实际能翻到的条数（前端会显示出一堆空页）。为了不重抄一遍匹配规则，
+        这里复用 `list_owned()` 的结果 —— 数据集是**进程内**的一小撮元信息，
+        这点开销远小于"两处规则写岔"的风险。
+        """
+        return len(self.list_owned(owner_user_id, query=query))
 
     def exists(self, dataset_id: str) -> bool:
         """这个 id 登记过没有。路由层用它把"不存在的 id"提前变成 404。"""

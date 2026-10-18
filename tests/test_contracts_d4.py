@@ -23,6 +23,16 @@ from app.config import Settings
 from app.schemas_llm import LLMReply, LLMToolCall
 from app.schemas_workflow import AnalysisAccepted, WorkflowState
 
+_DEPENDS = object()
+"""哨兵：该参数默认值必须是 FastAPI 的 `Depends(...)` 实例。
+
+为什么不写 `Depends(...)` 字面量：`Depends` 是可变对象且 __eq__ 不被重载 ——
+比字面量只能比到同一个实例。所以这里**只比类型**，名字与顺序照样精确比对。
+"""
+
+_ANY_DEFAULT = object()
+"""哨兵：该参数可以有任意默认值（尚未冻结默认值的情形）。目前无人使用。"""
+
 # 契约里的函数签名（参数名 / 顺序 / 默认值）。依据：docs/ARCHITECTURE.md §4.14.3。
 # 只钉"调用方看得见的部分"：参数名（调用方要按名字传）、顺序、默认值。
 _CONTRACT_PARAMS: dict[tuple[str, str], list[tuple[str, object]]] = {
@@ -37,11 +47,25 @@ _CONTRACT_PARAMS: dict[tuple[str, str], list[tuple[str, object]]] = {
         ("state", inspect.Parameter.empty),
         ("tasks", inspect.Parameter.empty),
     ],
+    # `user` 是 2026-10-16 归属隔离修复时新增的第三个参数（见下条注释），
+    # 它的默认值是依赖注入对象，用 _DEPENDS 哨兵按**类型**比对。
     ("app.api.routes_analysis", "start_analysis"): [
         ("req", inspect.Parameter.empty),
         ("background", inspect.Parameter.empty),
+        ("user", _DEPENDS),
     ],
 }
+
+
+def _default_matches(actual: object, expected: object) -> bool:
+    """默认值比对：字面量按 `==`；哨兵按类型/任意值判定。"""
+    if expected is _DEPENDS:
+        from fastapi.params import Depends as _DependsType
+
+        return isinstance(actual, _DependsType)
+    if expected is _ANY_DEFAULT:
+        return True
+    return actual == expected
 
 
 def _resolve(dotted_module: str, func_name: str):
@@ -60,16 +84,33 @@ def test_d4_function_signatures_match_the_frozen_contract(target, expected):
     为什么钉参数名而不只钉个数：调用方是**按关键字**调用的
     （`plan(question=..., profile=...)`），名字变了就是破坏契约，
     哪怕位置和个数都一样。
+
+    **2026-10-16 契约更新（不是放宽，也不是产品契约漂移）**：
+    `start_analysis` 多了第三个参数 `user: SessionUser = Depends(require_user)`。
+    原因是这条端点的归属隔离必须拿到当前用户对象才能做
+    （`app/api/routes_analysis.py` 里要 `require_owned_dataset(store.get(...), user.id)`）——
+    而路由级依赖 `app/main.py:319` 的 `_PROTECTED = [Depends(require_user)]` **只保证未登录返 401、
+    拿不到用户对象**，所以必须在端点签名里显式声明。
+    对调用方而言这仍是精确契约：参数名与顺序继续全等比对（`('req','background','user')`），
+    只有 `user` 的默认值改用 `_DEPENDS` 哨兵按**类型**比对（`Depends` 不可用 `==` 比较，
+    它是可变对象且没有重载 __eq__）。
     """
     dotted_module, func_name = target
     func = _resolve(dotted_module, func_name)
     if func is None:
         pytest.skip(f"{dotted_module}.{func_name} 还没写（D4 施工中）")
 
-    actual = [
-        (p.name, p.default) for p in inspect.signature(func).parameters.values()
-    ]
-    assert actual == expected, f"{dotted_module}.{func_name} 签名偏离契约"
+    params = list(inspect.signature(func).parameters.values())
+    # ① 名字与顺序：仍然精确相等（多一个、少一个、换位置都会红）。
+    assert [p.name for p in params] == [name for name, _ in expected], (
+        f"{dotted_module}.{func_name} 参数名/顺序偏离契约"
+    )
+    # ② 默认值：逐个比对，哨兵走类型判定。
+    for param, (name, want) in zip(params, expected):
+        assert _default_matches(param.default, want), (
+            f"{dotted_module}.{func_name} 的参数 {name!r} 默认值偏离契约："
+            f"期望 {want!r}，实际 {param.default!r}"
+        )
 
 
 def test_run_workflow_returns_none_and_does_not_import_fastapi():

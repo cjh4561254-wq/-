@@ -47,13 +47,15 @@ import re
 from datetime import datetime, timezone
 from enum import Enum
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app import config
+from app.api.ownership import require_owned_history, require_owned_workflow
 from app.core import registry
 from app.core.archive import archive_if_terminal
+from app.core.auth import SessionUser, require_user
 from app.data.history import HistoryRecord, get_history_store
 from app.errors import AppError
 from app.schemas import ApiError, ApiResponse, ErrorCode
@@ -152,6 +154,7 @@ class HistoryDetailData(BaseModel):
     report: FinalReport | None = None
 
 
+# **:158** `def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:`
 def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:
     """字符串 → 枚举，**认不出来就原样保留字符串**（降级，不抛异常）。
 
@@ -163,8 +166,9 @@ def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:
     只在字符串这种**历史文本**上使用；值来自内部常量时不要用。
     取证与影响面见 `docs/HISTORY_ROBUSTNESS.md`。
     """
-    # **:155** `def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:`
     # 行号锚点：由 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块 + `scripts/check_docs.py` 共同核对。
+    # 声明写在**被锚定的那一行**上（`scripts/check_docs.py::collect_line_anchors` 会把
+    # 引文和目标行的实际内容逐字比对），所以函数签名那行才带行尾注释。
     try:
         return enum_cls(raw)
     except ValueError:
@@ -175,8 +179,8 @@ def _coerce_enum(enum_cls: type[Enum], raw: str) -> Enum:
 
 
 
+# **:183** `def _parse_report(raw: str) -> FinalReport | None:`
 def _parse_report(raw: str) -> FinalReport | None:
-    # **:178** `def _parse_report(raw: str) -> FinalReport | None:`
     """归档的 `report_text` → `FinalReport`，**坏数据不抛异常、降级成 `None`**。
 
     这是第三处同类降级（前两处是 `status` / `error_code`，见 `_coerce_enum`）：
@@ -211,14 +215,14 @@ def _item_from_record(record: HistoryRecord) -> HistoryItem:
     return HistoryItem(
         workflow_id=record.workflow_id,
         question=record.question,
-        # **:215** `        status=_coerce_enum(WorkflowStatus, record.status),`  ^{用例覆盖 test_one_bad_row_no_longer_poisons_the_listing}
+        # **:219** `status=_coerce_enum(WorkflowStatus, record.status),`  ^{用例覆盖 test_one_bad_row_no_longer_poisons_the_listing}
         status=_coerce_enum(WorkflowStatus, record.status),
         created_at=record.created_at,
         finished_at=record.finished_at,
         has_report=record.has_report,
         llm_used=record.llm_used,
         error_code=(
-            # **:222** `            _coerce_enum(ErrorCode, record.error_code)`  ^{用例覆盖 test_one_bad_error_code_no_longer_poisons_the_listing}
+            # **:226** `_coerce_enum(ErrorCode, record.error_code)`  ^{用例覆盖 test_one_bad_error_code_no_longer_poisons_the_listing}
             _coerce_enum(ErrorCode, record.error_code)
             if record.error_code is not None
             else None
@@ -237,11 +241,17 @@ def _item_from_record(record: HistoryRecord) -> HistoryItem:
 def list_history(
     limit: int = Query(20, ge=1, le=100, description="每页条数，1–100"),
     offset: int = Query(0, ge=0, description="从第几条开始，从 0 起"),
+    user: SessionUser = Depends(require_user),
 ) -> ApiResponse[HistoryListData]:
-    """接口 9：分页读归档库（新→旧）。
+    """接口 9：分页读归档库（新→旧），**只读当前登录用户自己的记录**。
 
     排序在库里定死（`finished_at DESC NULLS LAST, created_at DESC`），接口层不再排：
     分页 + 内存排序是经典的错位来源（每页各自排一遍，跨页顺序就乱了）。
+
+    `owner_user_id` 必须传给 `list_recent` / `count` 两个方法，**不能只传给其中一个**：
+    列表按 owner 过滤、而 `total` 仍算全库的话，"看到 3 条、却显示总数 50" 就等于
+    把别人的数据量泄露出去（用户能据此推断系统里有多少不属于自己的东西）。
+    数据层的过滤是主防线，`require_owned_history`（详情用）是第二道 —— 两道都要在。
 
     归档关闭（`DB_PATH` 为空）→ `enabled=False` + 空列表 + **HTTP 200**：
     用户关掉了一个功能，不是他请求错了（对比接口 7 的"报告没生成"是 400：
@@ -257,16 +267,15 @@ def list_history(
             error=None,
         )
 
-    records = store.list_recent(limit=limit, offset=offset)
+    records = store.list_recent(limit=limit, offset=offset, owner_user_id=user.id)
     return ApiResponse[HistoryListData](
         ok=True,
         data=HistoryListData(
-            # **:268** `            items=[_item_from_record(record) for record in records],`
-            # ^{用例覆盖 test_one_bad_row_no_longer_poisons_the_listing}
             # 行号锚点：见 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块，
-            # 由 `scripts/check_docs.py` 核对。
+            # 由 `scripts/check_docs.py` 核对。声明写在被锚定的那一行上。
+            # **:277** `items=[_item_from_record(record) for record in records],`  ^{用例覆盖 test_one_bad_row_no_longer_poisons_the_listing}
             items=[_item_from_record(record) for record in records],
-            total=store.count(),
+            total=store.count(owner_user_id=user.id),
             limit=limit,
             offset=offset,
             enabled=True,
@@ -280,7 +289,9 @@ def list_history(
     response_model=ApiResponse[HistoryDetailData],
     summary="查询历史归档详情",
 )
-def get_history_detail(workflow_id: str) -> ApiResponse[HistoryDetailData]:
+def get_history_detail(
+    workflow_id: str, user: SessionUser = Depends(require_user)
+) -> ApiResponse[HistoryDetailData]:
     """接口 10：读一条归档记录，并把当时的报告还原出来。
 
     报告是从 `record.report_text`（归档时 `FinalReport.model_dump_json()` 的产物）
@@ -290,34 +301,33 @@ def get_history_detail(workflow_id: str) -> ApiResponse[HistoryDetailData]:
 
     查不到 → 404。注意这里**不会**去 `registry` 里找（§8.3.1 禁止 fallback 复活）：
     重启后内存是空的，而历史记录还在 —— 这正是归档存在的理由。
+
+    **别人的记录也是 404，文案与自己输错 id 逐字相同**（"没有归档记录"）：
+    用 403 就等于承认"这条记录存在"，可以拿来枚举系统里有哪些工作流。
+    查询用的是 `get_for_user(workflow_id, user.id)`（数据层过滤，别人的行根本不进
+    内存），外面再套一次 `require_owned_history`（第二道防线，防的是将来有人把
+    数据层的过滤改掉）。文案与 detail 由 `app/api/ownership.py` 统一提供 ——
+    这个文件里不允许再出现第二份"没有归档记录"的字符串。
     """
     store = get_history_store()
-    record = store.get(workflow_id) if store is not None else None
-    if record is None:
-        raise AppError(
-            ErrorCode.NOT_FOUND,
-            "没有归档记录",
-            detail=(
-                "这条工作流没有归档记录：归档库只保存跑到终态的工作流，"
-                "服务重启后仍在进行中的工作流不会留下历史。"
-            ),
-        )
+    record = (
+        store.get_for_user(workflow_id, user.id) if store is not None else None
+    )
+    record = require_owned_history(record, user.id)
 
     report = (
-        # **:311** `        _parse_report(record.report_text)`
-        # ^{用例覆盖 test_a_bad_report_text_no_longer_breaks_the_detail_endpoint}
         # 行号锚点：见 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块，
         # 由 `scripts/check_docs.py` 核对。
+        # **:322** `_parse_report(record.report_text)`  ^{用例覆盖 test_a_bad_report_text_no_longer_breaks_the_detail_endpoint}
         _parse_report(record.report_text)
         if record.report_text is not None
         else None
     )
     return ApiResponse[HistoryDetailData](
         ok=True,
-        # **:321** `        data=HistoryDetailData(item=_item_from_record(record), report=report),`
-        # ^{用例覆盖 test_a_bad_report_text_no_longer_breaks_the_detail_endpoint}
         # 行号锚点：见 `docs/HISTORY_ROBUSTNESS.md` 的「行号锚点」块，
         # 由 `scripts/check_docs.py` 核对。
+        # **:331** `data=HistoryDetailData(item=_item_from_record(record), report=report),`  ^{用例覆盖 test_a_bad_report_text_no_longer_breaks_the_detail_endpoint}
         data=HistoryDetailData(item=_item_from_record(record), report=report),
         error=None,
     )
@@ -328,27 +338,23 @@ def get_history_detail(workflow_id: str) -> ApiResponse[HistoryDetailData]:
     response_model=ApiResponse[WorkflowStatusData],
     summary="查询工作流状态",
 )
-def get_workflow(workflow_id: str) -> ApiResponse[WorkflowStatusData]:
+def get_workflow(
+    workflow_id: str, user: SessionUser = Depends(require_user)
+) -> ApiResponse[WorkflowStatusData]:
     """接口 6：给前端轮询用的小状态（**故意不含 `report` / `results`**）。
 
     `workflow_id` 不合法（比如只有 8 位）时**不单独报错**：它不可能在注册表里，
     自然走下面的 404。多写一条"格式不对"的分支，只是多一个要维护的错误消息。
+
+    别人的工作流同样是 404"工作流不存在"：两条分支（没登记过 / 不属于你）走
+    `require_owned_workflow` 这一个函数，响应逐字相同，无法被用来枚举 id。
 
     响应体用 `WorkflowStatusData.from_state()` 生成，**不自己拼 dict**：
     那个方法已经处理了两个容易错的点 —— 只抄前端要的字段、以及现场算
     `has_report = state.report is not None`（派生值不抄 `state.has_report`，
     免得某个分支只设了 report 忘了同步）。
     """
-    state = registry.get(workflow_id)
-    if state is None:
-        raise AppError(
-            ErrorCode.NOT_FOUND,
-            "工作流不存在",
-            # detail 不回显 workflow_id：它是路径里来的、长度不受控，
-            # 回显等于把用户输入原样写进响应体；而且这句话本身已经说清了原因。
-            detail="这个 workflow_id 没有登记过。工作流状态存在服务进程的内存里，服务重启后全部丢失。",
-        )
-
+    state = require_owned_workflow(registry.get(workflow_id), user.id)
     # 轮询是"发现卡死"的唯一时机：没有任何定时器在后台扫，只有人来问的时候才检查。
     _expire_if_stale(state)
 
@@ -364,22 +370,21 @@ def get_workflow(workflow_id: str) -> ApiResponse[WorkflowStatusData]:
     response_model=ApiResponse[ReportData],
     summary="获取分析报告",
 )
-def get_report(workflow_id: str) -> ApiResponse[ReportData]:
+def get_report(
+    workflow_id: str, user: SessionUser = Depends(require_user)
+) -> ApiResponse[ReportData]:
     """接口 7：取完整报告（报告可能很大，所以单独一个接口，不塞进轮询）。
 
     两条分支必须分得开：
-        - 工作流不存在 → **404**（资源不存在）；
+        - 工作流不存在（**含"是别人的"**）→ **404**（资源不存在）；
         - 工作流在、报告还没生成 → **400**（请求的时机不对）。
     这也是前端唯一的判断依据：400 就继续轮询，404 就说明这个 id 彻底没救了。
-    """
-    state = registry.get(workflow_id)
-    if state is None:
-        raise AppError(
-            ErrorCode.NOT_FOUND,
-            "工作流不存在",
-            detail="这个 workflow_id 没有登记过。工作流状态存在服务进程的内存里，服务重启后全部丢失。",
-        )
 
+    归属判定必须在"报告有没有生成"**之前**：反过来的话，一条不属于你的工作流
+    会先回 400（"等它跑完再来取"）—— 那就等于告诉你"这个 id 是真的、只是还没好"，
+    403 想避免的枚举漏洞从 400 这里又漏回来了。
+    """
+    state = require_owned_workflow(registry.get(workflow_id), user.id)
     # 用 `state.report is None` 判断，而不是 `state.has_report`：
     # 与 `WorkflowStatusData.from_state()` 保持同一个事实来源（§7.1 第 3 条）。
     # 这样"接口 6 说 has_report=true，接口 7 却给 400"这种自相矛盾不可能出现。
@@ -408,7 +413,9 @@ def get_report(workflow_id: str) -> ApiResponse[ReportData]:
     response_class=FileResponse,
     summary="获取图表 PNG",
 )
-def get_chart(workflow_id: str, filename: str) -> FileResponse:
+def get_chart(
+    workflow_id: str, filename: str, user: SessionUser = Depends(require_user)
+) -> FileResponse:
     """接口 8：按文件名把 PNG 送回去。
 
     路径参数为什么是 `{filename:path}` 而不是 `{filename}`
@@ -426,6 +433,10 @@ def get_chart(workflow_id: str, filename: str) -> FileResponse:
 
     顺序上先校验格式、再查注册表：`abc.png` 无论问哪条工作流都是"请求写错了"，
     报 400 比报 404 更准确（400 与 404 的语义见模块 docstring）。
+
+    归属判定是**第三道**防线，位置在格式校验之后、读文件之前：
+    PNG 是磁盘上的真实文件，而文件名由 `workflow_id` 决定 ——
+    不判归属的话，知道（或猜到）别人 workflow_id 的人就能直接下走他的图。
     """
     if not _WORKFLOW_ID_PATTERN.match(workflow_id) or not _CHART_FILENAME_PATTERN.match(
         filename
@@ -436,12 +447,7 @@ def get_chart(workflow_id: str, filename: str) -> FileResponse:
             detail="workflow_id 必须是 32 位小写十六进制，文件名必须是 12 位小写十六进制加 .png。",
         )
 
-    if registry.get(workflow_id) is None:
-        raise AppError(
-            ErrorCode.NOT_FOUND,
-            "工作流不存在",
-            detail="这个 workflow_id 没有登记过。工作流状态存在服务进程的内存里，服务重启后全部丢失。",
-        )
+    require_owned_workflow(registry.get(workflow_id), user.id)
 
     charts_dir = config.get_settings().charts_path
     target = (charts_dir / workflow_id / filename).resolve()

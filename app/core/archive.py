@@ -69,6 +69,12 @@ def build_record(state: WorkflowState) -> HistoryRecord:
         report_text=report.model_dump_json() if report is not None else None,
         error_code=state.error.code.value if state.error is not None else None,
         archived_at=archived_at,
+        # 归属**原样抄过来**，不在这里做任何"猜"：没有归属就写 NULL。
+        # 为什么不给没有归属的记录补一个 owner（比如"归档时唯一存在的那个用户"）：
+        # 补出来的归属会把本该谁也看不见的记录变成某个人可见 ——
+        # 归档是**旁路**，它没有资格决定"这条数据属于谁"。
+        owner_user_id=state.owner_user_id,
+        owner_username=state.owner_username,
     )
 
 

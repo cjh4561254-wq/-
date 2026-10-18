@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN" data-auth-mode="pending">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- 内部工作台的入口，不是营销落地页，不该进搜索引擎。 -->
+  <meta name="robots" content="noindex, nofollow">
+  <title>登录 · AI 市场情报与智能分析平台</title>
+  <!-- 用 data URI 空图标而不是新增图标文件：app/web/ 的文件名是白名单**全等**断言，多一个文件就红。 -->
+  <link rel="icon" href="data:,">
+  <!--
+    tokens.css 必须排在 login.css 之前：它是唯一的令牌来源，login.css 只消费不定义。
+    本文件不含任何绝对网址（协议前缀 + 域名），注释里也不写——前端源码有纯文本扫描。
+    内联 SVG 不需要 xmlns：HTML 解析器会把它放进 SVG 命名空间。
+    方案 05（Stripe 金融科技流体）：左侧深墨 mesh 品牌面板 + 右侧白卡表单。
+  -->
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/login.css">
+</head>
+<body class="auth">
+  <!--
+    跳转链接：键盘用户第一个 Tab 就能跳过品牌区直达表单。
+    默认位移出屏（不是 display:none），获得焦点时才显形；目标输入框可聚焦。
+  -->
+  <a class="skip" id="skip-link" href="#username">跳到登录表单</a>
+
+  <main class="auth__shell">
+    <!-- ========================= 左：品牌面板（深墨 + mesh 光斑） ========================= -->
+    <section class="brand" aria-label="产品与能力简介">
+      <div class="brand__top">
+        <span class="brand__mark" aria-hidden="true">
+          <!-- 品牌符号：三段柱状数据 + 一条上行折线 =「数据 → 决策」。纯几何图形，不引外部图片。 -->
+          <svg viewBox="0 0 28 28" focusable="false">
+            <rect class="mark__bar" x="3" y="16" width="4" height="9" rx="1"></rect>
+            <rect class="mark__bar" x="10" y="11" width="4" height="14" rx="1"></rect>
+            <rect class="mark__bar" x="17" y="7" width="4" height="18" rx="1"></rect>
+            <path class="mark__line" d="M4 13 L11 8 L18 4 L25 2"></path>
+            <circle class="mark__dot" cx="25" cy="2" r="2.2"></circle>
+          </svg>
+        </span>
+        <span class="brand__wordmark">
+          <!-- 中文全称是主显，英文产品名降为次要行（标签页标题、主张句一律中文）。 -->
+          <span class="brand__name">AI 市场情报与智能分析平台</span>
+          <span class="brand__name-en">AI Market Intelligence Studio</span>
+        </span>
+      </div>
+
+      <div class="brand__hero">
+        <p class="brand__kicker">MARKET INTELLIGENCE, REIMAGINED</p>
+        <p class="brand__claim">把市场数据，变成能追溯的决策依据</p>
+        <p class="brand__lede">计算与撰写都在服务端完成，页面只呈现真实结果：一份读得懂的分析报告，和报告里对得上的数字。</p>
+      </div>
+
+      <!--
+        两条能力事实，都对着真实的后端能力写，没有任何编造的业务数字：
+        六个阶段名取自后端 orchestrator 的 _STEPS；角标口径是报告的 citations（每次工具调用一条记录）。
+        措辞刻意留窄——只说"数字能追回到取数调用"，不说"每一步都可回溯"。
+      -->
+      <ul class="brand__facts">
+        <li class="fact">
+          <span class="fact__title">六段流水线</span>
+          <span class="fact__text">读取数据 → 制定计划 → 计算 → 生成图表 → 撰写报告 → 校验数字，六个阶段依次在服务端执行。</span>
+        </li>
+        <li class="fact">
+          <span class="fact__title">数字可核对</span>
+          <span class="fact__text">报告里每个数字都能追回到具体工具调用，正文角标就是那次调用。</span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- ========================= 右：画布上的白卡表单 ========================= -->
+    <section class="panel">
+      <div class="panel__inner">
+        <!--
+          表单从一开始就在（可填、可聚焦），只有提交按钮在"状态未知"期间是禁用的加载态。
+          先画一个可能是错的骨架再替换，会在用户打字打一半时换掉输入框；
+          "能填、还不能交"既没有骗人，也没把人挡在门外。
+        -->
+        <p class="eyebrow" data-mode="bootstrap">首次部署</p>
+        <h1 class="panel__title" data-mode="login">欢迎回来</h1>
+        <h1 class="panel__title" data-mode="bootstrap">创建第一个管理员</h1>
+        <p class="panel__lead" data-mode="login">登录你的分析工作台，继续未完成的分析。</p>
+        <p class="panel__lead" data-mode="bootstrap">这个部署还没有任何账号，第一个管理员由你在这里设定；创建成功后这个入口不会再出现。</p>
+
+        <!-- 信息级提示（role=status）：与下面的错误分开，"会话过期"这类说明不跟"密码错了"抢同一个播报通道。 -->
+        <div class="notice" id="notice" role="status" aria-live="polite" hidden>
+          <span class="notice__mark" aria-hidden="true"></span>
+          <p class="notice__text" id="notice-text"></p>
+        </div>
+
+        <!--
+          错误区：role=alert + aria-live=assertive，出错立刻被读出；tabindex=-1 让服务端错误发生时
+          能把焦点移进来（键盘用户不用重新找）。用 hidden 而不是 display 切换：读屏不会读一个 hidden 的空盒子。
+          里面的 #alert-detail 单独标 aria-live="off"：429 倒计时每秒改这一行，
+          不关掉的话读屏会被"还有 299 秒…298 秒…"念满五分钟。
+        -->
+        <div class="alert" id="alert" role="alert" aria-live="assertive" tabindex="-1" hidden>
+          <svg class="alert__icon alert__icon--warn" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M8 1.6 L15 14 L1 14 Z"></path>
+            <path d="M8 6 L8 10"></path>
+            <circle cx="8" cy="12.1" r="0.9"></circle>
+          </svg>
+          <svg class="alert__icon alert__icon--info" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="6.6"></circle>
+            <path d="M8 7.2 L8 11.4"></path>
+            <circle cx="8" cy="4.7" r="0.9"></circle>
+          </svg>
+          <div class="alert__body">
+            <p class="alert__title" id="alert-title"></p>
+            <p class="alert__detail" id="alert-detail" aria-live="off" hidden></p>
+            <!-- 重试是文字级按钮，不是第二个主按钮：主按钮全页只有一个（提交）。 -->
+            <button class="alert__retry" id="alert-retry" type="button" hidden>重试</button>
+          </div>
+        </div>
+
+        <form class="form" id="auth-form" novalidate tabindex="-1">
+          <!-- 用户名：登录与首次部署共用。autocomplete=username，密码管理器才能正确归档。 -->
+          <div class="field">
+            <label class="field__label" for="username">账号 / 用户名</label>
+            <input class="input" id="username" name="username" type="text" required
+                   maxlength="64" spellcheck="false" autocapitalize="none" autocomplete="username"
+                   aria-describedby="username-hint">
+            <p class="field__hint" id="username-hint"
+               data-hint-login="输入工作台的用户名。本期不支持用邮箱登录。"
+               data-hint-bootstrap="3–32 位，以字母或数字开头，可用字母、数字、下划线、点和连字符。"></p>
+            <p class="field__error" id="username-error" hidden>
+              <svg class="field__error-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <circle cx="8" cy="8" r="6.6"></circle>
+                <path d="M8 4.8 L8 8.6"></path>
+                <circle cx="8" cy="11.1" r="0.9"></circle>
+              </svg>
+              <span class="field__error-text"></span>
+            </p>
+          </div>
+
+          <!-- 显示名称：只在首次部署出现，对应后端 bootstrap 的真实可选字段 display_name。 -->
+          <div class="field" data-mode="bootstrap">
+            <label class="field__label" for="display-name">显示名称<span class="field__optional">（可选）</span></label>
+            <input class="input" id="display-name" name="display_name" type="text"
+                   maxlength="64" autocomplete="name" aria-describedby="display-name-hint">
+            <p class="field__hint" id="display-name-hint">留空时，显示名称就用用户名。</p>
+          </div>
+
+          <!-- 密码：type 在 password / text 之间真实切换，切换按钮带 aria-pressed。 -->
+          <div class="field">
+            <label class="field__label" for="password">密码</label>
+            <div class="field__control">
+              <input class="input input--with-action" id="password" name="password" type="password" required
+                     maxlength="128" autocomplete="current-password" aria-describedby="password-hint">
+              <button class="reveal" id="toggle-password" type="button"
+                      aria-pressed="false" aria-controls="password"
+                      aria-label="显示密码" title="显示密码">
+                <svg class="reveal__icon reveal__icon--show" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <path d="M1.4 10 C4 5.2 7 3 10 3 C13 3 16 5.2 18.6 10 C16 14.8 13 17 10 17 C7 17 4 14.8 1.4 10 Z"></path>
+                  <circle cx="10" cy="10" r="2.6"></circle>
+                </svg>
+                <svg class="reveal__icon reveal__icon--hide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <path d="M1.4 10 C4 5.2 7 3 10 3 C13 3 16 5.2 18.6 10 C16 14.8 13 17 10 17 C7 17 4 14.8 1.4 10 Z"></path>
+                  <circle cx="10" cy="10" r="2.6"></circle>
+                  <path d="M3 17 L17 3"></path>
+                </svg>
+              </button>
+            </div>
+            <p class="field__hint" id="password-hint"
+               data-hint-login="密码只发给服务端校验，本页不保存密码。"
+               data-hint-bootstrap="至少 8 位，且同时包含字母和数字。"></p>
+            <p class="field__error" id="password-error" hidden>
+              <svg class="field__error-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <circle cx="8" cy="8" r="6.6"></circle>
+                <path d="M8 4.8 L8 8.6"></path>
+                <circle cx="8" cy="11.1" r="0.9"></circle>
+              </svg>
+              <span class="field__error-text"></span>
+            </p>
+          </div>
+
+          <!--
+            记住账号 + 忘记密码：只在登录形态出现（首次部署时没有"账号记忆"这回事）。
+            记住账号只把用户名写进 localStorage，密码永远不进任何客户端存储；
+            忘记密码本期没有自助重置，所以它是"展开说清楚"，不是一个点进去就断的假链接。
+          -->
+          <div class="remember" data-mode="login">
+            <label class="check" for="remember-account">
+              <input type="checkbox" id="remember-account" name="remember_account">
+              <span class="check__label">记住账号</span>
+            </label>
+            <details class="forgot">
+              <summary class="forgot__summary">忘记密码？</summary>
+              <p class="forgot__text">本期未实现自助重置：请联系部署管理员在服务端重置密码，重置后回到本页登录。密码不会通过本页或邮件找回。</p>
+            </details>
+          </div>
+
+          <!--
+            确认密码：只在创建密码时出现（登录不需要，别让人白敲一遍）。
+            它只是本地校验——后端 bootstrap 没有这个字段，所以它**不进请求体**（见 login.js 的 submit）。
+          -->
+          <div class="field" data-mode="bootstrap">
+            <label class="field__label" for="password-confirm">确认密码</label>
+            <input class="input" id="password-confirm" name="password_confirm" type="password" required
+                   maxlength="128" autocomplete="new-password" aria-describedby="password-confirm-hint">
+            <p class="field__hint" id="password-confirm-hint">再输入一次，避免手误。这一项只在本地比对，服务端收到的请求里没有它。</p>
+            <p class="field__error" id="password-confirm-error" hidden>
+              <svg class="field__error-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <circle cx="8" cy="8" r="6.6"></circle>
+                <path d="M8 4.8 L8 8.6"></path>
+                <circle cx="8" cy="11.1" r="0.9"></circle>
+              </svg>
+              <span class="field__error-text"></span>
+            </p>
+          </div>
+
+          <!--
+            提交按钮：加载态同时用文案、转圈、aria-busy + disabled 三样表达——
+            只靠转圈表达"在忙"，对读屏用户等于没有状态。
+            初始 disabled：在 /api/health 与 /api/auth/me 回来之前，没人知道该发登录还是发初始化。
+          -->
+          <button class="submit" id="submit" type="submit" disabled
+                  aria-busy="false" aria-describedby="submit-reason">
+            <span class="spinner" aria-hidden="true"></span>
+            <span class="submit__text" data-mode="login">登录</span>
+            <span class="submit__text" data-mode="bootstrap">创建管理员并进入</span>
+            <span class="submit__text submit__text--busy" id="submit-busy-text">登录中…</span>
+          </button>
+
+          <!--
+            按钮为什么是灰的，写在按钮正下方并挂在 aria-describedby 上，
+            而不是让人对着一颗灰按钮猜（未加载完 / 读不到账号状态 / 倒计时中 / 提交进行中 / 输入不合规）。
+          -->
+          <p class="submit__reason" id="submit-reason" role="status" tabindex="-1" hidden></p>
+
+          <!--
+            第三方登录：三个按钮是**设计占位**，本期后端没有 OAuth/SSO 接入，
+            所以全部 disabled 并在下面用一句话说清楚，点了也不会发请求——不做假跳转。
+          -->
+          <div class="oauth" data-mode="login">
+            <p class="oauth__divider"><span>或使用以下方式</span></p>
+            <div class="oauth__btns">
+              <button class="oauth__btn" type="button" disabled aria-disabled="true">
+                <svg class="oauth__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <path d="M10 2 L17 5.2 V10 C17 13.6 14.2 16.6 10 18 C5.8 16.6 3 13.6 3 10 V5.2 Z"></path>
+                  <path d="M6.8 10.2 L9.2 12.6 L13.4 7.8"></path>
+                </svg>
+                企业 SSO
+              </button>
+              <button class="oauth__btn" type="button" disabled aria-disabled="true">
+                <svg class="oauth__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <circle cx="10" cy="10" r="7.4"></circle>
+                  <path d="M2.6 10 H17.4"></path>
+                  <path d="M10 2.6 C12.6 5 13.8 7.4 13.8 10 C13.8 12.6 12.6 15 10 17.4 C7.4 15 6.2 12.6 6.2 10 C6.2 7.4 7.4 5 10 2.6 Z"></path>
+                </svg>
+                Google
+              </button>
+              <button class="oauth__btn" type="button" disabled aria-disabled="true">
+                <svg class="oauth__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <path d="M10 3.2 C6.4 3.2 3.6 5.6 3.6 8.6 C3.6 10.4 4.7 12 6.4 13 L5.8 16.2 L9 14.6 C9.3 14.7 9.7 14.7 10 14.7 C13.6 14.7 16.4 12.2 16.4 8.9 C16.4 5.8 13.6 3.2 10 3.2 Z"></path>
+                  <circle cx="7.2" cy="8.6" r="0.9"></circle>
+                  <circle cx="10" cy="8.6" r="0.9"></circle>
+                  <circle cx="12.8" cy="8.6" r="0.9"></circle>
+                </svg>
+                微信
+              </button>
+            </div>
+            <p class="oauth__note">第三方登录尚未接入：按钮为设计占位，点击不会发起任何请求。</p>
+          </div>
+        </form>
+
+        <!-- 服务自检里与本页直接相关的两个真实字段（llm_configured / upload_dir_ready）：
+             它们是"部分能力不可用但产品仍然可用"，所以是信息级提示，不是错误。 -->
+        <div class="notice" id="env-notice" role="status" hidden>
+          <span class="notice__mark" aria-hidden="true"></span>
+          <p class="notice__text" id="env-text"></p>
+        </div>
+
+        <footer class="panel__foot">
+          <!-- 边界说明是"这一期真没做的东西"，不是操作路径，所以折叠但摘要常显：
+               四条全展开会把卡片撑高，在 1024×768 上把主按钮顶出视口。 -->
+          <details class="foot__details" id="foot-details">
+            <summary class="foot__summary">本期边界（如实说明）：密码重置、第三方登录与多账号注册尚未实现</summary>
+            <ul class="foot__list">
+              <li><strong>密码重置、第三方登录与多账号注册尚未实现</strong>，所以本页只有说明、没有可用入口；「记住账号」只在本机保存用户名。</li>
+              <li>会话有效期由服务端下发（当前为 8 小时）；会话凭证只放在服务端设置的 Cookie 里，页面脚本读不到原文，也不保存密码。</li>
+              <li>退出登录在应用内的账号菜单里，退出后本页可再次使用。</li>
+              <li data-mode="bootstrap">首次部署入口只在账号库为空时出现，创建成功后会自动消失。</li>
+            </ul>
+          </details>
+          <p class="foot__meta" id="foot-meta">
+            <a class="foot__link" href="/docs">接口文档</a>
+            <span class="foot__dot" aria-hidden="true">·</span>
+            <span id="foot-next" data-mode="login" hidden>登录成功后将返回 <code class="code" id="next-target">/app</code></span>
+          </p>
+        </footer>
+      </div>
+
+      <noscript>
+        <div class="alert alert--static" role="alert">
+          <svg class="alert__icon alert__icon--warn" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M8 1.6 L15 14 L1 14 Z"></path>
+            <path d="M8 6 L8 10"></path>
+            <circle cx="8" cy="12.1" r="0.9"></circle>
+          </svg>
+          <div class="alert__body">
+            <p class="alert__title">本页需要开启 JavaScript</p>
+            <p class="alert__detail">登录状态检查、登录和首次部署都要由本页脚本调用服务端认证接口。请在浏览器设置里允许 JavaScript，然后重新打开本页。</p>
+          </div>
+        </div>
+      </noscript>
+    </section>
+  </main>
+
+  <script src="/static/login.js" defer></script>
+</body>
+</html>

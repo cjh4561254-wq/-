@@ -1,0 +1,1778 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案 06 · 现代 SaaS 工作台 · 市场情报与智能分析平台</title>
+<style>
+/* 设计底座 —— 方案 06「现代 SaaS 工作台」
+   坐标：顶部一级导航 + 页内二级 Tab；首屏是「待办 → 最近运行 → 数据集」三个模块分区；密度中；亮色。
+   立场：高频操作路径最短。所以第一屏不摆指标墙、不摆会话流，只回答「现在该做什么、点哪里」。
+   待办不是任务系统：每一条都由 GET /api/health、GET /api/datasets、GET /api/workflows/* 的字段推导，推导表写在 option-06.md 第 7 节。
+   层级只用一条 56px 导航 + 一条 32px 状态条 + 分区 1px 分隔线建立；全站零渐变、零发光，阴影只允许出现在下拉层。
+   密度三档（行高 32 / 40 / 48）是纯前端偏好，只存 localStorage；服务端没有记住用户偏好的接口，所以界面不这样声称。
+   色彩纪律：中性灰承担约九成画面，品牌蓝只做三件事——当前在哪、可以点、正在跑；状态色板与图表色板分家，互不挪用。
+   灰阶只用三级正文色（ink-1/2/3），三档都要在任意背景上 ≥4.5:1；ink-4 一律不承载正文，只用于图标与不可用控件。
+*/
+:root{
+  --page:#F4F6F9; --surface:#FFFFFF; --surface-2:#FAFBFD; --surface-3:#EEF2F7;
+  --line:#E2E7EE; --line-2:#CBD5E0;
+  /* ink-1..3 承担所有文字；实测 ink-3 在最深的次级底 #EEF2F7 上仍有 5.05:1。
+     ink-4 只允许出现在非文字与豁免场景（禁用态文案、装饰字形），因为任何 ≥4.5:1 的灰都必然贴近 ink-3。 */
+  --ink-1:#16202B; --ink-2:#3F4C5B; --ink-3:#5B6878; --ink-4:#8A97A6;
+  --brand:#1F5FD1; --brand-hover:#184EB0; --brand-active:#14418F; --brand-tint:#EAF1FD; --brand-line:#C3D6F6;
+  --st-ok:#1B7A4B; --st-ok-bg:#E9F5EF; --st-warn:#8F6200; --st-warn-bg:#FFF4DE;
+  --st-err:#B3261E; --st-err-bg:#FCEBEA; --st-run:#1F5FD1; --st-run-bg:#EAF1FD; --st-idle:#5B6878; --st-idle-bg:#EFF2F6;
+  --c1:#2E5C8A; --c2:#14798B; --c3:#6C5B8E; --c4:#4A6C93; --c5:#6F7D8F;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --radius:6px; --radius-sm:4px;
+  --row:40px; --pad:12px; --gap:12px; --fs-body:14px;
+}
+body[data-density="compact"]{ --row:32px; --pad:8px; --gap:8px; --fs-body:13px; }
+body[data-density="loose"]{ --row:48px; --pad:16px; --gap:16px; --fs-body:15px; }
+*{ box-sizing:border-box; }
+html,body{ margin:0; padding:0; }
+body{
+  background:var(--page); color:var(--ink-1);
+  font:var(--fs-body)/1.6 -apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4,p,ul,ol,figure{ margin:0; }
+ul,ol{ padding:0; list-style:none; }
+button,input,select,textarea{ font:inherit; color:inherit; }
+a{ color:inherit; text-decoration:none; }
+:focus-visible{ outline:2px solid var(--brand); outline-offset:2px; }
+[hidden]{ display:none !important; }
+.mono{ font-family:var(--mono); font-size:.86em; }
+.sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+/* ---------- 顶部：一级导航 ---------- */
+.topbar{ position:sticky; top:0; z-index:30; background:var(--surface); border-bottom:1px solid var(--line); }
+.topbar-row{ height:56px; display:flex; align-items:center; gap:20px; padding:0 20px; }
+.brand{ display:flex; align-items:center; gap:10px; flex:0 0 auto; }
+.brand-mark{ width:26px; height:26px; border-radius:var(--radius-sm); background:var(--brand); color:#fff;
+  display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; letter-spacing:.02em; }
+.brand-name{ font-weight:600; font-size:15px; letter-spacing:.01em; }
+.brand-sub{ font-size:12px; color:var(--ink-3); border-left:1px solid var(--line); padding-left:10px; margin-left:2px; }
+.nav{ display:flex; align-items:center; gap:2px; height:100%; }
+.nav-item{ position:relative; height:100%; display:flex; align-items:center; padding:0 14px; color:var(--ink-2);
+  font-size:14px; border-radius:0; }
+.nav-item:hover{ background:var(--surface-3); color:var(--ink-1); }
+.nav-item[aria-current="page"]{ color:var(--brand); font-weight:600; }
+.nav-item[aria-current="page"]::after{ content:""; position:absolute; left:14px; right:14px; bottom:0; height:2px; background:var(--brand); }
+.topbar-end{ margin-left:auto; display:flex; align-items:center; gap:8px; }
+.todo-flag{ display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 10px; border:1px solid var(--brand-line);
+  background:var(--brand-tint); color:var(--brand-active); border-radius:var(--radius-sm); font-size:12px; }
+.user-menu{ position:relative; }
+.user-btn{ display:flex; align-items:center; gap:8px; height:32px; padding:0 10px; background:var(--surface);
+  border:1px solid var(--line-2); border-radius:var(--radius-sm); cursor:pointer; }
+.user-btn:hover{ background:var(--surface-3); }
+.avatar{ width:20px; height:20px; border-radius:var(--radius-sm); background:var(--surface-3); color:var(--ink-2);
+  display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; }
+.menu-pop{ position:absolute; right:0; top:38px; width:280px; background:var(--surface); border:1px solid var(--line-2);
+  border-radius:var(--radius); box-shadow:0 8px 20px rgba(22,32,43,.12); padding:12px; z-index:40; text-align:left; }
+.menu-pop h4{ font-size:12px; color:var(--ink-3); font-weight:600; margin:10px 0 6px; }
+.menu-row{ display:flex; justify-content:space-between; gap:8px; font-size:13px; color:var(--ink-2); padding:3px 0; }
+.pw-form{ display:grid; gap:6px; margin-top:6px; padding:8px; background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm); }
+.pw-form label{ font-size:12px; color:var(--ink-3); }
+
+/* ---------- 顶部：状态条（含数据诚实声明） ---------- */
+.strip{ height:32px; display:flex; align-items:center; gap:12px; padding:0 20px; background:var(--surface-2);
+  border-bottom:1px solid var(--line); font-size:12px; color:var(--ink-3); }
+.strip .badge-honest{ color:var(--ink-2); background:var(--surface-3); border:1px solid var(--line);
+  border-radius:var(--radius-sm); padding:2px 8px; }
+.strip-right{ margin-left:auto; display:flex; align-items:center; gap:14px; }
+.dot{ display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--st-ok); margin-right:5px; }
+.dot.off{ background:var(--st-err); }
+.seg{ display:inline-flex; border:1px solid var(--line-2); border-radius:var(--radius-sm); overflow:hidden; }
+.seg button{ height:22px; padding:0 8px; border:0; border-right:1px solid var(--line-2); background:var(--surface);
+  color:var(--ink-3); font-size:12px; cursor:pointer; }
+.seg button:last-child{ border-right:0; }
+.seg button[aria-pressed="true"]{ background:var(--brand); color:#fff; }
+.proto-label{ color:var(--ink-3); }
+
+/* ---------- 通用控件 ---------- */
+.btn{ display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 14px; border:1px solid var(--line-2);
+  background:var(--surface); color:var(--ink-1); border-radius:var(--radius-sm); cursor:pointer; font-size:14px; }
+.btn:hover{ background:var(--surface-3); }
+.btn.primary{ background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600; }
+.btn.primary:hover{ background:var(--brand-hover); border-color:var(--brand-hover); }
+.btn.primary:active{ background:var(--brand-active); }
+.btn.sm{ height:28px; padding:0 10px; font-size:13px; }
+.btn:disabled{ background:var(--surface-3); border-color:var(--line); color:var(--ink-4); cursor:not-allowed; }
+.link{ color:var(--brand); cursor:pointer; }
+.link:hover{ text-decoration:underline; }
+.field{ display:grid; gap:4px; }
+.field label{ font-size:13px; color:var(--ink-2); font-weight:600; }
+.field .hint{ font-size:12px; color:var(--ink-3); }
+input[type="text"],input[type="password"],select,textarea{
+  background:var(--surface); border:1px solid var(--line-2); border-radius:var(--radius-sm); padding:8px 10px; width:100%; }
+textarea{ resize:vertical; min-height:104px; line-height:1.7; }
+input:focus,select:focus,textarea:focus{ border-color:var(--brand); outline:2px solid var(--brand); outline-offset:1px; }
+.chip{ display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 8px; border-radius:var(--radius-sm);
+  font-size:12px; border:1px solid transparent; white-space:nowrap; }
+.chip i{ width:6px; height:6px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+.chip.ok{ color:var(--st-ok); background:var(--st-ok-bg); border-color:#CFE7DA; }
+.chip.ok i{ border-radius:0; width:7px; height:7px; }
+.chip.warn{ color:var(--st-warn); background:var(--st-warn-bg); border-color:#F0DFB8; }
+.chip.warn i{ clip-path:polygon(50% 0,100% 100%,0 100%); border-radius:0; }
+.chip.err{ color:var(--st-err); background:var(--st-err-bg); border-color:#F2CFCC; }
+.chip.err i{ clip-path:polygon(20% 0,80% 0,100% 100%,0 100%); border-radius:0; }
+.chip.run{ color:var(--st-run); background:var(--st-run-bg); border-color:var(--brand-line); }
+.chip.run i{ animation:beat 1.6s ease-in-out infinite; }
+.chip.idle{ color:var(--st-idle); background:var(--st-idle-bg); border-color:var(--line-2); }
+.chip.idle i{ background:transparent; border:1px solid currentColor; }
+@keyframes beat{ 0%,100%{ opacity:1 } 50%{ opacity:.35 } }
+@keyframes rise{ from{ opacity:0; transform:translateY(6px) } to{ opacity:1; transform:none } }
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; } }
+.tag-src{ font-family:var(--mono); font-size:11px; color:var(--ink-3); background:var(--surface-3);
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:1px 6px; }
+
+/* ---------- 版心 ---------- */
+main{ max-width:1320px; margin:0 auto; padding:20px 20px 56px; }
+.view-head{ display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap; margin-bottom:16px; }
+.view-head h1{ font-size:22px; font-weight:600; letter-spacing:.01em; }
+.view-head .sub{ font-size:13px; color:var(--ink-3); }
+.view-head .end{ margin-left:auto; display:flex; align-items:center; gap:8px; }
+.grid{ display:grid; gap:var(--gap); }
+.grid-main{ grid-template-columns:minmax(0,2fr) minmax(0,1fr); }
+@media (max-width:1080px){ .grid-main{ grid-template-columns:1fr; } }
+.panel{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); margin-bottom:var(--gap); }
+.panel-head{ display:flex; align-items:center; gap:10px; padding:12px var(--pad); border-bottom:1px solid var(--line); }
+.panel-head h2{ font-size:15px; font-weight:600; }
+.panel-head .n{ font-family:var(--mono); font-size:12px; color:var(--ink-3); background:var(--surface-3);
+  border-radius:var(--radius-sm); padding:1px 7px; }
+.panel-head .end{ margin-left:auto; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-3); }
+.panel-body{ padding:var(--pad); }
+.panel-foot{ padding:8px var(--pad); border-top:1px solid var(--line); font-size:12px; color:var(--ink-3); background:var(--surface-2); }
+.hr{ height:1px; background:var(--line); margin:14px 0; }
+.kv{ display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px dashed var(--line); font-size:13px; }
+.kv:last-child{ border-bottom:0; }
+.kv b{ font-weight:600; color:var(--ink-1); }
+.muted{ color:var(--ink-3); }
+.note{ font-size:12px; color:var(--ink-3); line-height:1.7; }
+
+/* ---------- 待办 ---------- */
+.todo{ display:flex; gap:12px; padding:12px var(--pad); border-bottom:1px solid var(--line); align-items:flex-start; }
+.todo:last-child{ border-bottom:0; }
+.todo .shape{ width:22px; height:22px; flex:0 0 auto; display:flex; align-items:center; justify-content:center;
+  border-radius:var(--radius-sm); font-size:12px; font-weight:700; margin-top:1px; }
+.todo[data-p="block"] .shape{ background:var(--st-err-bg); color:var(--st-err); border:1px solid #F2CFCC; }
+.todo[data-p="guide"] .shape{ background:var(--brand-tint); color:var(--brand-active); border:1px solid var(--brand-line); }
+.todo[data-p="follow"] .shape{ background:var(--st-run-bg); color:var(--st-run); border:1px solid var(--brand-line); }
+.todo[data-p="review"] .shape{ background:var(--st-warn-bg); color:var(--st-warn); border:1px solid #F0DFB8; }
+.todo-main{ min-width:0; flex:1; }
+.todo-title{ font-size:var(--fs-body); font-weight:600; }
+.todo-desc{ font-size:13px; color:var(--ink-2); margin-top:2px; }
+.todo-meta{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px; font-size:12px; color:var(--ink-3); }
+.todo-end{ display:flex; align-items:center; gap:8px; flex:0 0 auto; padding-top:2px; }
+.todo[hidden]{ display:none; }
+.todo-empty{ padding:22px var(--pad); display:flex; gap:12px; align-items:flex-start; }
+.todo-empty .glyph{ width:26px; height:26px; border:1px solid var(--line-2); border-radius:var(--radius-sm);
+  color:var(--st-ok); display:flex; align-items:center; justify-content:center; font-size:13px; flex:0 0 auto; }
+
+/* ---------- 表格 ---------- */
+.tbl-wrap{ overflow-x:auto; }
+table{ width:100%; border-collapse:collapse; font-size:13px; }
+th,td{ height:var(--row); padding:0 var(--pad); text-align:left; border-bottom:1px solid var(--line); vertical-align:middle; }
+thead th{ background:var(--surface-2); color:var(--ink-3); font-weight:600; font-size:12px; white-space:nowrap;
+  border-bottom:1px solid var(--line-2); }
+thead th.sortable{ cursor:pointer; }
+thead th.sortable:hover{ color:var(--ink-1); background:var(--surface-3); }
+thead th .car{ color:var(--brand); margin-left:4px; }
+tbody tr:hover{ background:var(--surface-2); }
+td.num{ font-family:var(--mono); text-align:right; }
+.q-cell{ max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row-ops{ display:flex; gap:8px; white-space:nowrap; }
+
+/* 进度：step_index / total_steps 阶梯 */
+.steps{ display:flex; align-items:center; gap:3px; }
+.steps span{ width:14px; height:6px; border-radius:1px; background:var(--surface-3); border:1px solid var(--line-2); }
+.steps span.done{ background:var(--brand); border-color:var(--brand); }
+.steps span.cur{ background:var(--brand-line); border-color:var(--brand); }
+.steps span.fail{ background:var(--st-err); border-color:var(--st-err); }
+.bar{ height:6px; background:var(--surface-3); border-radius:1px; overflow:hidden; }
+.bar i{ display:block; height:100%; background:var(--c1); }
+.bar.thin{ height:4px; }
+.meter{ display:flex; align-items:center; gap:8px; }
+.meter .bar{ flex:1; min-width:60px; }
+.meter .v{ font-family:var(--mono); font-size:12px; color:var(--ink-2); width:52px; text-align:right; }
+
+/* ---------- Tab / Content Switcher / Progress Indicator ---------- */
+.tabs{ display:flex; gap:2px; border-bottom:1px solid var(--line); background:var(--surface);
+  padding:0 var(--pad); margin:0 calc(var(--pad) * -1) var(--gap); }
+.tabs button{ height:38px; padding:0 14px; border:0; background:transparent; color:var(--ink-3); cursor:pointer;
+  font-size:14px; position:relative; }
+.tabs button:hover{ color:var(--ink-1); background:var(--surface-3); }
+.tabs button[aria-selected="true"]{ color:var(--brand); font-weight:600; }
+.tabs button[aria-selected="true"]::after{ content:""; position:absolute; left:0; right:0; bottom:0; height:2px; background:var(--brand); }
+.switcher{ display:inline-flex; border:1px solid var(--line-2); border-radius:var(--radius-sm); overflow:hidden; }
+.switcher button{ height:30px; padding:0 14px; border:0; border-right:1px solid var(--line-2); background:var(--surface);
+  color:var(--ink-2); font-size:13px; cursor:pointer; }
+.switcher button:last-child{ border-right:0; }
+.switcher button[aria-pressed="true"]{ background:var(--brand-tint); color:var(--brand-active); font-weight:600; }
+.switcher button:hover{ background:var(--surface-3); }
+.stepper{ display:flex; gap:0; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); overflow:hidden; }
+.stepper li{ flex:1; padding:10px 12px; border-right:1px solid var(--line); font-size:12px; color:var(--ink-3); background:var(--surface-2); }
+.stepper li:last-child{ border-right:0; }
+.stepper li b{ display:block; font-size:13px; color:var(--ink-2); font-weight:600; margin-top:2px; }
+.stepper li.done{ background:var(--brand-tint); color:var(--brand-active); }
+.stepper li.done b{ color:var(--brand-active); }
+.stepper li.cur{ background:var(--surface); color:var(--brand); border-top:2px solid var(--brand); }
+.stepper li.cur b{ color:var(--brand); }
+.stepper li.fail{ background:var(--st-err-bg); color:var(--st-err); border-top:2px solid var(--st-err); }
+.stepper li.fail b{ color:var(--st-err); }
+.stepper .mark{ font-family:var(--mono); }
+
+/* ---------- 登录 ---------- */
+.login-wrap{ display:grid; grid-template-columns:minmax(0,1fr) 420px; gap:0; min-height:calc(100vh - 88px); margin:-20px -20px 0; }
+@media (max-width:1000px){ .login-wrap{ grid-template-columns:1fr; } }
+.login-aside{ padding:44px 40px; background:var(--surface-2); border-right:1px solid var(--line); }
+.login-aside .mark-lg{ width:34px; height:34px; border-radius:var(--radius-sm); background:var(--brand); color:#fff;
+  display:flex; align-items:center; justify-content:center; font-weight:700; }
+.login-aside h2{ font-size:26px; font-weight:600; line-height:1.4; margin:22px 0 10px; max-width:16em; }
+.login-aside .lead{ color:var(--ink-2); max-width:34em; }
+.pillars{ display:grid; gap:12px; margin:26px 0; max-width:30em; }
+.pillars li{ display:flex; gap:10px; font-size:13px; color:var(--ink-2); }
+.pillars .k{ width:20px; height:20px; flex:0 0 auto; border:1px solid var(--brand-line); background:var(--brand-tint);
+  color:var(--brand-active); border-radius:var(--radius-sm); font-size:11px; display:flex; align-items:center; justify-content:center; }
+.login-side-foot{ margin-top:34px; padding-top:16px; border-top:1px solid var(--line); font-size:12px; color:var(--ink-3); }
+.login-card{ padding:40px 36px; background:var(--surface); }
+.login-card h1{ font-size:20px; font-weight:600; margin-bottom:4px; }
+.login-form{ display:grid; gap:14px; margin-top:20px; max-width:340px; }
+.alert{ border:1px solid; border-radius:var(--radius-sm); padding:10px 12px; font-size:13px; display:flex; gap:10px; }
+.alert b{ font-weight:600; }
+.alert.err{ background:var(--st-err-bg); border-color:#F2CFCC; color:#8E1D17; }
+.alert.warn{ background:var(--st-warn-bg); border-color:#F0DFB8; color:#6E4B00; }
+.alert .g{ font-family:var(--mono); font-weight:700; }
+.mode-note{ font-size:12px; color:var(--ink-3); margin-top:14px; }
+
+/* ---------- 空 / 加载 / 错误 ---------- */
+.empty{ padding:34px 20px; text-align:center; }
+.empty .g{ width:44px; height:44px; margin:0 auto 12px; border:1px solid var(--line-2); border-radius:var(--radius);
+  color:var(--ink-3); display:flex; align-items:center; justify-content:center; font-size:16px; background:var(--surface-2); }
+.empty h3{ font-size:15px; font-weight:600; }
+.empty p{ font-size:13px; color:var(--ink-3); margin:6px auto 14px; max-width:32em; }
+.skel{ height:var(--row); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; padding:0 var(--pad); }
+.skel i{ display:block; height:10px; background:var(--surface-3); border-radius:2px; animation:pulse 1.4s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{ opacity:1 } 50%{ opacity:.45 } }
+.errbox{ border:1px solid #F2CFCC; background:var(--st-err-bg); border-radius:var(--radius-sm); padding:14px;
+  display:flex; gap:12px; align-items:flex-start; }
+.errbox .g{ font-family:var(--mono); font-weight:700; color:var(--st-err); }
+
+/* ---------- 报告 ---------- */
+.report-head{ border-left:3px solid var(--brand); padding-left:14px; }
+.report-title{ font-size:20px; font-weight:600; }
+.report-meta{ display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--ink-3); margin-top:8px; }
+.doc{ max-width:72ch; }
+.doc h3{ font-size:16px; font-weight:600; margin:22px 0 6px; }
+.doc p{ margin:8px 0; color:var(--ink-1); line-height:1.8; }
+.cite{ border:0; background:var(--brand-tint); color:var(--brand-active); font-family:var(--mono); font-size:11px;
+  border-radius:var(--radius-sm); padding:1px 5px; cursor:pointer; vertical-align:super; line-height:1; }
+.cite:hover{ background:var(--brand-line); }
+.srcs li{ padding:8px 10px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--surface-2);
+  margin-bottom:6px; font-size:12px; color:var(--ink-2); }
+.srcs li.flash{ background:var(--brand-tint); border-color:var(--brand-line); }
+.srcs .id{ font-family:var(--mono); color:var(--brand-active); font-weight:700; margin-right:8px; }
+figure{ margin:18px 0; }
+figcaption{ font-size:12px; color:var(--ink-3); margin-top:8px; }
+.legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--ink-2); margin-top:6px; }
+.legend i{ display:inline-block; width:9px; height:9px; border-radius:1px; margin-right:5px; }
+.warn-list li{ display:flex; gap:8px; font-size:13px; padding:6px 0; border-bottom:1px dashed var(--line); color:var(--ink-2); }
+.sev{ font-family:var(--mono); font-size:11px; border-radius:var(--radius-sm); padding:1px 6px; }
+.sev.error{ background:var(--st-err-bg); color:var(--st-err); }
+.sev.warning{ background:var(--st-warn-bg); color:var(--st-warn); }
+.sev.info{ background:var(--st-idle-bg); color:var(--st-idle); }
+
+/* ---------- 其它 ---------- */
+.section-note{ display:flex; gap:8px; font-size:12px; color:var(--ink-3); }
+.split{ display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:var(--gap); }
+@media (max-width:1080px){ .split{ grid-template-columns:1fr; } }
+.mini-title{ font-size:12px; color:var(--ink-3); font-weight:600; letter-spacing:.04em; margin-bottom:8px; }
+.poll{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-3); }
+.poll .ring{ width:10px; height:10px; border:2px solid var(--brand-line); border-top-color:var(--brand); border-radius:50%;
+  animation:spin 1s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg) } }
+.accept{ border:1px solid var(--brand-line); background:var(--brand-tint); border-radius:var(--radius-sm); padding:12px 14px; }
+.accept .code{ font-family:var(--mono); font-weight:700; color:var(--brand-active); }
+.upload-drop{ border:1px dashed var(--line-2); background:var(--surface-2); border-radius:var(--radius); padding:26px; text-align:center; }
+.crumbs{ font-size:12px; color:var(--ink-3); margin-bottom:10px; }
+.crumbs .link{ color:var(--ink-3); }
+.stategrid{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap); }
+@media (max-width:1080px){ .stategrid{ grid-template-columns:1fr; } }
+.legend-tbl td{ font-size:12px; height:auto; padding:6px var(--pad); }
+
+/* ---------- 图表（内联 SVG，图表色板与状态色板互不挪用） ---------- */
+.chart{ display:block; width:100%; height:auto; border:1px solid var(--line); background:var(--surface); border-radius:var(--radius-sm); }
+.chart text{ font-family:var(--mono); fill:var(--ink-3); }
+.chart .axis{ stroke:var(--line-2); stroke-width:1; }
+.chart .grid-line{ stroke:var(--line); stroke-width:1; stroke-dasharray:2 3; }
+.chart-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--gap); }
+@media (max-width:1080px){ .chart-grid{ grid-template-columns:1fr; } }
+.thumb{ border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--surface); padding:8px; }
+.thumb svg{ display:block; width:100%; height:auto; }
+.thumb .cap{ display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--ink-3); margin-top:6px; }
+
+/* ---------- 运行轨道：阶段阶梯 ---------- */
+.ladder{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.ladder .num{ font-family:var(--mono); font-size:13px; color:var(--ink-2); }
+.rail{ display:grid; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
+.rail-row{ display:grid; grid-template-columns:132px minmax(0,1fr) 108px; gap:0; background:var(--surface); padding:9px var(--pad); align-items:center; }
+.rail-row .phase{ font-size:13px; font-weight:600; color:var(--ink-2); }
+.rail-row .raw{ font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+.rail-row[data-s="done"]{ background:var(--brand-tint); }
+.rail-row[data-s="cur"]{ background:var(--surface); box-shadow:inset 3px 0 0 var(--brand); }
+.rail-row[data-s="fail"]{ background:var(--st-err-bg); box-shadow:inset 3px 0 0 var(--st-err); }
+.rail-row[data-s="todo"] .phase{ color:var(--ink-3); font-weight:400; }
+
+/* ---------- 角标弹层：来源详情 ---------- */
+.cite-pop{ position:fixed; z-index:60; width:300px; background:var(--surface); border:1px solid var(--line-2);
+  border-radius:var(--radius); box-shadow:0 10px 24px rgba(22,32,43,.14); padding:12px; font-size:12px; color:var(--ink-2); }
+
+/* ---------- 登录态：收起工作台外壳 ---------- */
+body[data-view="login"] .nav,
+body[data-view="login"] .topbar-end,
+body[data-view="login"] .strip-right{ display:none; }
+body[data-view="login"] main{ padding-top:0; max-width:none; }
+
+/* ---------- 视图切换的位移提示（120ms，只服务于「换页了」这件事） ---------- */
+.view-anim{ animation:rise 140ms ease-out; }
+
+/* ---------- 窄屏：表格转「标签—值」堆叠，整页不横向滚动 ---------- */
+@media (max-width:768px){
+  main{ padding:14px 14px 40px; }
+  .topbar-row{ height:auto; flex-wrap:wrap; padding:10px 14px; gap:10px; }
+  .brand-sub{ display:none; }
+  .strip{ height:auto; flex-wrap:wrap; padding:8px 14px; }
+  .view-head .end{ margin-left:0; }
+  .tbl-wrap{ overflow:visible; }
+  table{ font-size:13px; }
+  thead{ display:none; }
+  table,tbody,tr,td{ display:block; width:100%; }
+  tr{ border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 10px; margin-bottom:8px; background:var(--surface); }
+  tbody tr:hover{ background:var(--surface); }
+  th,td{ height:auto; border-bottom:0; padding:4px 0; display:flex; justify-content:space-between; gap:12px; }
+  td::before{ content:attr(data-label); font-size:12px; color:var(--ink-3); flex:0 0 auto; }
+  td:not([data-label])::before{ content:""; }
+  .q-cell{ max-width:none; white-space:normal; overflow:visible; }
+  .split,.grid-main,.chart-grid{ grid-template-columns:1fr; }
+  .rail-row{ grid-template-columns:1fr; gap:4px; }
+  .login-wrap{ grid-template-columns:1fr; margin:-14px -14px 0; min-height:0; }
+  .login-aside{ display:none; }
+}
+</style>
+</head>
+<body data-view="login" data-density="regular">
+
+<!-- ===================== 顶部一级导航 ===================== -->
+<header class="topbar">
+  <div class="topbar-row">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">MI</div>
+      <div class="brand-name">市场情报与智能分析平台</div>
+      <div class="brand-sub">AI Market Intelligence Studio</div>
+    </div>
+    <nav class="nav" id="mainNav" aria-label="一级导航">
+      <a class="nav-item" href="#/dashboard" data-nav="dashboard">工作台</a>
+      <a class="nav-item" href="#/datasets" data-nav="datasets">数据集</a>
+      <a class="nav-item" href="#/analysis" data-nav="analysis">市场分析</a>
+      <a class="nav-item" href="#/run" data-nav="run">运行记录</a>
+      <a class="nav-item" href="#/states" data-nav="states">界面状态</a>
+    </nav>
+    <div class="topbar-end">
+      <span class="todo-flag" id="navTodo" title="待办条数由接口字段推导，每次读取后更新">待办 <b id="navTodoN">0</b> 项</span>
+      <button class="btn primary sm" data-nav="analysis">发起分析</button>
+      <div class="user-menu">
+        <button class="user-btn" id="userBtn" aria-haspopup="true" aria-expanded="false" aria-controls="userPop">
+          <span class="avatar" aria-hidden="true">ZL</span><span>zhang.lin</span><span aria-hidden="true">▾</span>
+        </button>
+        <div class="menu-pop" id="userPop" hidden>
+          <div class="menu-row"><span>当前账号</span><b>zhang.lin</b></div>
+          <div class="menu-row"><span>会话</span><b>HttpOnly · 默认 8 小时</b></div>
+          <h4>修改密码 <span class="mono">POST /api/auth/password</span></h4>
+          <form class="pw-form" id="pwForm">
+            <div class="field"><label for="pwOld">当前密码</label><input type="password" id="pwOld" autocomplete="current-password"></div>
+            <div class="field"><label for="pwNew">新密码</label><input type="password" id="pwNew" autocomplete="new-password"></div>
+            <div class="field"><span class="hint">长度与复杂度由后端校验，前端不自行定义规则。</span></div>
+            <button class="btn sm primary" type="submit">提交修改</button>
+            <span class="note" id="pwMsg"></span>
+          </form>
+          <div class="hr"></div>
+          <button class="btn sm" type="button" id="logoutBtn">退出登录 <span class="mono">POST /auth/logout</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="strip">
+    <span class="badge-honest">视觉方案示意 · 数据为占位样例 · 未接入后端</span>
+    <span id="healthLine"><span class="dot" id="healthDot"></span><span id="healthText">服务正常 · <span class="mono">app_name=AI Data Analyst Agent · v0.1.0</span> · 已运行 <span id="uptime">6 天 4 小时</span></span></span>
+    <div class="strip-right">
+      <span class="proto-label">原型开关（非产品功能）· 服务状态</span>
+      <span class="seg" role="group" aria-label="原型：服务状态">
+        <button type="button" data-dev="service" data-val="ok" aria-pressed="true">正常</button>
+        <button type="button" data-dev="service" data-val="nollm" aria-pressed="false">LLM 未配置</button>
+        <button type="button" data-dev="service" data-val="nodir" aria-pressed="false">目录不可写</button>
+      </span>
+      <span class="proto-label">数据集</span>
+      <span class="seg" role="group" aria-label="原型：数据集是否存在">
+        <button type="button" data-dev="datasets" data-val="has" aria-pressed="true">已有</button>
+        <button type="button" data-dev="datasets" data-val="none" aria-pressed="false">为空</button>
+      </span>
+      <span class="proto-label">接口</span>
+      <span class="seg" role="group" aria-label="原型：接口读取结果">
+        <button type="button" data-dev="fetch" data-val="ok" aria-pressed="true">正常</button>
+        <button type="button" data-dev="fetch" data-val="fail" aria-pressed="false">读取失败</button>
+      </span>
+      <span class="proto-label">密度</span>
+      <span class="seg" role="group" aria-label="表格密度">
+        <button type="button" data-density-btn="compact" aria-pressed="false">紧凑</button>
+        <button type="button" data-density-btn="regular" aria-pressed="true">常规</button>
+        <button type="button" data-density-btn="loose" aria-pressed="false">宽松</button>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ===================== 视图 1：登录 ===================== -->
+<section class="view" data-panel="login" aria-labelledby="loginH">
+  <div class="login-wrap">
+    <div class="login-aside">
+      <div class="mark-lg" aria-hidden="true">MI</div>
+      <h2 id="loginH">把市场数据变成<br>可追溯的决策依据</h2>
+      <p class="lead">上传 CSV / Excel，用一句自然语言提问，多智能体流水线依次完成画像、规划、执行、图表、报告与校验。</p>
+      <ul class="pillars">
+        <li><span class="k">1</span><span>报告里每个数字都带角标，点开就是产生它的那次工具调用。</span></li>
+        <li><span class="k">2</span><span>数据画像先告诉你「这份表能回答什么」，再决定问什么。</span></li>
+        <li><span class="k">3</span><span>校验环节会把不可靠的结论降级为「带警告完成」，而不是假装成功。</span></li>
+      </ul>
+      <div class="login-side-foot">
+        <span class="mono">GET /api/health</span> · 登录后进入工作台，待办区会立刻告诉你哪里还配不通。
+      </div>
+    </div>
+    <div class="login-card">
+      <h1 id="loginTitle">登录</h1>
+      <p class="note" id="loginSub">请使用管理员分配的账号登录。会话写入 HttpOnly Cookie <span class="mono">mis_session</span>，默认 8 小时有效。</p>
+      <div class="hr"></div>
+      <div class="seg" role="group" aria-label="原型：登录态视图切换" style="margin-top:4px">
+        <button type="button" data-login="standard" aria-pressed="true">标准</button>
+        <button type="button" data-login="bootstrap" aria-pressed="false">首次部署</button>
+        <button type="button" data-login="unauth" aria-pressed="false">401</button>
+        <button type="button" data-login="limited" aria-pressed="false">429</button>
+      </div>
+
+      <div class="alert warn" id="bootstrapTip" hidden style="margin-top:14px">
+        <span class="g">!</span>
+        <span><b>这是这套系统的第一次启动。</b>后端返回 <span class="mono">needs_bootstrap = true</span>，库里还没有任何管理员。
+        下面这个表单调用的是 <span class="mono">POST /auth/bootstrap</span>，用于创建第一个管理员账号。</span>
+      </div>
+      <div class="alert err" id="unauthTip" hidden role="alert" style="margin-top:14px">
+        <span class="g">401</span>
+        <span><b>账号或密码不正确，或登录状态已失效。</b>后端对「账号不存在」「密码错误」「会话过期」返回同一条文案，前端不区分原因。</span>
+      </div>
+      <div class="alert warn" id="limitedTip" hidden role="alert" style="margin-top:14px">
+        <span class="g">429</span>
+        <span><b>尝试过于频繁，请稍后再试。</b>响应头 <span class="mono">Retry-After: 45</span>，提交按钮在 45 秒内保持不可用。</span>
+      </div>
+
+      <form class="login-form" id="loginForm">
+        <div class="field">
+          <label for="loginUser">账号</label>
+          <input type="text" id="loginUser" name="username" autocomplete="username" value="zhang.lin">
+        </div>
+        <div class="field" data-only="bootstrap" hidden>
+          <label for="loginDisplay">显示名（可选）</label>
+          <input type="text" id="loginDisplay" name="display_name" value="张林">
+          <span class="hint">对应 <span class="mono">BootstrapRequest.display_name</span>，最长 64 字符，可留空。</span>
+        </div>
+        <div class="field">
+          <label for="loginPass">密码</label>
+          <input type="password" id="loginPass" name="password" autocomplete="current-password" placeholder="请输入密码">
+        </div>
+        <div class="field" data-only="bootstrap" hidden>
+          <label for="loginPass2">再次输入密码</label>
+          <input type="password" id="loginPass2" name="confirm_password" autocomplete="new-password">
+          <span class="hint">这一格只做前端一致性校验，不在 <span class="mono">POST /auth/bootstrap</span> 的请求体里。</span>
+        </div>
+        <button class="btn primary" type="submit" id="loginSubmit">登录</button>
+      </form>
+      <p class="mode-note" id="loginEndpoint">提交目标：<span class="mono">POST /auth/login</span> · 忘记密码需联系管理员重置（后端未提供自助找回接口）。</p>
+    </div>
+  </div>
+</section>
+<!-- ===================== 视图 2：工作台首屏（模块分区） ===================== -->
+<section class="view" data-panel="dashboard" aria-labelledby="dashH" hidden>
+  <div class="view-head">
+    <div>
+      <h1 id="dashH">工作台</h1>
+      <p class="sub">早上好，zhang.lin。这里只放「需要你下一步动作」的东西，其余内容都在一级导航里。</p>
+    </div>
+    <div class="end">
+      <span class="note">数据于进入本页时读取：health / datasets / workflows/history</span>
+      <button class="btn sm" id="refreshDash">重新读取</button>
+      <button class="btn primary sm" data-nav="analysis">发起分析</button>
+    </div>
+  </div>
+
+  <section class="panel" id="todoSection" aria-labelledby="todoH">
+    <div class="panel-head">
+      <h2 id="todoH">待办</h2><span class="n" id="todoCount">0</span>
+      <div class="end"><span class="section-note">按「阻塞 → 引导 → 跟进 → 复核」排序，全部由接口字段推导</span></div>
+    </div>
+    <div id="todoList"></div>
+    <div class="panel-foot">
+      待办不是一个任务系统：它不接收人工新建任务，也不记录谁点了完成。规则只有 5 条，写死在前端，见方案文档第 7 节推导表。
+    </div>
+  </section>
+
+  <div class="grid grid-main">
+    <section class="panel" aria-labelledby="runH">
+      <div class="panel-head">
+        <h2 id="runH">最近运行</h2><span class="n" id="runCount">4 条</span>
+        <div class="end"><a class="link" data-nav="run">全部运行记录</a></div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <caption class="sr">最近的工作流运行列表，含状态、阶段进度与总耗时</caption>
+          <thead>
+            <tr>
+              <th scope="col">提问摘要</th>
+              <th scope="col">数据集</th>
+              <th scope="col">状态</th>
+              <th scope="col">阶段进度</th>
+              <th scope="col">总耗时</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody id="runBody"></tbody>
+        </table>
+      </div>
+      <div class="panel-foot">
+        <span class="mono">GET /api/workflows/history?limit=20&amp;offset=0</span> · 历史接口只有 <span class="mono">limit / offset</span>，
+        没有排序、没有状态筛选、没有关键词，所以这张表的表头<b>不可点击</b>，顺序即后端返回顺序。
+        阶段进度只有轮询接口 <span class="mono">GET /api/workflows/{id}</span> 才给 <span class="mono">step_index / total_steps</span>（已完成阶段数，不是时间百分比）；
+        归档记录拿不到这两个字段，那一格就老实写「归档不含」，不拿 6/6 去糊。耗时只统计整条任务，不按阶段拆分。
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="dsH">
+      <div class="panel-head">
+        <h2 id="dsH">数据集</h2><span class="n" id="dsTotal">0</span>
+        <div class="end"><a class="link" data-nav="datasets">查看全部</a></div>
+      </div>
+      <div id="dsMini"></div>
+      <div class="panel-foot">
+        <span class="mono">GET /api/datasets?sort=uploaded_at&amp;order=desc&amp;limit=5</span> · 支持排序的字段只有
+        <span class="mono">uploaded_at / filename / rows</span>。
+      </div>
+    </section>
+  </div>
+</section>
+<!-- ===================== 视图 3：数据集 ===================== -->
+<section class="view" data-panel="datasets" aria-labelledby="dsListH" hidden>
+  <div class="view-head">
+    <div>
+      <h1 id="dsListH">数据集</h1>
+      <p class="sub">共 <b id="dsCountLabel">342</b> 个数据集 · 每页 <span class="mono">limit</span> 条，支持文件名搜索与三列排序（后端真实参数）。</p>
+    </div>
+    <div class="end"><span class="note" id="dsBlockedNote"></span></div>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="数据集页二级导航">
+    <button role="tab" id="tab-ds-list" data-tab="dsTab" data-val="list" aria-selected="true" aria-controls="pane-ds-list">数据集列表</button>
+    <button role="tab" id="tab-ds-upload" data-tab="dsTab" data-val="upload" aria-selected="false" aria-controls="pane-ds-upload">上传数据集</button>
+  </div>
+  <p class="note" style="margin-bottom:12px">
+    这里用 Tab 是因为「列表」和「上传」是<b>两类不同类别的内容</b>；同一个数据集内部换维度用的是分段控件，见下方详情视图。
+  </p>
+
+  <div role="tabpanel" id="pane-ds-list" aria-labelledby="tab-ds-list">
+    <section class="panel">
+      <div class="panel-head">
+        <form class="grid" id="dsFilterForm" style="display:flex;gap:10px;align-items:center;width:100%">
+          <div class="field" style="width:280px">
+            <label class="sr" for="dsQ">按文件名搜索</label>
+            <input type="text" id="dsQ" placeholder="文件名关键词，如 华东" value="">
+            <span class="hint">对应参数 <span class="mono">q</span>（子串匹配，最长 200 字符）</span>
+          </div>
+          <div class="field" style="width:150px">
+            <label class="sr" for="dsLimit">每页条数</label>
+            <select id="dsLimit">
+              <option value="20">每页 20 条</option>
+              <option value="50" selected>每页 50 条</option>
+              <option value="100">每页 100 条</option>
+            </select>
+            <span class="hint"><span class="mono">limit</span> 1–200，默认 50</span>
+          </div>
+          <button class="btn sm" type="submit" id="dsSearchBtn" style="margin-top:18px">查询</button>
+          <button class="btn sm" type="button" id="dsClearBtn" style="margin-top:18px">清除关键词</button>
+          <span class="note" id="dsQueryEcho" style="margin-top:22px;margin-left:auto"></span>
+        </form>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <caption class="sr">数据集列表，可按上传时间、文件名、行数排序</caption>
+          <thead>
+            <tr>
+              <th scope="col" class="sortable" data-sort="filename" aria-sort="none" style="width:38%">文件名 <span class="car"></span></th>
+              <th scope="col" class="sortable" data-sort="rows" aria-sort="none">行数 <span class="car"></span></th>
+              <th scope="col">列数</th>
+              <th scope="col" class="sortable" data-sort="uploaded_at" aria-sort="descending">上传时间 <span class="car">↓</span></th>
+              <th scope="col">画像状态</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody id="dsBody"></tbody>
+        </table>
+      </div>
+      <div id="dsEmptyBox" hidden></div>
+      <div class="panel-foot" style="display:flex;align-items:center;gap:12px">
+        <span id="dsRange">第 1–50 条 / 共 342 条</span>
+        <button class="btn sm" id="dsPrev">上一页</button>
+        <button class="btn sm" id="dsNext">下一页</button>
+        <span class="mono" id="dsOffsetEcho">offset=0</span>
+        <span class="note" style="margin-left:auto">点击表头会带上 <span class="mono">sort</span> 与 <span class="mono">order</span> 重新请求，而不是在前端排当前页。</span>
+      </div>
+    </section>
+  </div>
+
+  <div role="tabpanel" id="pane-ds-upload" aria-labelledby="tab-ds-upload" hidden>
+    <section class="panel">
+      <div class="panel-head"><h2 style="font-size:14px">上传新的市场数据</h2></div>
+      <div class="panel-body">
+        <div class="upload-drop" id="uploadDrop">
+          <p style="font-size:15px;font-weight:600">选择 CSV 或 Excel 文件</p>
+          <p class="note" style="margin:6px auto 14px;max-width:34em">
+            表单字段名固定为 <span class="mono">file</span>，接口 <span class="mono">POST /api/datasets/upload</span>（multipart）。
+            上传成功后返回完整 Dataset 对象，直接进列表；数据集侧后端只开放 <span class="mono">upload / get / profile / list</span> 四个接口，
+            所以列表行里只有「查看详情」和「用它提问」两个动作。
+          </p>
+          <input type="file" id="uploadFile" accept=".csv,.xlsx,.xls" style="max-width:320px;margin:0 auto">
+        </div>
+        <div class="alert err" id="uploadBlockedTip" hidden style="margin-top:14px">
+          <span class="g">✕</span>
+          <span><b>服务端上传目录当前不可写，暂时无法接收文件。</b>推导来源：<span class="mono">GET /api/health → upload_dir_ready = false</span>。
+          这不是权限问题，重试也不会成功，请联系部署运维开启目录写权限。</span>
+        </div>
+        <div class="hr"></div>
+        <ul class="warn-list">
+          <li><span class="sev info">建议</span><span>上传后先看「字段画像」，再决定提问范围：缺失率超过 30% 的列通常答不出结论。</span></li>
+          <li><span class="sev info">提示</span><span>同一个文件重复上传会生成一条新的数据集记录，旧记录独立保留。</span></li>
+        </ul>
+      </div>
+    </section>
+  </div>
+</section>
+
+<!-- ===================== 视图 4：数据集详情（分段控件换维度） ===================== -->
+<section class="view" data-panel="dataset" aria-labelledby="dsdH" hidden>
+  <p class="crumbs"><a class="link" data-nav="datasets">数据集</a> / <span id="crumbName">华东渠道销售月报_2026Q3.csv</span></p>
+  <div class="view-head">
+    <div>
+      <h1 id="dsdH">华东渠道销售月报_2026Q3.csv</h1>
+      <p class="sub"><span class="mono">dataset_id=7f3a91c2b84d4e6f9a10c3d5e7b10426</span> · 上传于 2026-10-12 09:24 · 184,326 行 × 14 列 · <span class="mono">has_profile=true</span></p>
+    </div>
+    <div class="end">
+      <span class="switcher" role="group" aria-label="同一数据集换维度">
+        <button type="button" data-switch="dsSwitch" data-val="overview" aria-pressed="true">概览</button>
+        <button type="button" data-switch="dsSwitch" data-val="profile" aria-pressed="false">字段画像</button>
+      </span>
+      <button class="btn primary sm" data-nav="analysis" data-pick-dataset="7f3a91c2b84d4e6f9a10c3d5e7b10426">用这个数据集提问</button>
+    </div>
+  </div>
+  <p class="note" style="margin-bottom:12px">
+    「概览 / 字段画像」是<b>同一份数据集的两个维度</b>，按规范用 Content Switcher（分段控件）而不是 Tab；
+    Tab 只留给上面那种不同类别的内容。而工作流的六个执行阶段（<span class="mono">step</span> 另有 <span class="mono">done</span>）是<b>线性流程</b>，
+    用 Progress Indicator，见运行视图。
+  </p>
+
+  <div data-pane="overview">
+    <div class="grid stategrid" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+      <div class="panel" style="margin:0"><div class="panel-body"><p class="mini-title">行数</p><p style="font-size:22px;font-weight:600" class="mono">184,326</p></div></div>
+      <div class="panel" style="margin:0"><div class="panel-body"><p class="mini-title">列数</p><p style="font-size:22px;font-weight:600" class="mono">14</p></div></div>
+      <div class="panel" style="margin:0"><div class="panel-body"><p class="mini-title">重复行</p><p style="font-size:22px;font-weight:600" class="mono">1,204</p></div></div>
+      <div class="panel" style="margin:0"><div class="panel-body"><p class="mini-title">画像告警</p><p style="font-size:22px;font-weight:600;color:var(--st-warn)" class="mono">3</p></div></div>
+    </div>
+    <section class="panel" style="margin-top:var(--gap)">
+      <div class="panel-head"><h2 style="font-size:14px">数据预览（前 5 行）</h2><div class="end"><span class="mono">GET /api/datasets/7f3a91c2…10426</span></div></div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th scope="col">月份</th><th scope="col">大区</th><th scope="col">渠道</th><th scope="col">品类</th><th scope="col">销量</th><th scope="col">毛利额</th><th scope="col">毛利率</th></tr></thead>
+          <tbody>
+            <tr><td data-label="月份">2026-07</td><td data-label="大区">华东</td><td data-label="渠道">直营</td><td data-label="品类">家电</td><td class="num" data-label="销量">12,884</td><td class="num" data-label="毛利额">3,206,410</td><td class="num" data-label="毛利率">24.8%</td></tr>
+            <tr><td data-label="月份">2026-07</td><td data-label="大区">华东</td><td data-label="渠道">经销</td><td data-label="品类">家电</td><td class="num" data-label="销量">21,330</td><td class="num" data-label="毛利额">4,930,112</td><td class="num" data-label="毛利率">19.6%</td></tr>
+            <tr><td data-label="月份">2026-07</td><td data-label="大区">华东</td><td data-label="渠道">电商</td><td data-label="品类">个护</td><td class="num" data-label="销量">8,402</td><td class="num" data-label="毛利额">2,541,880</td><td class="num" data-label="毛利率">31.2%</td></tr>
+            <tr><td data-label="月份">2026-08</td><td data-label="大区">华东</td><td data-label="渠道">直营</td><td data-label="品类">家电</td><td class="num" data-label="销量">13,910</td><td class="num" data-label="毛利额">3,512,774</td><td class="num" data-label="毛利率">25.3%</td></tr>
+            <tr><td data-label="月份">2026-08</td><td data-label="大区">华北</td><td data-label="渠道">经销</td><td data-label="品类">家具</td><td class="num" data-label="销量">5,617</td><td class="num" data-label="毛利额">1,204,338</td><td class="num" data-label="毛利率">16.4%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-foot">重复行提示（来自画像 <span class="mono">duplicated_rows</span>）：检测到 1,204 行完全重复，建议分析前先按主键去重，否则汇总类结论会被放大。</div>
+    </section>
+  </div>
+
+  <div data-pane="profile" hidden>
+    <section class="panel">
+      <div class="panel-head"><h2 style="font-size:14px">字段画像</h2><div class="end"><span class="mono">GET /api/datasets/7f3a91c2…/profile</span></div></div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th scope="col">字段</th><th scope="col">语义类型</th><th scope="col" style="width:160px">缺失率</th><th scope="col">唯一值</th><th scope="col">高频取值</th><th scope="col">分位数 min / p25 / p50 / p75 / max</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="mono" data-label="字段">month</td><td data-label="语义类型">时间</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:0%"></i></span><span class="v">0.0%</span></span></td><td class="num" data-label="唯一值">3</td><td data-label="高频取值">2026-07 / 08 / 09</td><td class="muted" data-label="分位数">—</td></tr>
+            <tr><td class="mono" data-label="字段">region</td><td data-label="语义类型">类别</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:1%"></i></span><span class="v">0.6%</span></span></td><td class="num" data-label="唯一值">7</td><td data-label="高频取值">华东 41% · 华北 22% · 华南 18%</td><td class="muted" data-label="分位数">—</td></tr>
+            <tr><td class="mono" data-label="字段">channel</td><td data-label="语义类型">类别</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:0%"></i></span><span class="v">0.0%</span></span></td><td class="num" data-label="唯一值">4</td><td data-label="高频取值">经销 47% · 直营 28% · 电商 19%</td><td class="muted" data-label="分位数">—</td></tr>
+            <tr><td class="mono" data-label="字段">category</td><td data-label="语义类型">类别</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:2%"></i></span><span class="v">1.9%</span></span></td><td class="num" data-label="唯一值">9</td><td data-label="高频取值">家电 38% · 个护 24% · 家具 21%</td><td class="muted" data-label="分位数">—</td></tr>
+            <tr><td class="mono" data-label="字段">units</td><td data-label="语义类型">数值</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:3%"></i></span><span class="v">2.8%</span></span></td><td class="num" data-label="唯一值">3,112</td><td data-label="高频取值">—</td><td class="mono" data-label="分位数">12 / 318 / 1,204 / 4,880 / 61,220</td></tr>
+            <tr><td class="mono" data-label="字段">gross_amount</td><td data-label="语义类型">金额</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:4%"></i></span><span class="v">3.7%</span></span></td><td class="num" data-label="唯一值">52,441</td><td data-label="高频取值">—</td><td class="mono" data-label="分位数">2,410 / 84,900 / 301,550 / 1,120,880 / 9,640,020</td></tr>
+            <tr><td class="mono" data-label="字段">gross_rate</td><td data-label="语义类型">比率</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:34%"></i></span><span class="v">34.1%</span></span></td><td class="num" data-label="唯一值">412</td><td data-label="高频取值">—</td><td class="mono" data-label="分位数">0.04 / 0.16 / 0.22 / 0.31 / 0.88</td></tr>
+            <tr><td class="mono" data-label="字段">remark</td><td data-label="语义类型">文本</td><td data-label="缺失率"><span class="meter"><span class="bar"><i style="width:71%"></i></span><span class="v">71.4%</span></span></td><td class="num" data-label="唯一值">1,930</td><td data-label="高频取值">「促销」「换季」</td><td class="muted" data-label="分位数">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-foot">
+        画像告警 3 条：<span class="mono">gross_rate</span> 缺失 34.1%（比率类问题不可全量回答）；<span class="mono">remark</span> 缺失 71.4%（已自动降为备注列）；检测到 1,204 行完全重复。
+      </div>
+    </section>
+  </div>
+</section>
+<!-- ===================== 视图 5：市场分析（线性流程 → Progress Indicator） ===================== -->
+<section class="view" data-panel="analysis" aria-labelledby="anH" hidden>
+  <div class="view-head">
+    <div>
+      <h1 id="anH">市场分析</h1>
+      <p class="sub">选数据 → 说清楚要什么 → 发起。三步是有先后的，所以这里用 Progress Indicator 而不是 Tab。</p>
+    </div>
+    <div class="end"><span class="note">发起接口 <span class="mono">POST /api/analysis</span> · 成功返回 <b>202 Accepted</b></span></div>
+  </div>
+
+  <ol class="stepper" id="anStepper" aria-label="分析发起流程">
+    <li class="cur" data-step="1"><span class="mark">01</span><b>选择数据集</b></li>
+    <li data-step="2"><span class="mark">02</span><b>描述分析需求</b></li>
+    <li data-step="3"><span class="mark">03</span><b>发起并转入运行</b></li>
+  </ol>
+
+  <div class="split" style="margin-top:var(--gap)">
+    <div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2 style="font-size:14px">① 选择数据集</h2>
+          <div class="end"><span class="mono">GET /api/datasets?limit=20&amp;sort=uploaded_at&amp;order=desc</span></div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <caption class="sr">可选数据集，选中后带入下方提问区</caption>
+            <thead>
+              <tr><th scope="col">文件名</th><th scope="col">行数</th><th scope="col">列数</th><th scope="col">上传时间</th><th scope="col">选择</th></tr>
+            </thead>
+            <tbody id="anDsBody"></tbody>
+          </table>
+        </div>
+        <div class="panel-foot">只能选自己上传的数据集：越权访问由后端以 <span class="mono">404</span> 拒绝，界面上不出现别人的数据。</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2 style="font-size:14px">② 描述分析需求</h2><div class="end"><span id="qCount" class="mono">0 / 500</span></div></div>
+        <div class="panel-body">
+          <div class="field">
+            <label for="anQuestion">用一句话说明你要什么结论</label>
+            <textarea id="anQuestion" maxlength="500" placeholder="例如：按大区和渠道对比 2026 年三季度的毛利率变化，并指出下滑最明显的两个组合"></textarea>
+            <span class="hint">后端校验 <span class="mono">question</span> 长度 2–500 字；已选数据集：<b id="anPickedName" class="mono">—</b></span>
+          </div>
+          <div class="hr"></div>
+          <div class="field" style="max-width:260px">
+            <label for="anMaxSteps">最大执行步数 <span class="mono">max_steps</span></label>
+            <select id="anMaxSteps">
+              <option value="3">3 步 · 快速试探</option>
+              <option value="5" selected>5 步 · 常规</option>
+              <option value="8">8 步 · 深度分析（上限）</option>
+            </select>
+            <span class="hint">取值范围 <span class="mono">1–8</span>，步数越多耗时越长，但不承诺更多结论更准。</span>
+          </div>
+          <div class="alert err" id="anBlockedErr" hidden style="margin-top:14px">
+            <span class="g">400</span>
+            <span><b>当前无法发起分析。</b><span id="anBlockedWhy"></span></span>
+          </div>
+          <div class="hr"></div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button class="btn primary" id="anSubmit" type="button">发起分析</button>
+            <span class="note">提交后不等待结果：接口立刻返回 <span class="mono">202</span>，界面转入「运行记录」用 <span class="mono">1000ms</span> 轮询推进度。</span>
+          </div>
+          <div class="accept" id="anAccepted" hidden style="margin-top:14px">
+            <div><span class="code">202 Accepted</span> · <span class="mono" id="anNewWf">workflow_id=—</span></div>
+            <p class="note" style="margin-top:6px">已进入队列（<span class="mono">status=PENDING</span>）。<a class="link" data-nav="run" id="anGoRun">去运行记录看它怎么跑</a></p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <aside>
+      <section class="panel">
+        <div class="panel-head"><h2 style="font-size:14px">这份数据能回答什么</h2></div>
+        <div class="panel-body">
+          <ul class="warn-list">
+            <li><span class="sev info">可用</span><span>月份 × 大区 × 渠道 × 品类的汇总与同比</span></li>
+            <li><span class="sev info">可用</span><span>销量、毛利额的分位数与分布</span></li>
+            <li><span class="sev warning">受限</span><span>毛利率（<span class="mono">gross_rate</span>）缺失 34.1%，全量口径的比率结论会被降级</span></li>
+            <li><span class="sev error">不可用</span><span>任何按 <span class="mono">remark</span> 分组的统计（缺失 71.4%，且为自由文本）</span></li>
+          </ul>
+          <p class="note" style="margin-top:10px">以上内容取自 <span class="mono">GET /api/datasets/{id}/profile</span> 的语义类型、缺失率与告警，不是人工写的说明。</p>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2 style="font-size:14px">发起前检查</h2></div>
+        <div class="panel-body" id="anPreflight"></div>
+      </section>
+    </aside>
+  </div>
+</section>
+<!-- ===================== 视图 6：运行记录（Tab：内存态详情 / 归档列表） ===================== -->
+<section class="view" data-panel="run" aria-labelledby="runViewH" hidden>
+  <div class="view-head">
+    <div>
+      <h1 id="runViewH">运行记录</h1>
+      <p class="sub">「正在跑的这条」和「跑完归档的那些」来自两个不同接口、两种内容类别，所以用 Tab；条目内部换维度才用分段控件。</p>
+    </div>
+    <div class="end"><span class="poll" id="pollHint"><span class="ring" aria-hidden="true"></span>每 1000ms 轮询一次，进入终态即停止</span></div>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="运行记录二级导航">
+    <button role="tab" id="tab-run-detail" data-tab="runTab" data-val="detail" aria-selected="true" aria-controls="pane-run-detail">当前运行</button>
+    <button role="tab" id="tab-run-history" data-tab="runTab" data-val="history" aria-selected="false" aria-controls="pane-run-history">历史归档</button>
+  </div>
+
+  <div role="tabpanel" id="pane-run-detail" aria-labelledby="tab-run-detail">
+    <section class="panel">
+      <div class="panel-head">
+        <h2 style="font-size:14px" id="runQ">华东三季度各渠道毛利率为什么下滑</h2>
+        <div class="end"><span class="chip run" id="runStatusChip"><i aria-hidden="true"></i>执行中 <span class="mono">EXECUTING</span></span></div>
+      </div>
+      <div class="panel-body">
+        <div class="ladder" style="margin-bottom:14px">
+          <span class="steps" id="runLadder" role="img" aria-label="已完成 3 个阶段，共 6 个阶段"></span>
+          <span class="num mono" id="runStepTxt">step_index=3 / total_steps=6</span>
+          <span class="num note">已完成阶段数，不是时间百分比</span>
+          <span class="num" style="margin-left:auto">整条任务已用时 <b class="mono" id="runElapsed">04:12</b>（<span class="mono">created_at</span> → 现在）</span>
+        </div>
+
+        <ol class="stepper" id="runPhases" aria-label="工作流阶段进度"></ol>
+
+        <div class="hr"></div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn sm" type="button" id="runPollOnce">原型：模拟下一次轮询返回</button>
+          <span class="note">真实的推进节奏是后端决定的，这里只是把 <span class="mono">GET /api/workflows/{id}</span> 的下一次响应手动翻一格。</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="grid grid-main">
+      <section class="panel">
+        <div class="panel-head"><h2 style="font-size:14px">任务简报</h2><div class="end"><span class="mono">tasks[] · 只含 task_id / description / status / error</span></div></div>
+        <div class="tbl-wrap">
+          <table>
+            <caption class="sr">本次分析被拆成的任务及其状态</caption>
+            <thead><tr><th scope="col">编号</th><th scope="col">任务描述</th><th scope="col">状态</th><th scope="col">错误信息</th></tr></thead>
+            <tbody id="taskBody"></tbody>
+          </table>
+        </div>
+        <div class="panel-foot">被跳过（<span class="mono">SKIPPED</span>）的任务会显式保留在列表里，而不是从视图上消失——用户需要知道哪一环没跑。</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2 style="font-size:14px">已产出图表</h2><div class="end"><span class="mono">charts[] · PNG</span></div></div>
+        <div class="panel-body">
+          <div class="chart-grid" id="runCharts"></div>
+          <p class="note" style="margin-top:10px">生产环境这里是 <span class="mono">GET /api/workflows/{id}/charts/{filename}</span> 返回的 PNG；示意图用内联 SVG 代替，图型只有 <span class="mono">bar / line / pie / scatter</span> 四种。</p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div role="tabpanel" id="pane-run-history" aria-labelledby="tab-run-history" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <h2 style="font-size:14px">历史归档</h2>
+        <div class="end"><span class="mono">GET /api/workflows/history?limit=20&amp;offset=0</span></div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <caption class="sr">历史分析记录，按完成时间从新到旧，顺序由后端定死</caption>
+          <thead><tr><th scope="col">提问</th><th scope="col">状态</th><th scope="col">LLM</th><th scope="col">发起时间</th><th scope="col">整条耗时</th><th scope="col">操作</th></tr></thead>
+          <tbody id="histBody"></tbody>
+        </table>
+      </div>
+      <div id="histEmptyBox" hidden></div>
+      <div class="panel-foot" style="display:flex;gap:12px;align-items:center">
+        <span id="histRange">第 1–6 条 / 共 6 条</span>
+        <button class="btn sm" id="histPrev" disabled>上一页</button>
+        <button class="btn sm" id="histNext" disabled>下一页</button>
+        <span class="note" style="margin-left:auto">接口只有 <span class="mono">limit / offset</span>：没有排序参数、没有状态筛选、没有关键词，所以这里<b>不放</b>搜索框和排序表头。</span>
+      </div>
+    </section>
+  </div>
+</section>
+
+<!-- ===================== 视图 7：报告（cites 可追溯） ===================== -->
+<section class="view" data-panel="report" aria-labelledby="rpH" hidden>
+  <p class="crumbs"><a class="link" data-nav="run">运行记录</a> / <span>报告 <span class="mono" id="rpId">8c31f0a2</span></span></p>
+  <div class="view-head">
+    <div>
+      <h1 id="rpH">华东渠道毛利率下滑归因分析</h1>
+      <div class="report-meta">
+        <span>数据截至 <b class="mono">2026-09-30 23:59 (UTC)</b></span>
+        <span>生成于 <span class="mono">2026-10-15 02:11</span> · <span class="mono">generated_at</span></span>
+        <span>数据集 <span class="mono">7f3a91c2…10426</span></span>
+        <span class="chip ok"><i aria-hidden="true"></i>校验通过 <span class="mono">SUCCESS</span></span>
+      </div>
+    </div>
+    <div class="end"><span class="note">接口 <span class="mono">GET /api/workflows/{id}/report</span> · 报告未生成时该接口返回 <span class="mono">400</span></span></div>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="报告页二级导航">
+    <button role="tab" id="tab-rp-body" data-tab="rpTab" data-val="body" aria-selected="true" aria-controls="pane-rp-body">报告正文</button>
+    <button role="tab" id="tab-rp-quality" data-tab="rpTab" data-val="quality" aria-selected="false" aria-controls="pane-rp-quality">数据质量与校验</button>
+    <button role="tab" id="tab-rp-src" data-tab="rpTab" data-val="src" aria-selected="false" aria-controls="pane-rp-src">来源与引用</button>
+  </div>
+
+  <div role="tabpanel" id="pane-rp-body" aria-labelledby="tab-rp-body">
+    <div class="alert warn" id="llmNote" style="margin-bottom:12px">
+      <span class="g">!</span>
+      <span><b>本次报告由规则引擎生成（<span class="mono">llm_used = false</span>）。</b>数字与表格仍然来自真实工具结果，但文字解释是模板拼接的，可信度低于模型撰写版本。</span>
+    </div>
+    <section class="panel">
+      <div class="panel-body">
+        <div class="report-head doc">
+          <p class="report-title">摘要</p>
+          <p>2026 年三季度华东整体毛利率 <b>22.4%</b>，环比下降 <b>2.9 个百分点</b><button class="cite" data-cite="T1" aria-label="查看来源 T1">T1</button>。
+          下滑集中在<b>经销—家电</b>组合，该组合毛利率从 21.8% 降至 16.3%<button class="cite" data-cite="T2" aria-label="查看来源 T2">T2</button>，
+          贡献了整体降幅的 <b>61%</b><button class="cite" data-cite="T2" aria-label="查看来源 T2">T2</button>。
+          电商渠道毛利率维持 <b>30.6%</b> 稳定<button class="cite" data-cite="T1" aria-label="查看来源 T1">T1</button>，
+          直营渠道下滑 <b>0.7 个百分点</b>，属正常波动<button class="cite" data-cite="T3" aria-label="查看来源 T3">T3</button>。</p>
+        </div>
+
+        <div class="hr"></div>
+        <div class="doc">
+          <h3>一、渠道 × 品类毛利率环比</h3>
+          <p>把降幅拆到渠道与品类的交叉维度后，问题高度集中：四个组合里有三个基本持平，只有经销—家电出现了 5.5 个百分点的跳降<button class="cite" data-cite="T2" aria-label="查看来源 T2">T2</button>。</p>
+          <div class="tbl-wrap" style="margin-top:10px">
+            <table>
+              <caption class="sr">渠道与品类交叉的毛利率环比，直接复制自工具结果前 20 行</caption>
+              <thead><tr><th scope="col">渠道</th><th scope="col">品类</th><th scope="col">二季度</th><th scope="col">三季度</th><th scope="col">环比</th></tr></thead>
+              <tbody>
+                <tr><td data-label="渠道">经销</td><td data-label="品类">家电</td><td class="num" data-label="二季度">21.8%</td><td class="num" data-label="三季度">16.3%</td><td class="num" data-label="环比" style="color:var(--st-err)">−5.5</td></tr>
+                <tr><td data-label="渠道">直营</td><td data-label="品类">家电</td><td class="num" data-label="二季度">25.5%</td><td class="num" data-label="三季度">24.8%</td><td class="num" data-label="环比" style="color:var(--st-err)">−0.7</td></tr>
+                <tr><td data-label="渠道">电商</td><td data-label="品类">个护</td><td class="num" data-label="二季度">30.2%</td><td class="num" data-label="三季度">30.6%</td><td class="num" data-label="环比" style="color:var(--st-ok)">+0.4</td></tr>
+                <tr><td data-label="渠道">经销</td><td data-label="品类">家具</td><td class="num" data-label="二季度">17.1%</td><td class="num" data-label="三季度">16.4%</td><td class="num" data-label="环比" style="color:var(--st-err)">−0.7</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="note" style="margin-top:6px">表内数值为 <span class="mono">sections[].table</span> 的原样内容（工具结果前 20 行），前端不做二次计算。</p>
+
+          <figure>
+            <svg class="chart" viewBox="0 0 640 240" role="img" aria-label="柱状图：四个渠道品类组合的二三季度毛利率对比，经销家电降幅最大">
+              <line class="axis" x1="48" y1="200" x2="628" y2="200"></line>
+              <line class="grid-line" x1="48" y1="120" x2="628" y2="120"></line>
+              <line class="grid-line" x1="48" y1="60" x2="628" y2="60"></line>
+              <text x="14" y="124" font-size="11">20%</text><text x="14" y="64" font-size="11">30%</text>
+              <g fill="var(--c1)"><rect x="80" y="79" width="34" height="121"></rect><rect x="212" y="52" width="34" height="148"></rect><rect x="344" y="62" width="34" height="138"></rect><rect x="476" y="103" width="34" height="97"></rect></g>
+              <g fill="var(--c2)"><rect x="118" y="109" width="34" height="91"></rect><rect x="250" y="82" width="34" height="118"></rect><rect x="382" y="60" width="34" height="140"></rect><rect x="514" y="115" width="34" height="85"></rect></g>
+              <g font-size="11"><text x="80" y="218">经销·家电</text><text x="212" y="218">直营·家电</text><text x="344" y="218">电商·个护</text><text x="476" y="218">经销·家具</text></g>
+            </svg>
+            <div class="legend"><span><i style="background:var(--c1)"></i>二季度</span><span><i style="background:var(--c2)"></i>三季度</span></div>
+            <figcaption>图 1 渠道 × 品类毛利率环比（<span class="mono">chart_type=bar</span>，来源 <span class="mono">T2</span>）</figcaption>
+          </figure>
+
+          <h3>二、为什么是经销—家电</h3>
+          <p>该组合三季度销量增长 8%，但毛利额下降 17%，说明单价或折扣结构发生了变化<button class="cite" data-cite="T2" aria-label="查看来源 T2">T2</button>。
+          由于 <span class="mono">remark</span> 列缺失率 71.4%，本条结论<b>不能</b>归因到具体促销活动。</p>
+
+          <h3>三、下一步该看什么</h3>
+          <p>先把经销侧的返点规则按月对齐，再重跑同一问题；当前证据只支持「集中在该组合」，不支持「政策导致」<button class="cite" data-cite="T3" aria-label="查看来源 T3">T3</button>。</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div role="tabpanel" id="pane-rp-quality" aria-labelledby="tab-rp-quality" hidden>
+    <div class="split">
+      <section class="panel" style="margin:0">
+        <div class="panel-head"><h2 style="font-size:14px">校验结果</h2><div class="end"><span class="mono">validation.issues[]</span></div></div>
+        <div class="panel-body">
+          <ul class="warn-list" id="valList"></ul>
+          <p class="note" style="margin-top:12px">severity 只有 <span class="mono">error / warning / info</span> 三档；出现 <span class="mono">error</span> 时整条工作流终态是 <span class="mono">SUCCESS_WITH_WARNINGS</span> 或 <span class="mono">FAILED</span>，界面不会把它画成「成功」。</p>
+        </div>
+      </section>
+      <section class="panel" style="margin:0">
+        <div class="panel-head"><h2 style="font-size:14px">数据质量说明</h2></div>
+        <div class="panel-body"><ul class="warn-list" id="dqList"></ul></div>
+      </section>
+    </div>
+  </div>
+
+  <div role="tabpanel" id="pane-rp-src" aria-labelledby="tab-rp-src" hidden>
+    <section class="panel">
+      <div class="panel-head"><h2 style="font-size:14px">来源与引用</h2><div class="end"><span class="mono">citations=["T1","T2","T3"]</span></div></div>
+      <div class="panel-body"><ul class="srcs" id="srcList"></ul></div>
+    </section>
+  </div>
+</section>
+
+<!-- ===================== 视图 8：界面状态（空 / 加载 / 错误 + 枚举映射） ===================== -->
+<section class="view" data-panel="states" aria-labelledby="stH" hidden>
+  <div class="view-head">
+    <div>
+      <h1 id="stH">界面状态</h1>
+      <p class="sub">空态必须分成因，否则用户会用错动作：没有数据要「去上传」，筛选无结果要「改关键词」，读取失败要「重试」。</p>
+    </div>
+    <div class="end"><span class="switcher" role="group" aria-label="同一位置的空态成因切换">
+      <button type="button" data-switch="emptySwitch" data-val="nov" aria-pressed="true">还没有数据</button>
+      <button type="button" data-switch="emptySwitch" data-val="nofilter" aria-pressed="false">筛选无结果</button>
+      <button type="button" data-switch="emptySwitch" data-val="failed" aria-pressed="false">读取失败</button>
+    </span></div>
+  </div>
+
+  <div class="grid stategrid">
+    <section class="panel" style="margin:0">
+      <div class="panel-head"><h2 style="font-size:14px">空态</h2><div class="end"><span class="mono">200 + 空数组</span></div></div>
+      <div class="panel-body" id="stateEmpty"></div>
+    </section>
+    <section class="panel" style="margin:0">
+      <div class="panel-head"><h2 style="font-size:14px">加载态</h2><div class="end"><span class="mono">请求进行中</span></div></div>
+      <div class="panel-body" style="padding:0">
+        <div class="skel"><i style="width:38%"></i><i style="width:14%"></i><i style="width:10%"></i></div>
+        <div class="skel"><i style="width:46%"></i><i style="width:12%"></i><i style="width:10%"></i></div>
+        <div class="skel"><i style="width:30%"></i><i style="width:16%"></i><i style="width:10%"></i></div>
+        <p class="note" style="padding:12px">骨架屏按真实行高占位，切密度三档时高度同步变化，避免加载完成那一刻的跳动。</p>
+      </div>
+    </section>
+    <section class="panel" style="margin:0">
+      <div class="panel-head"><h2 style="font-size:14px">错误态</h2><div class="end"><span class="mono">非 200</span></div></div>
+      <div class="panel-body" style="display:grid;gap:10px">
+        <div class="errbox"><span class="g">404</span><div><b>这份工作流记录不存在或已被清理。</b><p class="note">接口 7 的「报告还没生成」是 <span class="mono">400</span> 不是 <span class="mono">404</span>：资源在，只是时机不对，文案要分开。</p></div></div>
+        <div class="errbox"><span class="g">429</span><div><b>尝试过于频繁，请稍后再试。</b><p class="note">按 <span class="mono">Retry-After</span> 秒数倒计时后再放开提交按钮。</p></div></div>
+        <div class="errbox"><span class="g">500</span><div><b>服务暂时读不出数据，已保留上一次的列表内容。</b><p class="note">降级时不清空界面，用户至少还能看见刚才的东西。</p></div></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:var(--gap)">
+    <div class="panel-head"><h2 style="font-size:14px">状态枚举映射（色 + 形 + 字三重编码）</h2><div class="end"><span class="mono">WorkflowStatus 10 值 · TaskStatus 6 值</span></div></div>
+    <div class="tbl-wrap">
+      <table class="legend-tbl">
+        <caption class="sr">后端状态枚举到中文文案与视觉编码的完整映射，原始值保留以便查证</caption>
+        <thead><tr><th scope="col">中文文案</th><th scope="col">原始枚举值</th><th scope="col">接口</th><th scope="col">形状</th><th scope="col">为什么这样编码</th></tr></thead>
+        <tbody id="enumBody"></tbody>
+      </table>
+    </div>
+  </section>
+</section>
+</main>
+
+<script>
+"use strict";
+/* 原型逻辑：把「待办」严格实现成接口字段的推导结果，而不是一个人造任务列表。
+   规则只有 5 条，每条都带上自己的推导来源，界面上原样显示，便于逐条对账。 */
+
+var PHASES = [
+  { key: "PROFILING", step: "profiling", cn: "数据画像" },
+  { key: "PLANNING", step: "planning", cn: "任务规划" },
+  { key: "EXECUTING", step: "execution", cn: "工具执行" },
+  { key: "CHARTING", step: "charting", cn: "图表生成" },
+  { key: "REPORTING", step: "reporting", cn: "报告撰写" },
+  { key: "VALIDATING", step: "validation", cn: "结果校验" }
+];
+var WF_CN = {
+  PENDING: ["等待中", "idle"], PROFILING: ["画像中", "run"], PLANNING: ["规划中", "run"],
+  EXECUTING: ["执行中", "run"], CHARTING: ["绘图中", "run"], REPORTING: ["撰写中", "run"],
+  VALIDATING: ["校验中", "run"], SUCCESS: ["已完成", "ok"],
+  SUCCESS_WITH_WARNINGS: ["带警告完成", "warn"], FAILED: ["失败", "err"]
+};
+var TASK_CN = { PENDING: ["待执行", "idle"], RUNNING: ["执行中", "run"], SUCCESS: ["已完成", "ok"], FAILED: ["失败", "err"], RETRYING: ["重试中", "warn"], SKIPPED: ["已跳过", "idle"] };
+var TERMINAL = { SUCCESS: 1, SUCCESS_WITH_WARNINGS: 1, FAILED: 1 };
+
+var S = {
+  health: { status: "ok", app_name: "AI Data Analyst Agent", version: "0.1.0", uptime_seconds: 532800, llm_configured: true, upload_dir_ready: true },
+  fetchFail: false,
+  dsTotal: 342,
+  ds: [
+    { id: "7f3a91c2b84d4e6f9a10c3d5e7b10426", name: "华东渠道销售月报_2026Q3.csv", rows: 184326, cols: 14, at: "2026-10-12 09:24", profiled: true },
+    { id: "1b6d44e0c9f24a7bb30e5d8146fa9c02", name: "全国经销商对账明细_2026-09.xlsx", rows: 92410, cols: 22, at: "2026-10-11 18:02", profiled: true },
+    { id: "a25c70f93d184f6ea0b7c25914de3708", name: "品类价格带监测_华东.csv", rows: 15873, cols: 9, at: "2026-10-09 11:40", profiled: true },
+    { id: "9e02b7c15a4d4f82b6c0713ea9dd5410", name: "会员复购标签快照_2026Q3.xlsx", rows: 402118, cols: 31, at: "2026-10-08 15:17", profiled: false },
+    { id: "55ad10b3e7c64f1d9b284a07c3fe6512", name: "华北门店客流日报.csv", rows: 28644, cols: 8, at: "2026-10-06 08:55", profiled: true },
+    { id: "c4f8317d09b24e5fa1d6c83b70e49215", name: "线上渠道促销记录_7至9月.csv", rows: 7320, cols: 12, at: "2026-10-04 20:31", profiled: false },
+    { id: "70bb2e94f1ac4d38b70d5e26c9184f03", name: "华南经销商库存周报.xlsx", rows: 40128, cols: 17, at: "2026-09-29 10:08", profiled: true },
+    { id: "31e9a6d5b2074c8f9a3e14d07b652c48", name: "客诉工单摘要_2026Q3.csv", rows: 11902, cols: 15, at: "2026-09-25 14:46", profiled: true }
+  ],
+  query: { q: "", limit: 50, offset: 0, sort: "uploaded_at", order: "desc" },
+  run: {
+    workflow_id: "0c17a9b4e6d24f83a1c05d97b3824e61", dataset_id: "7f3a91c2b84d4e6f9a10c3d5e7b10426",
+    question: "华东三季度各渠道毛利率为什么下滑", status: "EXECUTING", step: "execution",
+    step_index: 3, total_steps: 6, elapsed: 252,
+    tasks: [
+      { task_id: "T1", description: "按渠道汇总三季度与二季度毛利率", status: "SUCCESS", error: null },
+      { task_id: "T2", description: "渠道 × 品类交叉分解并计算环比贡献", status: "SUCCESS", error: null },
+      { task_id: "T3", description: "直营渠道波动显著性检验", status: "SUCCESS", error: null },
+      { task_id: "T4", description: "按 remark 分组统计促销影响", status: "SKIPPED", error: null },
+      { task_id: "T5", description: "生成经销侧返点结构对比表", status: "RUNNING", error: null }
+    ],
+    charts: [
+      { chart_id: "a1c3f58b02d4", chart_type: "bar", title: "渠道×品类毛利率环比" },
+      { chart_id: "77e0b1c94a52", chart_type: "line", title: "月度毛利率走势" }
+    ]
+  },
+  hist: [
+    { workflow_id: "b18c40e2d7a94f519c0e6b3d527a1840", question: "九大品类三季度增速排名", status: "SUCCESS", llm_used: true, created_at: "2026-10-14 16:22", sec: 187, has_report: true, error_code: null },
+    { workflow_id: "04f7a9c1b3e6428da50c91f7b64e3312", question: "华北门店客流与销量相关性", status: "SUCCESS_WITH_WARNINGS", llm_used: true, created_at: "2026-10-14 11:05", sec: 264, has_report: true, error_code: null },
+    { workflow_id: "9d2c5e1170874ab6b4c0d3ea1952f67d", question: "会员复购分层的客单价差异", status: "FAILED", llm_used: false, created_at: "2026-10-13 19:48", sec: 96, has_report: false, error_code: "WORKFLOW_TIMEOUT" },
+    { workflow_id: "6ab30f84d1c74e02b59a38d7f410c6b5", question: "华东经销商库存周转月度对比", status: "SUCCESS", llm_used: true, created_at: "2026-10-12 09:31", sec: 202, has_report: true, error_code: null },
+    { workflow_id: "e5017c2bad934f68a1c70b94d2e35710", question: "价格带分布与竞品对照", status: "SUCCESS_WITH_WARNINGS", llm_used: false, created_at: "2026-10-10 15:12", sec: 143, has_report: true, error_code: null },
+    { workflow_id: "2f9c41e68ab74d05ac3b1e97f62c4083", question: "客诉关键词季度变化", status: "SUCCESS", llm_used: true, created_at: "2026-10-09 10:02", sec: 318, has_report: true, error_code: null }
+  ],
+  validation: [
+    { severity: "error", text: "「按 remark 分组」结论缺少可追溯的工具结果，已从正文移除。" },
+    { severity: "warning", text: "gross_rate 缺失率 34.1%，涉及该列的比率结论已限定在有效样本口径。" },
+    { severity: "info", text: "T4 因依赖 T1 的口径调整而被跳过，不影响已发布结论。" }
+  ],
+  dq: [
+    "检测到 1,204 行完全重复，汇总类数值可能被放大。",
+    "gross_rate 缺失率 34.1%，比率类结论的口径只含有值样本。",
+    "remark 缺失率 71.4% 且为自由文本，已排除在分组维度之外。"
+  ],
+  srcs: [
+    { id: "T1", tool: "aggregate_group_by", text: "按渠道汇总毛利率：华东整体 22.4%（二季度 25.3%），输入 184,326 行、有效 121,208 行。" },
+    { id: "T2", tool: "pivot_cross_tab", text: "渠道 × 品类交叉表：经销—家电 21.8% → 16.3%，环比贡献 −1.78 个百分点。" },
+    { id: "T3", tool: "statistics_test", text: "直营渠道波动检验：差值 0.7pp，未超过历史标准差 1.9pp。" }
+  ]
+};
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function clock(sec) {
+  var m = Math.floor(sec / 60), s = sec % 60;
+  return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+}
+function chip(map, raw) {
+  var c = map[raw] || ["无法识别", "idle"];
+  return '<span class="chip ' + c[1] + '"><i aria-hidden="true"></i>' + esc(c[0]) + ' <span class="mono">' + esc(raw) + "</span></span>";
+}
+function daysText(sec) { return Math.floor(sec / 86400) + " 天 " + Math.floor(sec % 86400 / 3600) + " 小时"; }
+
+/* ---------- 视图路由 ---------- */
+var VIEWS = ["login", "dashboard", "datasets", "dataset", "analysis", "run", "report", "states"];
+function setView(name) {
+  if (VIEWS.indexOf(name) < 0) { name = "dashboard"; }
+  var body = document.body;
+  body.setAttribute("data-view", name);
+  VIEWS.forEach(function (v) {
+    var el = document.querySelector('[data-panel="' + v + '"]');
+    if (!el) { return; }
+    el.hidden = v !== name;
+    if (v === name) { el.classList.remove("view-anim"); void el.offsetWidth; el.classList.add("view-anim"); }
+  });
+  var navMap = { dashboard: "dashboard", datasets: "datasets", dataset: "datasets", analysis: "analysis", run: "run", report: "run", states: "states" };
+  Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (a) {
+    var isLink = a.classList.contains("nav-item");
+    if (!isLink) { return; }
+    if (navMap[name] === a.getAttribute("data-nav")) { a.setAttribute("aria-current", "page"); }
+    else { a.removeAttribute("aria-current"); }
+  });
+  var titles = {
+    dashboard: "工作台 · 现代 SaaS 工作台", datasets: "数据集 · 现代 SaaS 工作台", dataset: "数据集详情 · 现代 SaaS 工作台",
+    analysis: "市场分析 · 现代 SaaS 工作台", run: "运行记录 · 现代 SaaS 工作台", report: "分析报告 · 现代 SaaS 工作台",
+    states: "界面状态 · 现代 SaaS 工作台", login: "登录 · 现代 SaaS 工作台"
+  };
+  document.title = titles[name];
+  window.scrollTo(0, 0);
+}
+
+/* ---------- 待办：5 条规则，全部来自接口字段 ---------- */
+var RULES = [
+  {
+    id: "llm", p: "block", test: function () { return S.health.llm_configured === false; },
+    title: function () { return "LLM 尚未配置，报告文字将由规则模板生成"; },
+    desc: function () { return '分析仍可跑完，但 <span class="mono">llm_used=false</span>，正文解释是模板拼接的。请把配置项补上后重启服务。'; },
+    src: function () { return "GET /api/health → llm_configured = false"; },
+    act: { label: "看服务状态", view: "states" }
+  },
+  {
+    id: "updir", p: "block", test: function () { return S.health.upload_dir_ready === false; },
+    title: function () { return "服务端上传目录当前不可写，无法接收新数据"; },
+    desc: function () { return "上传表单已被禁用。这不是文件问题，重试也不会成功，需要部署侧开启目录写权限。"; },
+    src: function () { return "GET /api/health → upload_dir_ready = false"; },
+    act: { label: "去上传页看说明", view: "datasets" }
+  },
+  {
+    id: "nods", p: "guide", test: function () { return S.dsTotal === 0; },
+    title: function () { return "还没有任何数据集，先上传一份市场数据"; },
+    desc: function () { return '列表返回 <span class="mono">total=0</span>，此时市场分析页没有可选对象，整条链路走不通。'; },
+    src: function () { return "GET /api/datasets → total = 0"; },
+    act: { label: "上传数据集", view: "datasets" }
+  },
+  {
+    id: "running", p: "follow", test: function () { return !TERMINAL[S.run.status]; },
+    title: function () { return "有一条分析正在执行，可以回去看它跑到哪一步"; },
+    desc: function () { return '当前 <span class="mono">step_index=' + S.run.step_index + " / total_steps=" + S.run.total_steps + '</span>，前端每 1000ms 轮询一次状态。'; },
+    src: function () { return "GET /api/workflows/{id} → status = " + S.run.status; },
+    act: { label: "回看运行", view: "run" }
+  },
+  {
+    id: "badhist", p: "review",
+    test: function () { return S.hist.some(function (h) { return h.status === "FAILED" || h.status === "SUCCESS_WITH_WARNINGS"; }); },
+    title: function () { return "历史里有需要复核的结果"; },
+    desc: function () {
+      return "共 <b>" + S.hist.filter(function (h) { return h.status === "FAILED" || h.status === "SUCCESS_WITH_WARNINGS"; }).length +
+        "</b> 条：<span class=\"mono\">FAILED</span> 需要重跑，<span class=\"mono\">SUCCESS_WITH_WARNINGS</span> 的结论要先读校验说明再用。";
+    },
+    src: function () { return "GET /api/workflows/history → items[].status"; },
+    act: { label: "查看历史归档", view: "run" }
+  }
+];
+var P_ORDER = { block: 0, guide: 1, follow: 2, review: 3 };
+var P_MARK = { block: ["阻塞", "✕"], guide: ["引导", "→"], follow: ["跟进", "▸"], review: ["复核", "!"] };
+
+function renderTodos() {
+  var items = RULES.filter(function (r) { return r.test(); });
+  items.sort(function (a, b) { return P_ORDER[a.p] - P_ORDER[b.p]; });
+  $("navTodoN").textContent = items.length;
+  $("todoCount").textContent = items.length;
+  var host = $("todoList");
+  if (!items.length) {
+    host.innerHTML = '<div class="todo-empty"><span class="glyph" aria-hidden="true">✓</span><div><p class="todo-title">当前没有待办</p>' +
+      '<p class="todo-desc">五条推导规则都没有命中：服务配置正常、已有数据集、没有进行中的分析、历史里也没有需要复核的结果。</p>' +
+      '<p class="note" style="margin-top:6px">这里不会出现「手工新建任务」——待办只是接口状态的镜像。</p></div></div>';
+    return;
+  }
+  host.innerHTML = items.map(function (r) {
+    var m = P_MARK[r.p];
+    return '<div class="todo" data-p="' + r.p + '">' +
+      '<span class="shape" aria-hidden="true">' + m[1] + "</span>" +
+      '<div class="todo-main"><p class="todo-title">' + r.title() + "</p>" +
+      '<p class="todo-desc">' + r.desc() + "</p>" +
+      '<p class="todo-meta"><span>' + m[0] + "级</span>" +
+      '<span class="tag-src">' + esc(r.src()) + "</span></p></div>" +
+      '<div class="todo-end"><button class="btn sm" type="button" data-nav="' + r.act.view + '">' + esc(r.act.label) + "</button></div></div>";
+  }).join("");
+}
+
+/* ---------- 状态条 ---------- */
+function renderStrip() {
+  var h = S.health;
+  var bad = h.llm_configured === false || h.upload_dir_ready === false;
+  $("healthDot").className = "dot" + (bad ? " off" : "");
+  $("healthText").innerHTML = (bad ? "服务部分不可用 · " : "服务正常 · ") +
+    '<span class="mono">app_name=' + esc(h.app_name) + " · v" + esc(h.version) + "</span> · 已运行 " +
+    '<span id="uptime">' + daysText(h.uptime_seconds) + "</span> · <span class=\"mono\">status=" + esc(h.status) + "</span> · " +
+    '<span class="mono">llm_configured=' + h.llm_configured + "</span> · <span class=\"mono\">upload_dir_ready=" + h.upload_dir_ready + "</span>";
+}
+
+/* ---------- 工作台 ---------- */
+function renderDashRuns() {
+  var rows = [{
+    workflow_id: S.run.workflow_id, question: S.run.question, ds: "华东渠道销售月报_2026Q3.csv",
+    status: S.run.status, si: S.run.step_index, ts: S.run.total_steps, dur: clock(S.run.elapsed), live: true
+  }].concat(S.hist.slice(0, 3).map(function (h) {
+    return { workflow_id: h.workflow_id, question: h.question, ds: "由 dataset_id 关联", status: h.status, dur: clock(h.sec), live: false };
+  }));
+  $("runCount").textContent = rows.length + " 条";
+  $("runBody").innerHTML = rows.map(function (r) {
+    return "<tr>" +
+      '<td class="q-cell" data-label="提问摘要">' + esc(r.question) + "</td>" +
+      '<td data-label="数据集">' + esc(r.ds) + "</td>" +
+      "<td data-label=\"状态\">" + chip(WF_CN, r.status) + "</td>" +
+      '<td data-label="阶段进度">' + (r.live
+        ? '<span class="steps" role="img" aria-label="已完成 ' + r.si + " 个阶段，共 " + r.ts + ' 个">' + ladder(r.si, r.ts, r.status) + "</span>"
+        : '<span class="note mono">归档不含 step_index</span>') + "</td>" +
+      '<td class="num mono" data-label="整条耗时">' + esc(r.dur) + (r.live ? "（仍在计）" : "") + "</td>" +
+      '<td data-label="操作"><span class="row-ops">' +
+      '<button class="btn sm" type="button" data-nav="run">回看</button>' +
+      (TERMINAL[r.status] && r.status !== "FAILED" ? '<button class="btn sm" type="button" data-nav="report">报告</button>' : "") +
+      "</span></td></tr>";
+  }).join("");
+}
+function ladder(si, ts, status) {
+  var out = "";
+  for (var i = 1; i <= ts; i++) {
+    var cls = i < si ? "done" : (i === si ? (status === "FAILED" ? "fail" : "cur") : "");
+    if (status === "FAILED" && i === si) { cls = "fail"; }
+    else if (status !== "FAILED" && TERMINAL[status]) { cls = "done"; }
+    out += "<span class=\"" + cls + '"></span>';
+  }
+  return out;
+}
+function renderDsMini() {
+  $("dsTotal").textContent = S.dsTotal;
+  if (S.dsTotal === 0) {
+    $("dsMini").innerHTML = emptyBlock("nov");
+    return;
+  }
+  $("dsMini").innerHTML = S.ds.slice(0, 4).map(function (d) {
+    return '<div class="kv"><span class="mono">' + esc(d.name) + '</span><b>' + d.rows.toLocaleString() + " 行 · " + d.cols + " 列</b></div>";
+  }).join("") + '<p class="note" style="margin-top:8px">按 <span class="mono">uploaded_at desc</span> 取前 4 条。</p>';
+}
+
+/* ---------- 空态三种成因 ---------- */
+function emptyBlock(kind) {
+  var m = {
+    nov: ["尚无数据", "上传第一份市场数据，之后才能发起分析。", "上传数据集", "datasets"],
+    nofilter: ["没有匹配的文件名", "当前关键词 <span class=\"mono\">q</span> 在文件名里找不到子串。换个关键词，或清空后浏览全部。", "清空关键词", ""],
+    failed: ["这次没能读到数据", "接口返回非 200。已保留上一次的列表内容，你可以稍后重试。", "重试读取", ""],
+    hist: ["还没有归档", "历史库是终态工作流的落盘记录；一条分析跑完才会出现在这里。", "去发起分析", "analysis"],
+    off: ["历史归档当前处于关闭状态", "接口返回 <span class=\"mono\">enabled=false</span>：部署未配置归档库。列表为空但请求是成功的，所以这不是错误态。", "", ""]
+  }[kind];
+  var glyph = kind === "failed" ? "✕" : (kind === "nofilter" ? "⊘" : "○");
+  var act = m[2] ? '<button class="btn sm primary" type="button" data-nav="' + m[3] + '" data-clearq="' + (kind === "nofilter" ? "1" : "") + '">' + esc(m[2]) + "</button>" : "";
+  return '<div class="empty"><span class="g" aria-hidden="true">' + glyph + "</span><h3>" + m[0] + "</h3><p>" + m[1] + "</p>" + act + "</div>";
+}
+function errBlock(code, main, sub) {
+  return '<div style="padding:14px"><div class="errbox"><span class="g">' + esc(code) + "</span><div><b>" + esc(main) + "</b>" +
+    '<p class="note" style="margin-top:4px">' + esc(sub) + "</p></div></div></div>";
+}
+
+/* ---------- 数据集列表 ---------- */
+function visibleDs() {
+  var q = S.query.q.trim().toLowerCase();
+  var rows = S.ds.slice();
+  if (q) { rows = rows.filter(function (d) { return d.name.toLowerCase().indexOf(q) >= 0; }); }
+  rows.sort(function (a, b) {
+    var k = S.query.sort, dir = S.query.order === "asc" ? 1 : -1;
+    var av = k === "rows" ? a.rows : (k === "filename" ? a.name : a.at);
+    var bv = k === "rows" ? b.rows : (k === "filename" ? b.name : b.at);
+    return (av > bv ? 1 : av < bv ? -1 : 0) * dir;
+  });
+  return rows;
+}
+function renderDsTable() {
+  $("dsCountLabel").textContent = S.dsTotal;
+  if (S.fetchFail) {
+    $("dsBody").innerHTML = "";
+    $("dsEmptyBox").hidden = false;
+    $("dsEmptyBox").innerHTML = errBlock("500", "数据集列表读取失败", "后端返回 5xx 或网络中断；这里不清空已有内容，只在原位给出可重试的说明。");
+    $("dsRange").textContent = "—";
+    $("dsPrev").disabled = $("dsNext").disabled = true;
+    $("dsOffsetEcho").textContent = "offset=" + S.query.offset;
+    return;
+  }
+  if (S.dsTotal === 0) {
+    $("dsBody").innerHTML = "";
+    $("dsEmptyBox").hidden = false;
+    $("dsEmptyBox").innerHTML = emptyBlock("nov");
+    $("dsRange").textContent = "共 0 条";
+    $("dsPrev").disabled = $("dsNext").disabled = true;
+    $("dsOffsetEcho").textContent = "offset=0";
+    return;
+  }
+  var rows = visibleDs();
+  $("dsEmptyBox").hidden = rows.length > 0;
+  if (!rows.length) { $("dsEmptyBox").innerHTML = emptyBlock("nofilter"); }
+  $("dsBody").innerHTML = rows.map(function (d) {
+    return "<tr>" +
+      '<td data-label="文件名"><span class="mono">' + esc(d.name) + '</span><br><span class="note mono">' + esc(d.id) + "</span></td>" +
+      '<td class="num" data-label="行数">' + d.rows.toLocaleString() + "</td>" +
+      '<td class="num" data-label="列数">' + d.cols + "</td>" +
+      '<td data-label="上传时间"><span class="mono">' + esc(d.at) + "</span></td>" +
+      '<td data-label="画像状态">' + (d.profiled
+        ? '<span class="chip ok"><i aria-hidden="true"></i>已画像 <span class="mono">has_profile=true</span></span>'
+        : '<span class="chip idle"><i aria-hidden="true"></i>未画像 <span class="mono">has_profile=false</span></span>') + "</td>" +
+      '<td data-label="操作"><span class="row-ops"><button class="btn sm" type="button" data-nav="dataset">详情</button>' +
+      '<button class="btn sm" type="button" data-nav="analysis" data-pick-dataset="' + esc(d.id) + '">用它提问</button></span></td></tr>';
+  }).join("");
+  var from = S.query.offset + 1;
+  var to = Math.min(S.query.offset + S.query.limit, S.dsTotal);
+  $("dsRange").textContent = "第 " + from + "–" + to + " 条 / 共 " + S.dsTotal + " 条";
+  $("dsPrev").disabled = S.query.offset <= 0;
+  $("dsNext").disabled = to >= S.dsTotal;
+  $("dsOffsetEcho").textContent = "offset=" + S.query.offset;
+  $("dsQueryEcho").textContent = "sort=" + S.query.sort + " · order=" + S.query.order + " · limit=" + S.query.limit + (S.query.q ? " · q=" + S.query.q : "");
+  Array.prototype.forEach.call(document.querySelectorAll("th[data-sort]"), function (th) {
+    var on = th.getAttribute("data-sort") === S.query.sort;
+    th.setAttribute("aria-sort", on ? (S.query.order === "asc" ? "ascending" : "descending") : "none");
+    th.querySelector(".car").textContent = on ? (S.query.order === "asc" ? "↑" : "↓") : "";
+  });
+}
+function renderDsBlockNote() {
+  var n = S.health.upload_dir_ready ? "" : "上传目录当前不可写，「上传数据集」标签内已给出阻塞说明。";
+  $("dsBlockedNote").textContent = n;
+  $("uploadFile").disabled = !S.health.upload_dir_ready;
+  $("uploadDrop").style.opacity = S.health.upload_dir_ready ? "1" : ".55";
+  $("uploadBlockedTip").hidden = S.health.upload_dir_ready;
+}
+
+/* ---------- 运行详情 ---------- */
+function renderRun() {
+  var r = S.run, c = WF_CN[r.status] || ["无法识别", "idle"];
+  var chipEl = $("runStatusChip");
+  chipEl.className = "chip " + c[1];
+  chipEl.innerHTML = '<i aria-hidden="true"></i>' + esc(c[0]) + ' <span class="mono">' + esc(r.status) + "</span>";
+  $("runLadder").innerHTML = ladder(r.step_index, r.total_steps, r.status);
+  $("runLadder").setAttribute("aria-label", "已完成 " + r.step_index + " 个阶段，共 " + r.total_steps + " 个阶段");
+  $("runStepTxt").textContent = "step_index=" + r.step_index + " / total_steps=" + r.total_steps;
+  $("runElapsed").textContent = clock(r.elapsed);
+  $("runPhases").innerHTML = PHASES.map(function (p, i) {
+    var n = i + 1, st = "todo";
+    if (TERMINAL[r.status]) { st = r.status === "FAILED" && n === r.step_index ? "fail" : "done"; }
+    else if (n < r.step_index) { st = "done"; }
+    else if (n === r.step_index) { st = r.status === "FAILED" ? "fail" : "cur"; }
+    var mark = st === "done" ? "✓" : st === "fail" ? "✕" : st === "cur" ? "▸" : String(n).padStart(2, "0");
+    return '<li class="' + st + '" data-s="' + st + '"><span class="mark">' + mark + "</span><b>" + esc(p.cn) + "</b>" +
+      '<span class="mono">' + esc(p.key) + (st === "cur" ? " · " + esc(p.step) : "") + "</span></li>";
+  }).join("");
+  var poll = $("pollHint");
+  if (TERMINAL[r.status]) {
+    poll.innerHTML = "已进入终态，轮询停止（<span class=\"mono\">" + esc(r.status) + "</span>）";
+    poll.className = "note";
+  } else {
+    poll.innerHTML = '<span class="ring" aria-hidden="true"></span>每 1000ms 轮询一次，进入终态即停止';
+    poll.className = "poll";
+  }
+  $("taskBody").innerHTML = r.tasks.map(function (t) {
+    return "<tr><td class=\"mono\" data-label=\"编号\">" + esc(t.task_id) + "</td>" +
+      '<td data-label="任务描述">' + esc(t.description) + "</td>" +
+      "<td data-label=\"状态\">" + chip(TASK_CN, t.status) + "</td>" +
+      '<td data-label="错误信息">' + (t.error ? '<span class="mono">' + esc(t.error) + "</span>" : '<span class="muted">—</span>') + "</td></tr>";
+  }).join("");
+  $("runCharts").innerHTML = r.charts.map(function (ch) {
+    return '<div class="thumb">' + miniChart(ch.chart_type) +
+      '<div class="cap"><span>' + esc(ch.title) + '</span><span class="mono">' + esc(ch.chart_id) + ".png</span></div>" +
+      '<div class="cap"><span class="mono">' + esc(ch.chart_type) + '</span><span class="mono">charts/' + esc(ch.chart_id) + '.png</span></div></div>';
+  }).join("") + (r.charts.length ? "" : '<p class="note">还没有图表产出：<span class="mono">charts=[]</span>，等 <span class="mono">CHARTING</span> 阶段跑完才会有。</p>');
+  renderDashRuns();
+}
+function miniChart(t) {
+  if (t === "line") {
+    return '<svg viewBox="0 0 300 110" role="img" aria-label="折线图示意：月度毛利率走势">' +
+      '<line class="axis" x1="8" y1="92" x2="292" y2="92"></line>' +
+      '<polyline fill="none" stroke="var(--c2)" stroke-width="2" points="20,40 80,52 140,46 200,74 262,80"></polyline>' +
+      '<g fill="var(--c2)"><circle cx="20" cy="40" r="3"></circle><circle cx="80" cy="52" r="3"></circle><circle cx="140" cy="46" r="3"></circle><circle cx="200" cy="74" r="3"></circle><circle cx="262" cy="80" r="3"></circle></g></svg>';
+  }
+  return '<svg viewBox="0 0 300 110" role="img" aria-label="柱状图示意：渠道品类毛利率环比">' +
+    '<line class="axis" x1="8" y1="92" x2="292" y2="92"></line>' +
+    '<g fill="var(--c1)"><rect x="28" y="34" width="22" height="58"></rect><rect x="104" y="22" width="22" height="70"></rect><rect x="180" y="26" width="22" height="66"></rect><rect x="256" y="52" width="22" height="40"></rect></g>' +
+    '<g fill="var(--c2)"><rect x="52" y="52" width="22" height="40"></rect><rect x="128" y="34" width="22" height="58"></rect><rect x="204" y="24" width="22" height="68"></rect><rect x="280" y="60" width="12" height="32"></rect></g></svg>';
+}
+
+/* ---------- 历史归档 ---------- */
+function renderHist() {
+  if (S.fetchFail) {
+    $("histBody").innerHTML = "";
+    $("histEmptyBox").hidden = false;
+    $("histEmptyBox").innerHTML = errBlock("500", "历史列表读取失败", "归档库查询异常；不影响当前运行的轮询，只影响历史页。");
+    $("histRange").textContent = "—";
+    return;
+  }
+  if (!S.hist.length) {
+    $("histBody").innerHTML = "";
+    $("histEmptyBox").hidden = false;
+    $("histEmptyBox").innerHTML = emptyBlock("hist");
+    $("histRange").textContent = "共 0 条";
+    return;
+  }
+  $("histEmptyBox").hidden = true;
+  $("histBody").innerHTML = S.hist.map(function (h) {
+    return "<tr>" +
+      '<td class="q-cell" data-label="提问">' + esc(h.question) + "</td>" +
+      "<td data-label=\"状态\">" + chip(WF_CN, h.status) + (h.error_code ? ' <span class="tag-src">' + esc(h.error_code) + "</span>" : "") + "</td>" +
+      '<td data-label="LLM"><span class="mono">llm_used=' + h.llm_used + "</span></td>" +
+      '<td data-label="发起时间"><span class="mono">' + esc(h.created_at) + "</span></td>" +
+      '<td class="num mono" data-label="整条耗时">' + clock(h.sec) + "</td>" +
+      '<td data-label="操作"><span class="row-ops">' +
+      (h.has_report ? '<button class="btn sm" type="button" data-nav="report">看报告</button>' : '<span class="note">无报告</span>') +
+      '<button class="btn sm" type="button" data-nav="run">回看</button></span></td></tr>';
+  }).join("");
+  $("histRange").textContent = "第 1–" + S.hist.length + " 条 / 共 " + S.hist.length + " 条（顺序由库内 <span class=\"mono\">finished_at DESC</span> 定死）";
+  $("histPrev").disabled = $("histNext").disabled = true;
+}
+
+/* ---------- 报告 ---------- */
+function renderReport() {
+  $("valList").innerHTML = S.validation.map(function (v) {
+    return '<li><span class="sev ' + esc(v.severity) + '">' + esc(v.severity) + "</span><span>" + esc(v.text) + "</span></li>";
+  }).join("");
+  $("dqList").innerHTML = S.dq.map(function (t) {
+    return '<li><span class="sev info">画像</span><span>' + esc(t) + "</span></li>";
+  }).join("");
+  $("srcList").innerHTML = S.srcs.map(function (s) {
+    return '<li id="src-' + esc(s.id) + '"><span class="id">' + esc(s.id) + '</span><span class="mono">' + esc(s.tool) + "</span><br>" + esc(s.text) + "</li>";
+  }).join("");
+}
+
+/* ---------- 分析发起 ---------- */
+function renderAnalysis() {
+  $("anDsBody").innerHTML = S.ds.slice(0, 5).map(function (d, i) {
+    return '<tr' + (i === 0 ? ' style="background:var(--brand-tint)"' : "") + ">" +
+      '<td data-label="文件名"><span class="mono">' + esc(d.name) + "</span></td>" +
+      '<td class="num" data-label="行数">' + d.rows.toLocaleString() + "</td>" +
+      '<td class="num" data-label="列数">' + d.cols + "</td>" +
+      '<td data-label="上传时间"><span class="mono">' + esc(d.at) + "</span></td>" +
+      '<td data-label="选择"><button class="btn sm" type="button" data-pick="' + esc(d.id) + '">' + (i === 0 ? "已选" : "选择") + "</button></td></tr>";
+  }).join("") || "<tr><td colspan=\"5\">" + emptyBlock("nov") + "</td></tr>";
+  var ok = S.health.llm_configured && S.dsTotal > 0;
+  $("anPreflight").innerHTML =
+    '<div class="kv"><span class="muted">数据集是否可选</span><b>' + (S.dsTotal > 0 ? "可以（" + S.dsTotal + " 个）" : "没有") + "</b></div>" +
+    '<div class="kv"><span class="muted">LLM 是否已配置</span><b>' + (S.health.llm_configured ? "是" : "否，将走规则模板") + "</b></div>" +
+    '<div class="kv"><span class="muted">上传目录是否可写</span><b>' + (S.health.upload_dir_ready ? "是" : "否") + "</b></div>" +
+    '<div class="kv"><span class="muted">问题长度</span><b>2–500 字</b></div>';
+  $("anBlockedErr").hidden = ok;
+  if (!ok) {
+    $("anBlockedWhy").innerHTML = S.dsTotal === 0 ? " 当前没有任何数据集，<span class=\"mono\">dataset_id</span> 无从取值（后端会以 <span class=\"mono\">404</span> 拒绝）。" :
+      " <span class=\"mono\">llm_configured=false</span> 时仍可发起，但报告文字由规则模板生成，可信度会打折。";
+  }
+  $("anSubmit").disabled = S.dsTotal === 0;
+}
+function stepAn(n) {
+  Array.prototype.forEach.call($("anStepper").querySelectorAll("li"), function (li) {
+    var i = Number(li.getAttribute("data-step"));
+    li.className = i < n ? "done" : (i === n ? "cur" : "");
+  });
+}
+
+/* ---------- 状态视图 ---------- */
+var SHAPE = { idle: "空心圆", run: "呼吸实心圆", ok: "实心方块", warn: "实心三角", err: "实心梯形色块" };
+var WHY = {
+  PENDING: "还没开始，用最弱的轮廓形，避免和「正在跑」混淆",
+  PROFILING: "六个执行阶段共用同一套「运行中」样式，阶段差别写在文案里而不是继续加颜色",
+  PLANNING: "同上；阶段名放在标题与详情里，不在色上继续加负担",
+  EXECUTING: "同上", CHARTING: "同上", REPORTING: "同上", VALIDATING: "同上",
+  SUCCESS: "绿 + 方块 + 「已完成」三重编码，闭眼读文字也说得清",
+  SUCCESS_WITH_WARNINGS: "琥珀 + 三角：它既是成功也是警告，形状必须先于颜色说话",
+  FAILED: "红 + 梯形，色形字三重，禁止只靠红色表达"
+};
+function renderEnums() {
+  var rows = Object.keys(WF_CN).map(function (k) {
+    return { cn: WF_CN[k][0], cls: WF_CN[k][1], raw: k, api: "WorkflowStatus · GET /api/workflows/{id} 与 history", why: WHY[k] };
+  }).concat(Object.keys(TASK_CN).map(function (k) {
+    return { cn: TASK_CN[k][0], cls: TASK_CN[k][1], raw: k, api: "TaskStatus · tasks[].status", why: k === "SKIPPED" ? "被跳过的任务必须留在列表里，用中性空心圆表达「没有发生」" : "任务级与流程级共用同一套色形，避免两套图例互相矛盾" };
+  }));
+  $("enumBody").innerHTML = rows.map(function (r) {
+    return "<tr>" +
+      '<td data-label="中文文案"><span class="chip ' + r.cls + '"><i aria-hidden="true"></i>' + esc(r.cn) + "</span></td>" +
+      '<td class="mono" data-label="原始枚举值">' + esc(r.raw) + "</td>" +
+      '<td data-label="接口">' + esc(r.api) + "</td>" +
+      '<td data-label="形状">' + esc(SHAPE[r.cls]) + "</td>" +
+      '<td data-label="为什么这样编码">' + esc(r.why) + "</td></tr>";
+  }).join("");
+}
+function renderStateEmpty(kind) { $("stateEmpty").innerHTML = emptyBlock(kind); }
+
+/* ---------- 通用交互 ---------- */
+function selectTab(group, val, btn) {
+  Array.prototype.forEach.call(document.querySelectorAll('[data-tab="' + group + '"]'), function (b) {
+    var on = b.getAttribute("data-val") === val;
+    b.setAttribute("aria-selected", on ? "true" : "false");
+    b.tabIndex = on ? 0 : -1;
+    var pane = $(b.getAttribute("aria-controls"));
+    if (pane) { pane.hidden = !on; }
+  });
+}
+function setDensity(v) {
+  document.body.setAttribute("data-density", v);
+  try { localStorage.setItem("mis06.density", v); } catch (e) { }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-density-btn]"), function (b) {
+    b.setAttribute("aria-pressed", b.getAttribute("data-density-btn") === v ? "true" : "false");
+  });
+}
+
+document.addEventListener("click", function (ev) {
+  var t = ev.target.closest ? ev.target.closest("[data-nav],[data-density-btn],[data-dev],[data-login],[data-tab],[data-switch],[data-sort],[data-pick],#userBtn,#logoutBtn,#dsSearchBtn,#dsClearBtn,#dsPrev,#dsNext,#histPrev,#histNext,#anSubmit,#runPollOnce,.cite") : null;
+  if (!t) { closeMenu(); return; }
+
+  if (t.hasAttribute("data-nav")) {
+    setView(t.getAttribute("data-nav"));
+    if (t.hasAttribute("data-pick-dataset")) { $("anPickedName").textContent = t.getAttribute("data-pick-dataset"); stepAn(2); }
+    if (t.getAttribute("data-clearq")) { $("dsQ").value = ""; S.query.q = ""; S.query.offset = 0; renderDsTable(); setView("datasets"); }
+    closeMenu();
+    return;
+  }
+  if (t.hasAttribute("data-density-btn")) { setDensity(t.getAttribute("data-density-btn")); return; }
+  if (t.hasAttribute("data-dev")) {
+    var dv = t.getAttribute("data-dev"), val = t.getAttribute("data-val");
+    Array.prototype.forEach.call(document.querySelectorAll('[data-dev="' + dv + '"]'), function (b) {
+      b.setAttribute("aria-pressed", b === t ? "true" : "false");
+    });
+    if (dv === "service") {
+      S.health.llm_configured = val !== "nollm";
+      S.health.upload_dir_ready = val !== "nodir";
+    } else if (dv === "datasets") { S.dsTotal = val === "none" ? 0 : 342; }
+    else if (dv === "fetch") { S.fetchFail = val === "fail"; }
+    refreshAll();
+    return;
+  }
+  if (t.hasAttribute("data-login")) { applyLoginMode(t.getAttribute("data-login"), t); return; }
+  if (t.hasAttribute("data-tab")) { selectTab(t.getAttribute("data-tab"), t.getAttribute("data-val"), t); return; }
+  if (t.hasAttribute("data-switch")) {
+    var g = t.getAttribute("data-switch"), v = t.getAttribute("data-val");
+    Array.prototype.forEach.call(document.querySelectorAll('[data-switch="' + g + '"]'), function (b) {
+      b.setAttribute("aria-pressed", b === t ? "true" : "false");
+    });
+    if (g === "dsSwitch") {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-pane]'), function (p) { p.hidden = p.getAttribute("data-pane") !== v; });
+    } else { renderStateEmpty(v); }
+    return;
+  }
+  if (t.hasAttribute("data-sort")) {
+    var k = t.getAttribute("data-sort");
+    if (S.query.sort === k) { S.query.order = S.query.order === "asc" ? "desc" : "asc"; }
+    else { S.query.sort = k; S.query.order = "asc"; }
+    renderDsTable();
+    return;
+  }
+  if (t.hasAttribute("data-pick")) {
+    $("anPickedName").textContent = t.getAttribute("data-pick");
+    stepAn(2);
+    return;
+  }
+  if (t.id === "userBtn") {
+    var open = $("userPop").hidden;
+    $("userPop").hidden = !open;
+    t.setAttribute("aria-expanded", open ? "true" : "false");
+    return;
+  }
+  if (t.id === "logoutBtn") { $("userPop").hidden = true; setView("login"); return; }
+  if (t.id === "dsSearchBtn") { ev.preventDefault(); S.query.q = $("dsQ").value; S.query.offset = 0; renderDsTable(); return; }
+  if (t.id === "dsClearBtn") { $("dsQ").value = ""; S.query.q = ""; S.query.offset = 0; renderDsTable(); return; }
+  if (t.id === "dsPrev") { S.query.offset = Math.max(0, S.query.offset - S.query.limit); renderDsTable(); return; }
+  if (t.id === "dsNext") { S.query.offset = Math.min(Math.max(0, S.dsTotal - S.query.limit), S.query.offset + S.query.limit); renderDsTable(); return; }
+  if (t.id === "anSubmit") {
+    var q = $("anQuestion").value.trim();
+    if (q.length < 2) { $("anBlockedErr").hidden = false; $("anBlockedWhy").textContent = " 问题长度不足 2 字，后端会以 422 拒绝。"; return; }
+    stepAn(3);
+    $("anAccepted").hidden = false;
+    $("anNewWf").textContent = "workflow_id=" + S.run.workflow_id + " · status=PENDING";
+    return;
+  }
+  if (t.id === "runPollOnce") {
+    var r = S.run;
+    if (r.step_index < r.total_steps) { r.step_index += 1; r.status = PHASES[Math.min(r.step_index, r.total_steps) - 1].key; }
+    else if (!TERMINAL[r.status]) { r.status = "SUCCESS"; r.step = "done"; }
+    r.elapsed += 47;
+    renderRun();
+    renderTodos();
+    return;
+  }
+  if (t.classList.contains("cite")) {
+    var id = t.getAttribute("data-cite");
+    selectTab("rpTab", "src", $("tab-rp-src"));
+    var row = $("src-" + id);
+    if (row) {
+      row.classList.add("flash");
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      setTimeout(function () { row.classList.remove("flash"); }, 1200);
+    }
+    return;
+  }
+});
+
+function closeMenu() {
+  var p = $("userPop");
+  if (p && !p.hidden) { p.hidden = true; $("userBtn").setAttribute("aria-expanded", "false"); }
+}
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape") { closeMenu(); }
+  if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+    var b = document.activeElement;
+    if (!b || !b.hasAttribute || !b.hasAttribute("data-tab")) { return; }
+    var all = Array.prototype.slice.call(document.querySelectorAll('[data-tab="' + b.getAttribute("data-tab") + '"]'));
+    var i = all.indexOf(b);
+    var next = all[(i + (ev.key === "ArrowRight" ? 1 : all.length - 1)) % all.length];
+    selectTab(b.getAttribute("data-tab"), next.getAttribute("data-val"), next);
+    next.focus();
+    ev.preventDefault();
+  }
+});
+document.addEventListener("submit", function (ev) {
+  if (ev.target.id === "loginForm") {
+    ev.preventDefault();
+    if (document.body.getAttribute("data-login-mode") === "bootstrap") {
+      if ($("loginPass").value !== $("loginPass2").value) {
+        $("loginEndpoint").innerHTML = '<span style="color:var(--st-err)">两次输入的密码不一致（前端校验，不会发送这一格）。</span>';
+        return;
+      }
+    }
+    setView("dashboard");
+    return;
+  }
+  if (ev.target.id === "pwForm") {
+    ev.preventDefault();
+    $("pwMsg").textContent = "原型未接入后端；真实调用为 POST /api/auth/password，成功后当前会话继续有效。";
+    return;
+  }
+  if (ev.target.id === "dsFilterForm") { ev.preventDefault(); }
+});
+$("anQuestion").addEventListener("input", function () {
+  $("qCount").textContent = this.value.length + " / 500";
+});
+
+var LOGIN_TXT = {
+  standard: { title: "登录", sub: "请使用管理员分配的账号登录。会话写入 HttpOnly Cookie <span class=\"mono\">mis_session</span>，默认 8 小时有效。", ep: "提交目标：<span class=\"mono\">POST /auth/login</span> · 忘记密码需联系管理员重置（后端未提供自助找回接口）。", btn: "登录" },
+  bootstrap: { title: "初始化系统", sub: "账号库为空，这一步创建第一个管理员。创建成功后后端直接签发会话，不需要再登录一次。", ep: "提交目标：<span class=\"mono\">POST /auth/bootstrap</span> · 请求体只有 <span class=\"mono\">username / display_name / password</span> 三个字段。", btn: "创建管理员并进入" },
+  unauth: { title: "登录", sub: "会话过期或被登出后回到这里，界面与标准态完全一致。", ep: "统一文案：<span class=\"mono\">账号或密码不正确，或登录状态已失效</span>。", btn: "重新登录" },
+  limited: { title: "登录", sub: "触发限流后表单仍可编辑，但提交按钮按 <span class=\"mono\">Retry-After</span> 倒计时禁用。", ep: "响应状态：<span class=\"mono\">429 + Retry-After</span>。", btn: "登录" }
+};
+function applyLoginMode(mode, btn) {
+  Array.prototype.forEach.call(document.querySelectorAll("[data-login]"), function (b) {
+    b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+  });
+  document.body.setAttribute("data-login-mode", mode);
+  $("loginTitle").textContent = LOGIN_TXT[mode].title;
+  $("loginSub").innerHTML = LOGIN_TXT[mode].sub;
+  $("loginEndpoint").innerHTML = LOGIN_TXT[mode].ep;
+  $("loginSubmit").textContent = LOGIN_TXT[mode].btn;
+  $("bootstrapTip").hidden = mode !== "bootstrap";
+  $("unauthTip").hidden = mode !== "unauth";
+  $("limitedTip").hidden = mode !== "limited";
+  Array.prototype.forEach.call(document.querySelectorAll("[data-only]"), function (f) { f.hidden = mode !== "bootstrap"; });
+  if (mode === "limited") { countdown(45); } else { $("loginSubmit").disabled = false; }
+}
+var cdTimer = null;
+function countdown(sec) {
+  clearInterval(cdTimer);
+  var left = sec;
+  $("loginSubmit").disabled = true;
+  cdTimer = setInterval(function () {
+    left -= 1;
+    if (left <= 0) {
+      clearInterval(cdTimer);
+      $("loginSubmit").disabled = false;
+      $("loginSubmit").textContent = "登录";
+      return;
+    }
+    $("loginSubmit").textContent = "请等待 " + left + " 秒";
+  }, 1000);
+}
+
+function refreshAll() {
+  renderStrip();
+  renderTodos();
+  renderDashRuns();
+  renderDsMini();
+  renderDsTable();
+  renderDsBlockNote();
+  renderRun();
+  renderHist();
+  renderAnalysis();
+}
+
+(function init() {
+  var d = null;
+  try { d = localStorage.getItem("mis06.density"); } catch (e) { }
+  setDensity(d === "compact" || d === "loose" ? d : "regular");
+  renderReport();
+  renderEnums();
+  renderStateEmpty("nov");
+  refreshAll();
+  selectTab("dsTab", "list", $("tab-ds-list"));
+  selectTab("runTab", "detail", $("tab-run-detail"));
+  selectTab("rpTab", "body", $("tab-rp-body"));
+  var h = (location.hash || "").replace("#/", "");
+  setView(VIEWS.indexOf(h) >= 0 ? h : "login");
+})();
+window.addEventListener("hashchange", function () {
+  var h = (location.hash || "").replace("#/", "");
+  if (VIEWS.indexOf(h) >= 0) { setView(h); }
+});
+</script>
+</body>
+</html>
+

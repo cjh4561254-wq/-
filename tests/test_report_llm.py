@@ -66,7 +66,7 @@ from app.schemas_workflow import (
 SAMPLE_CSV = config.PROJECT_ROOT / "data" / "samples" / "sales.csv"
 
 # 逐字硬编码（理由见模块 docstring）。
-TEMPLATE_NOTICE = "本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总"
+TEMPLATE_NOTICE = "本次未使用大模型，以下结论为工具结果的直接汇总"
 LLM_PLANNED_NOTICE = (
     "本次由大模型参与规划（选择了分析工具与参数），"
     "但报告正文是模板自动汇总的，以下结论仍为工具结果的直接汇总"

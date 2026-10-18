@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIS&gt;TERM · 方案04 视觉原型</title>
+<style>
+/* 设计底座（坐标对应：暗色/极高密度/无侧栏/键盘驱动/表格+状态时间线）
+ * 1. 单色底 #0A0D12 + 唯一强调色琥珀 #FF9F2E（彭博配方：语义色极少、圆角为 0）。
+ * 2. 层级只靠 1px --line 与字重建立：没有卡片阴影、没有容器嵌套（"无侧栏"的另一面）。
+ * 3. 数字全部 tabular-nums 等宽右对齐；状态 = 色+形+字三重编码（色盲可分辨）。
+ * 4. 密度即功能：行高 20px、字号 12px；唯报告正文区放宽到 1.9 行高（两种节奏分区）。
+ * 5. 布局 2×2↔1×3 只存内存——后端无保存视图能力，界面上写明不持久化。
+ * 6. 后端 PNG 图表是浅底：暗壳内用 --paper 衬底"分层"包裹，不做暗色重绘（反模式）。
+ * 7. 动效仅 4 条且全部服务状态推进可感知；轮询刷新零闪烁。 */
+:root{
+  --bg0:#0A0D12; --bg1:#10151C; --bg2:#161D26; --line:#27303D;
+  --ink:#D8DFE8; --ink2:#9AA5B4; --amber:#FF9F2E;
+  --ok:#3DD68C; --bad:#FF6B6B; --warn:#FFD166; --run:#7FB3FF;
+  --c1:#59C2D6; --c2:#6D9BD3; --c3:#8FA1B3; --c4:#9187D6;
+  --paper:#E9ECF1; --paper-ink:#1A2130;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --sans:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;border-radius:0}
+html,body{height:100%}
+body{background:var(--bg0);color:var(--ink);font:12px/1.4 var(--sans);overflow:hidden}
+button,input,select,textarea{font:inherit;font-family:var(--mono);color:var(--ink);background:var(--bg1);border:1px solid var(--line)}
+button{cursor:pointer;padding:2px 8px}
+button:hover{background:var(--bg2)}
+:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono)}
+.dim{color:var(--ink2)}
+/* ===== 顶部窗格标签条（28px，无侧栏的唯一导航） ===== */
+#chrome{height:28px;display:flex;align-items:center;gap:0;border-bottom:1px solid var(--line);background:var(--bg1);padding:0 8px}
+#brand{font-family:var(--mono);font-weight:700;color:var(--amber);padding-right:12px;white-space:nowrap}
+#tabs{display:flex;gap:1px}
+#tabs button{border:none;border-bottom:2px solid transparent;background:none;padding:4px 10px;color:var(--ink2)}
+#tabs button[aria-selected="true"]{color:var(--amber);border-bottom-color:var(--amber);background:var(--bg2)}
+#laygroup{display:flex;align-items:center;gap:4px;margin-left:12px;padding-left:12px;border-left:1px solid var(--line)}
+#laynote{color:var(--ink2);font-size:11px}
+#chrome .sp{flex:1}
+#declare{font-size:11px;color:var(--ink2);border:1px solid var(--line);padding:2px 8px;margin-right:8px;white-space:nowrap}
+#led{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;white-space:nowrap}
+#led i{width:8px;height:8px;background:var(--ok);display:inline-block}
+/* ===== 视图容器 ===== */
+main{height:calc(100% - 28px - 22px);position:relative}
+.view{position:absolute;inset:0;display:none;overflow:hidden}
+.view.on{display:block}
+/* ===== 窗格栅格：2×2 ↔ 1×3 ===== */
+.panes{display:grid;height:100%;gap:1px;background:var(--line);padding:0}
+body[data-layout="2x2"] #v-dash .panes{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+body[data-layout="1x3"] #v-dash .panes{grid-template-columns:1fr;grid-template-rows:1fr 1fr 1fr}
+body[data-layout="1x3"] #p-health{display:none}
+.split{display:grid;height:100%;gap:1px;background:var(--line)}
+.pane{background:var(--bg1);display:flex;flex-direction:column;min-height:0;min-width:0}
+.ph{height:22px;display:flex;align-items:center;gap:8px;padding:0 8px;border-bottom:1px solid var(--line);background:var(--bg2);flex:none;font-family:var(--mono);font-size:11px}
+.ph b{color:var(--amber);font-weight:700}
+.pb{flex:1;overflow:auto;min-height:0}
+.pb.pad{padding:8px}
+/* ===== 高密度表格：粘性表头 + 行选中 ===== */
+table.grid{width:100%;border-collapse:collapse;font-size:12px}
+.grid th{position:sticky;top:0;background:var(--bg2);color:var(--ink2);font-weight:400;text-align:left;padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap;font-family:var(--mono)}
+.grid td{padding:2px 8px;border-bottom:1px solid #1b222c;white-space:nowrap;vertical-align:top}
+.grid td.r,.grid th.r{text-align:right}
+.grid tbody tr{cursor:pointer}
+.grid tbody tr:hover{background:var(--bg2)}
+.grid tbody tr.sel{background:var(--bg2);box-shadow:inset 3px 0 0 var(--amber)}
+.grid[tabindex]{outline-offset:-2px}
+/* 状态三重编码：色 + 形 + 字 */
+.st{font-family:var(--mono);font-size:11px;white-space:nowrap}
+.st i{font-style:normal;width:10px;display:inline-block}
+.st-ok{color:var(--ok)} .st-bad{color:var(--bad)} .st-warn{color:var(--warn)} .st-run{color:var(--run)} .st-idle{color:var(--ink2)}
+/* ===== 命令面板 ===== */
+#palette{position:absolute;top:48px;left:50%;transform:translateX(-50%);width:560px;background:var(--bg1);border:1px solid var(--amber);z-index:60;display:none;flex-direction:column;box-shadow:0 6px 24px rgba(0,0,0,.6)}
+#palette.on{display:flex;animation:pop 120ms ease-out}
+@keyframes pop{from{transform:translateX(-50%) translateY(-4px);opacity:.4}}
+#pq{border:none;border-bottom:1px solid var(--line);padding:8px 10px;font-size:14px;background:var(--bg0)}
+#plist{max-height:280px;overflow:auto}
+#plist div{padding:6px 10px;display:flex;justify-content:space-between;gap:12px;cursor:pointer;border-left:3px solid transparent}
+#plist div.cur{background:var(--bg2);border-left-color:var(--amber)}
+#plist .kbd{color:var(--ink2);font-family:var(--mono);font-size:11px}
+#phint{border-top:1px solid var(--line);padding:4px 10px;color:var(--ink2);font-family:var(--mono);font-size:11px}
+/* ===== 详情覆盖层（Enter/点击行 → 右侧滑出，Bloomberg QR 语义） ===== */
+#detail{position:absolute;top:0;right:0;bottom:22px;width:420px;background:var(--bg1);border-left:1px solid var(--amber);z-index:50;display:none;flex-direction:column}
+#detail.on{display:flex}
+#dbody{overflow:auto;padding:8px 12px;flex:1}
+#dbody dl{display:grid;grid-template-columns:96px 1fr;gap:4px 10px;font-size:12px}
+#dbody dt{color:var(--ink2);font-family:var(--mono)}
+#dbody dd{font-family:var(--mono);word-break:break-all}
+/* ===== 状态栏 ===== */
+#status{position:fixed;bottom:0;left:0;right:0;height:22px;display:flex;align-items:center;gap:14px;padding:0 8px;border-top:1px solid var(--line);background:var(--bg1);font-family:var(--mono);font-size:11px;z-index:70}
+#mode{color:var(--amber);width:72px;font-weight:700}
+#status .sp{flex:1}
+#status a{color:var(--c2);text-decoration:none;border-bottom:1px dotted var(--c2);cursor:pointer}
+/* ===== 登录终端框 ===== */
+.termbox{width:420px;margin:9vh auto 0;border:1px solid var(--line);background:var(--bg1)}
+.termbox .ph b{font-size:13px}
+.termbox .row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #1b222c}
+.termbox label{font-family:var(--mono);color:var(--amber);width:44px;flex:none}
+.termbox input{flex:1;border:none;background:none;padding:2px}
+.termbox .foot{padding:8px 10px;display:flex;gap:8px;align-items:center}
+.termbox .tag{font-size:11px;color:var(--ink2)}
+.err{color:var(--bad);font-family:var(--mono);font-size:11px;padding:0 10px 6px;display:none}
+.err.on{display:block}
+/* ===== 阶梯与时间线 ===== */
+.steps{display:flex;gap:2px;align-items:center}
+.steps i{width:26px;height:12px;border:1px solid var(--run);font-style:normal;display:inline-block}
+.steps i.done{background:var(--run)}
+.steps i.cur{outline:2px solid var(--amber);outline-offset:1px}
+.steps i.idle{border-color:var(--line)}
+.tl{display:flex;flex-direction:column;font-family:var(--mono);font-size:11px}
+.tl .n{display:flex;gap:10px;padding:3px 8px;border-bottom:1px solid #1b222c}
+.tl .n b{width:14px;text-align:center;font-weight:400}
+.tl .v{border-left:2px solid var(--run);padding-left:6px}
+/* ===== 报告 ===== */
+.doc{max-width:74ch;padding:14px 20px;font-size:14px;line-height:1.9}
+.doc h3{font-family:var(--mono);font-size:15px;color:var(--amber);margin:18px 0 6px;font-weight:700}
+.doc p{margin:0 0 10px}
+a.cite{color:var(--amber);font-family:var(--mono);font-size:10px;text-decoration:none;vertical-align:super;border-bottom:1px dotted var(--amber);cursor:pointer;padding:0 1px}
+.ev{padding:5px 10px;border-bottom:1px solid #1b222c;font-family:var(--mono);font-size:11px}
+.ev.flash{background:var(--bg2);transition:background 180ms ease-out}
+.figure{margin:10px 0;border:1px solid var(--line);background:var(--bg1)}
+.figure .plot{background:var(--paper);padding:8px}
+.figure figcaption{padding:5px 8px;color:var(--ink2);font-size:11px;font-family:var(--mono)}
+.sev{font-family:var(--mono);font-size:11px}
+/* ===== 三态 ===== */
+.empty{padding:16px 12px;color:var(--ink2)}
+.empty b{display:block;color:var(--ink);font-size:13px;margin-bottom:4px;font-weight:400}
+.sk{height:12px;background:var(--bg2);margin:6px 0;animation:brt 1.2s ease-in-out infinite alternate}
+@keyframes brt{from{opacity:.4}to{opacity:1}}
+.spin{display:inline-block;width:10px;text-align:center;font-family:var(--mono)}
+/* ===== 窄屏：表格转标签—值堆叠 ===== */
+@media (max-width:900px){
+  #laynote,#tabs button span.t{display:none}
+  .view{overflow:auto}
+  body[data-layout="2x2"] #v-dash .panes{grid-template-columns:1fr;grid-template-rows:repeat(4,minmax(220px,auto))}
+  .split.two,.split.three{grid-template-columns:1fr!important;grid-template-rows:repeat(3,minmax(260px,auto))!important}
+  #detail{width:100%}
+  .grid thead{display:none}
+  .grid tbody tr{display:block;border-bottom:1px solid var(--line);padding:4px 0}
+  .grid td{display:flex;border:none;padding:1px 8px}
+  .grid td::before{content:attr(data-th);color:var(--ink2);width:96px;flex:none;font-family:var(--mono)}
+  .grid td.r{text-align:left}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body data-view="dash" data-layout="2x2" data-mode="normal">
+
+<!-- 顶部窗格标签条：无侧栏，一切导航在此 + Ctrl/Cmd+K -->
+<header id="chrome">
+  <span id="brand">MIS&gt;TERM</span>
+  <nav id="tabs" role="tablist" aria-label="视图">
+    <button role="tab" data-v="dash" aria-selected="true">1 终端<span class="t">/窗格</span></button>
+    <button role="tab" data-v="ana" aria-selected="false">2 分析</button>
+    <button role="tab" data-v="run" aria-selected="false">3 运行</button>
+    <button role="tab" data-v="rep" aria-selected="false">4 报告</button>
+    <button role="tab" data-v="st3" aria-selected="false">5 三态</button>
+  </nav>
+  <div id="laygroup">
+    <button id="lay22" aria-pressed="true">[2×2]</button><button id="lay13" aria-pressed="false">[1×3]</button>
+    <span id="laynote">布局不持久化（后端无保存视图能力）</span>
+  </div>
+  <span class="sp"></span>
+  <span id="declare">视觉方案示意 · 数据为占位样例 · 未接入后端</span>
+  <span id="led" title="GET /api/health"><i></i>HEALTHY v0.4.2 · 运行 6d14h</span>
+</header>
+
+<main id="views">
+
+  <!-- ============ 视图 0：登录（含 needs_bootstrap） ============ -->
+  <section class="view" id="v-login" data-view="login">
+    <div class="termbox">
+      <div class="ph"><b id="lg-title">auth: login</b><span class="sp"></span><span class="dim" id="lg-sub">session 8h · HttpOnly</span></div>
+      <div id="lg-login">
+        <div class="row"><label for="lg-u">user:</label><input id="lg-u" autocomplete="username" placeholder="analyst"></div>
+        <div class="row"><label for="lg-p">pass:</label><input id="lg-p" type="password" placeholder="••••••"></div>
+      </div>
+      <div id="lg-boot" hidden>
+        <div class="row"><label for="lb-u">user:</label><input id="lb-u" placeholder="首个管理员账号"></div>
+        <div class="row"><label for="lb-p">pass:</label><input id="lb-p" type="password"></div>
+        <div class="row"><label for="lb-p2">confirm:</label><input id="lb-p2" type="password"></div>
+        <div class="row dim" style="display:block;padding:6px 10px">首次部署 · 尚无管理员账号（needs_bootstrap=true）· 提交调用 POST /auth/bootstrap</div>
+      </div>
+      <div class="err" id="lg-err">用户名或密码错误（统一文案，不泄露账号是否存在）</div>
+      <div class="err" id="lg-429" style="color:var(--warn)">请求过于被限流：429 · Retry-After: 30s，按钮已禁用</div>
+      <div class="foot">
+        <button id="lg-submit">登录 [Enter]</button>
+        <span class="tag dim">把市场数据变成可追溯的决策依据</span>
+        <span class="sp" style="flex:1"></span>
+        <button id="lg-swap" class="dim" title="原型切换，演示两种互斥模式">切换 bootstrap 模式（原型）</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图 1：终端首屏 · 多窗格 2×2（可切 1×3） ============ -->
+  <section class="view on" id="v-dash" data-view="dash">
+    <div class="panes">
+      <div class="pane" id="p-ds">
+        <div class="ph"><b>P1</b> 数据集 · /api/datasets
+          <input id="ds-q" placeholder="列过滤 q=…（真实参数）" style="margin-left:auto;width:180px">
+          <span id="ds-count" class="dim"></span>
+        </div>
+        <div class="pb">
+          <table class="grid" id="tbl-ds" tabindex="0" aria-label="数据集列表，方向键或 j/k 移行，Enter 查看详情">
+            <thead><tr><th>文件名</th><th class="r">行数↕sort=rows</th><th class="r">列数</th><th>语义类型抽样</th><th>上传时间↕uploaded_at</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr data-k="ds"><td>华东零售价格面板_2026Q3.csv</td><td class="r num">1,284,412</td><td class="r num">18</td><td class="dim">price·date·region</td><td class="mono dim">2026-10-14 09:12</td><td><span class="st st-ok"><i>■</i>✓ 画像完成</span></td></tr>
+              <tr data-k="ds"><td>竞对渠道铺货月报.xlsx</td><td class="r num">86,304</td><td class="r num">11</td><td class="dim">channel·share</td><td class="mono dim">2026-10-12 17:40</td><td><span class="st st-warn"><i>▲</i>! 带告警（重复行 0.4%）</span></td></tr>
+              <tr data-k="ds"><td>经销商库存快照_10月.csv</td><td class="r num">412,887</td><td class="r num">22</td><td class="dim">sku·qty·date</td><td class="mono dim">2026-10-11 08:03</td><td><span class="st st-ok"><i>■</i>✓ 画像完成</span></td></tr>
+              <tr data-k="ds"><td>CPI_分项_月度.csv</td><td class="r num">3,960</td><td class="r num">9</td><td class="dim">category·yoy</td><td class="mono dim">2026-10-08 21:55</td><td><span class="st st-ok"><i>■</i>✓ 画像完成</span></td></tr>
+              <tr data-k="ds"><td>广告投放_周度_脱敏.xlsx</td><td class="r num">N/A</td><td class="r num">14</td><td class="dim">media·spend</td><td class="mono dim">2026-10-05 11:20</td><td><span class="st st-run"><i>◐</i>画像中 PROFILING</span></td></tr>
+              <tr data-k="ds"><td>门店客流_试点30店.csv</td><td class="r num">95,120</td><td class="r num">7</td><td class="dim">store·footfall</td><td class="mono dim">2026-09-29 15:31</td><td><span class="st st-ok"><i>■</i>✓ 画像完成</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="pane" id="p-hist">
+        <div class="ph"><b>P2</b> 最近运行 · /api/workflows/history<span class="sp"></span><span class="dim">仅 limit/offset，后端无状态筛选</span></div>
+        <div class="pb">
+          <table class="grid" id="tbl-hist" tabindex="0" aria-label="最近运行，方向键或 j/k 移行，Enter 查看详情">
+            <thead><tr><th>工作流</th><th>提问摘要</th><th>状态</th><th class="r">阶段 step/total</th><th class="r">整条任务耗时</th></tr></thead>
+            <tbody>
+              <tr data-k="wf"><td class="mono">WF-2026-1014-007</td><td>Q3 华东价格弹性与竞对铺货…</td><td><span class="st st-run"><i>◐</i>执行中 EXECUTING</span></td><td class="r num">4/6</td><td class="r num">03:41</td></tr>
+              <tr data-k="wf"><td class="mono">WF-2026-1014-005</td><td>库存周转天数分区域对比…</td><td><span class="st st-warn"><i>▲</i>! 带警告完成 SUCCESS_WITH_WARNINGS</span></td><td class="r num">6/6</td><td class="r num">05:02</td></tr>
+              <tr data-k="wf"><td class="mono">WF-2026-1013-018</td><td>CPI 分项对品类销量的滞后效应…</td><td><span class="st st-ok"><i>■</i>✓ 已完成 SUCCESS</span></td><td class="r num">6/6</td><td class="r num">04:37</td></tr>
+              <tr data-k="wf"><td class="mono">WF-2026-1013-002</td><td>广告投放与客流相关性…</td><td><span class="st st-bad"><i>×</i>✕ 失败 FAILED</span></td><td class="r num">3/6</td><td class="r num">01:12</td></tr>
+              <tr data-k="wf"><td class="mono">WF-2026-1012-011</td><td>价格带迁移识别…</td><td><span class="st st-ok"><i>■</i>✓ 已完成 SUCCESS</span></td><td class="r num">5/5</td><td class="r num">03:55</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="ph" style="border-top:1px solid var(--line);border-bottom:none">limit=20 · offset=0<span class="sp"></span><button class="dim" title="真实参数 limit(1–100)/offset，此处为视觉占位">上一页</button><button class="dim">下一页</button></div>
+      </div>
+      <div class="pane" id="p-health">
+        <div class="ph"><b>P3</b> 平台健康 · /api/health<span class="dim">1×3 模式隐藏本窗格：顶栏已有同一信息</span></div>
+        <div class="pb pad">
+          <dl style="display:grid;grid-template-columns:150px 1fr;gap:6px;font-size:12px">
+            <dt class="dim mono">status</dt><dd class="mono st-ok">ok ■</dd>
+            <dt class="dim mono">app_name / version</dt><dd class="mono">AI Market Intelligence Studio / 0.4.2</dd>
+            <dt class="dim mono">uptime_seconds</dt><dd class="mono num">567,215（≈6天14小时）</dd>
+            <dt class="dim mono">llm_configured</dt><dd class="mono st-ok">true ■</dd>
+            <dt class="dim mono">upload_dir_ready</dt><dd class="mono st-ok">true ■</dd>
+            <dt class="dim mono">sessions（本设备）</dt><dd class="mono">mis_session · 剩余 7h12m</dd>
+          </dl>
+          <p class="dim" style="margin-top:10px">会话列表 GET /api/auth/sessions 后端已有、前端未做——命令面板 <span class="mono" style="color:var(--amber)">sessions</span> 命令保留该意图，本原型不展开。</p>
+        </div>
+      </div>
+      <div class="pane" id="p-new">
+        <div class="ph"><b>P4</b> 快速分析 · Ctrl+Enter 发起</div>
+        <div class="pb pad">
+          <div class="row" style="display:flex;gap:6px;margin-bottom:6px"><span class="dim mono">ds:</span><select id="q-ds" aria-label="选择数据集"><option>华东零售价格面板_2026Q3</option><option>竞对渠道铺货月报</option><option>经销商库存快照_10月</option><option>CPI_分项_月度</option></select><span class="dim mono">steps:</span><select id="q-steps" aria-label="max_steps 1–8"><option>6</option></select></div>
+          <textarea id="q-text" rows="3" style="width:100%" placeholder="question（2–500 字）：例如——Q3 提价后华东各城市的价格弹性与竞对铺货率变化，哪些品类先受影响？"></textarea>
+          <div style="margin-top:6px;display:flex;gap:8px;align-items:center">
+            <button id="q-go">[发起] Ctrl+Enter → POST /api/analysis (202)</button>
+            <span class="dim num" id="q-count">0/500</span>
+          </div>
+          <p class="dim" style="margin-top:8px">↑↓/j/k 选表格行 · Enter 详情 · Ctrl/Cmd+K 命令面板 · 数字 1–5 切视图</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图 2：市场分析（提问 → 发起 → 运行） ============ -->
+  <section class="view" id="v-ana" data-view="ana">
+    <div class="split" style="grid-template-columns:1fr 1fr;height:100%">
+      <div class="pane">
+        <div class="ph"><b>F2</b> 提问 · 选数据集 → 输入需求 → 发起</div>
+        <div class="pb pad">
+          <div class="dim mono" style="margin-bottom:4px">dataset:</div>
+          <table class="grid" id="tbl-pick" tabindex="0" aria-label="数据集选择，方向键或 j/k 移动，Enter 选中">
+            <thead><tr><th></th><th>文件名</th><th class="r">行数</th><th class="r">缺失率</th><th>列数</th></tr></thead>
+            <tbody>
+              <tr data-k="pick" class="sel"><td>●</td><td>华东零售价格面板_2026Q3.csv</td><td class="r num">1,284,412</td><td class="r num">2.1%</td><td class="r num">18</td></tr>
+              <tr data-k="pick"><td>○</td><td>经销商库存快照_10月.csv</td><td class="r num">412,887</td><td class="r num">0.8%</td><td class="r num">22</td></tr>
+              <tr data-k="pick"><td>○</td><td>CPI_分项_月度.csv</td><td class="r num">3,960</td><td class="r num">N/A</td><td class="r num">9</td></tr>
+            </tbody>
+          </table>
+          <div class="dim mono" style="margin:10px 0 4px">question · 2–500 字：</div>
+          <textarea id="a-text" rows="4" style="width:100%">Q3 提价后华东各城市价格弹性与竞对铺货率变化，哪些品类先受影响？</textarea>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center"><span class="dim num" id="a-count">38/500</span><span class="dim mono">max_steps:</span><select id="a-steps" aria-label="max_steps"><option>6</option><option>8</option></select><button id="a-go" style="margin-left:auto">[发起] POST /api/analysis → 202</button></div>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="ph"><b>F2</b> 发起后 · 当前窗格原地切为运行态</div>
+        <div class="pb pad" id="a-after">
+          <p class="dim">发起成功后不跳页：运行状态直接接管本窗格（1000ms 轮询 <span class="mono">GET /api/workflows/{id}</span>）。下方为当前活动运行摘要 ——</p>
+          <table class="grid" id="tbl-live" tabindex="0" aria-label="活动运行"><thead><tr><th>工作流</th><th>状态</th><th class="r">step/total</th><th class="r">整条任务耗时</th></tr></thead>
+          <tbody><tr data-k="wf"><td class="mono">WF-2026-1014-007</td><td><span class="st st-run"><i>◐</i>执行中 EXECUTING</span></td><td class="r num" id="live-step">4/6</td><td class="r num" id="live-elapsed">03:41</td></tr></tbody></table>
+          <p style="margin-top:10px"><button data-goto="run">[R] 进入运行监控窗格 →</button></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图 3：Agent 运行（状态时间线；无阶段耗时） ============ -->
+  <section class="view" id="v-run" data-view="run">
+    <div class="split three" style="grid-template-columns:5fr 4fr 6fr;height:100%">
+      <div class="pane">
+        <div class="ph"><b>F3</b> 概览 · WF-2026-1014-007</div>
+        <div class="pb pad">
+          <p style="margin-bottom:8px"><span class="st st-run" style="font-size:14px"><i>◐</i> 执行中 <span class="dim mono">EXECUTING</span></span></p>
+          <div class="steps" id="ladder" aria-label="已完成阶段数 step_index/total_steps"></div>
+          <p class="dim" style="margin-top:6px">阶梯 = <span class="mono">step_index/total_steps</span>（已完成<b>阶段数</b>）。后端无阶段时间戳 → 不标注阶段耗时。</p>
+          <dl style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:10px;font-size:12px">
+            <dt class="dim mono">整条任务耗时</dt><dd class="mono num" id="r-elapsed">03:41（finished_at−created_at，真实可算）</dd>
+            <dt class="dim mono">上次轮询</dt><dd class="mono num" id="r-poll">14:02:11 · 间隔 1000ms（前端轮询，非推送）</dd>
+            <dt class="dim mono">max_steps</dt><dd class="mono num">6</dd>
+          </dl>
+          <p style="margin-top:10px"><button id="r-adv" class="dim">推进一个阶段（原型按钮 · 模拟轮询观察）</button></p>
+          <p style="margin-top:4px"><button id="r-report" data-goto="rep">[Enter] 完成后打开报告 →</button></p>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="ph"><b>F3</b> 状态时间线 · 会话内轮询观察</div>
+        <div class="pb">
+          <div class="tl" id="timeline"></div>
+          <p class="dim" style="padding:6px 8px">节点=本次会话<b>观察到状态推进的时刻</b>；阶段边界以轮询粒度（1000ms）近似，非阶段起止时间。</p>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="ph"><b>F3</b> 任务简报 · tasks[]<span class="dim" style="margin-left:auto">状态 6 态含 SKIPPED</span></div>
+        <div class="pb">
+          <table class="grid" id="tbl-task" tabindex="0" aria-label="任务列表，方向键或 j/k 移行，Enter 查看错误详情">
+            <thead><tr><th>task_id</th><th>description</th><th>状态</th><th>error</th></tr></thead>
+            <tbody>
+              <tr data-k="task"><td class="mono">T1</td><td>读取华东价格面板并按城市聚合</td><td><span class="st st-ok"><i>■</i>✓ 完成</span></td><td class="dim">—</td></tr>
+              <tr data-k="task"><td class="mono">T2</td><td>竞对铺货率差分（Q2 vs Q3）</td><td><span class="st st-ok"><i>■</i>✓ 完成</span></td><td class="dim">—</td></tr>
+              <tr data-k="task"><td class="mono">T3</td><td>低基数品类剔除</td><td><span class="st st-idle"><i>◇</i>已跳过 SKIPPED</span></td><td class="dim">—</td></tr>
+              <tr data-k="task"><td class="mono">T4</td><td>价格弹性回归（分城市）</td><td><span class="st st-run"><i>◐</i>运行中</span></td><td class="dim">—</td></tr>
+              <tr data-k="task" data-err="chart 渲染超时：matplotlib 子进程 30s 未返回（占位样例）"><td class="mono">T5</td><td>弹性散点图渲染</td><td><span class="st st-bad"><i>×</i>✕ 失败</span></td><td class="mono st-bad" title="Enter 展开">chart 渲染超时…</td></tr>
+              <tr data-k="task"><td class="mono">T6</td><td>报告章节撰写</td><td><span class="st st-idle"><i>○</i>等待中 PENDING</span></td><td class="dim">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图 4：报告（cites + 来源；暗色分层） ============ -->
+  <section class="view" id="v-rep" data-view="rep">
+    <div class="split two" style="grid-template-columns:7fr 5fr;height:100%">
+      <div class="pane">
+        <div class="ph"><b>F4</b> 报告 · WF-2026-1013-018 · generated_at 2026-10-14 10:22 · 数据截至 2026-10-01 · <span class="mono">llm_used=true</span></div>
+        <div class="pb doc">
+          <h3>Q3 华东价格弹性与品类传导分析</h3>
+          <p class="dim" style="font-size:12px;margin-bottom:14px">summary｜提价后 6 周内，高价带品类动销率降幅最大且最先传导；低竞对铺货城市弹性被低估约 1/3。每个角标 <a class="cite" data-t="ev-T1">[T1]</a> 均可在右栏核对来源。</p>
+          <h3>01 总体弹性</h3>
+          <p>华东 12 城样本显示，均价上浮 3.8% 对应动销率下降 2.1 个百分点<a class="cite" data-t="ev-T1">[T1]</a>，整体需求价格弹性约为 −0.55，属于弱弹性区间；但城市间差异显著，铺货率低于 40% 的城市弹性估计普遍偏小<a class="cite" data-t="ev-T2">[T2]</a>。</p>
+          <figure class="figure">
+            <div class="plot">
+              <svg width="640" height="180" viewBox="0 0 640 180" role="img" aria-label="示意：各品类动销率降幅柱图（后端实为浅底 PNG，此处内联 SVG 示意）">
+                <rect x="0" y="0" width="640" height="180" fill="#E9ECF1"/>
+                <line x1="40" y1="150" x2="620" y2="150" stroke="#1A2130"/>
+                <line x1="40" y1="150" x2="40" y2="14" stroke="#1A2130"/>
+                <g fill="#59C2D6"><rect x="70" y="60" width="46" height="90"/><rect x="150" y="80" width="46" height="70"/><rect x="310" y="96" width="46" height="54"/><rect x="390" y="110" width="46" height="40"/></g>
+                <g fill="#6D9BD3"><rect x="120" y="44" width="22" height="106"/><rect x="230" y="70" width="22" height="80"/><rect x="256" y="70" width="22" height="52"/><rect x="440" y="118" width="22" height="32"/><rect x="466" y="118" width="22" height="20"/></g>
+                <g fill="#9187D6"><rect x="530" y="52" width="46" height="98"/><rect x="560" y="52" width="16" height="60"/></g>
+                <g font-size="10" fill="#1A2130" font-family="monospace">
+                  <text x="66" y="166">家电</text><text x="146" y="166">白酒</text><text x="226" y="166">个护</text><text x="306" y="166">食品</text><text x="386" y="166">生鲜</text><text x="526" y="166">合计</text>
+                  <text x="6" y="64">pt</text>
+                </g>
+              </svg>
+            </div>
+            <figcaption>图1 bar｜品类动销率降幅（示意）。后端产物为浅底 matplotlib PNG：暗壳内以浅纸底容器<b>分层</b>呈现，不做暗色重绘。</figcaption>
+          </figure>
+          <h3>02 传导次序</h3>
+          <p>家电与个护在第 2 周即出现动销缺口<a class="cite" data-t="ev-T3">[T3]</a>，食品生鲜滞后约 3 周，说明高价带品类先吸收冲击。竞对铺货率在窗口期内上浮 1.7pp，与弹性估计方向一致的品类占 8/12<a class="cite" data-t="ev-T4">[T4]</a>。</p>
+          <h3>03 数据质量说明</h3>
+          <p class="dim mono" style="font-size:11px">data_quality_notes：① 3 城缺 2026-09-28 快照，已按邻日插补；② SKU 映射表版本 2026-08，跨版本品类 0.3% 未纳入；③ 单位与精度按列定义（元/2位小数，缺失显示 N/A）。</p>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="ph"><b>F4</b> 证据窗格 · citations + cites 对应</div>
+        <div class="pb" id="evpane">
+          <div class="ev" id="ev-T1"><span class="st st-ok"><i>■</i>✓</span> <b class="mono">[T1]</b> 工具调用 T1 · query_price_elasticity(华东12城, Q3)<br><span class="dim">返回 12 行 · 行数 12/12 · 引用字段：avg_uplift=3.8% · sell_rate_delta=−2.1pt</span></div>
+          <div class="ev" id="ev-T2"><span class="st st-ok"><i>■</i>✓</span> <b class="mono">[T2]</b> T2 · groupby(city).quantile('distribution_rate')<br><span class="dim">来源文件：华东零售价格面板_2026Q3.csv · 数据截至 2026-10-01</span></div>
+          <div class="ev" id="ev-T3"><span class="st st-ok"><i>■</i>✓</span> <b class="mono">[T3]</b> T4 · lag_analysis(weekly_sell_rate, 6)<br><span class="dim">参数：max_lag=4 · 输出：家电/个护 lead=2 周</span></div>
+          <div class="ev" id="ev-T4"><span class="st st-warn"><i>▲</i>!</span> <b class="mono">[T4]</b> T7 · diff_competitor_coverage(Q2,Q3)<br><span class="dim">部分城市竞对数据缺失（N/A），置信区间已放宽</span></div>
+          <div class="ph" style="border-top:1px solid var(--line)">校验结果 · validation</div>
+          <div class="ev"><span class="sev st-bad">▲ error</span> 0 项</div>
+          <div class="ev"><span class="sev st-warn">△ warning</span> 1 项：02 节“占 8/12”与 T7 行数口径需注明插补规则</div>
+          <div class="ev"><span class="sev" style="color:var(--run)">○ info</span> 2 项：单位声明 · 插补说明</div>
+          <p class="dim" style="padding:8px 10px">正文角标可 Tab 聚焦、Enter/点击 → 本栏定位高亮；无来源行的段落不允许渲染（本产品核心约束）。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图 5：空态 / 加载 / 错误 三态 ============ -->
+  <section class="view" id="v-st3" data-view="st3">
+    <div class="split" style="grid-template-columns:1fr 1fr 1fr;height:100%">
+      <div class="pane">
+        <div class="ph"><b>S1</b> 空态 · 三种成因分开呈现</div>
+        <div class="pb">
+          <div class="empty"><b>暂无数据集</b>还没有数据 · 上传数据集，开始第一次分析<br><button style="margin-top:6px">[U] 上传 CSV/Excel → POST /api/datasets/upload</button></div>
+          <div class="empty" style="border-top:1px solid var(--line)"><b>筛选无结果</b>q=“2025” 未命中 · 数据集共 6 个<br><button style="margin-top:6px" class="dim">清除过滤</button></div>
+          <div class="empty" style="border-top:1px solid var(--line)"><b>读取失败</b>列表接口返回错误，数据可能存在但未取回<br><button style="margin-top:6px" class="dim">重试 [R]</button></div>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="ph"><b>S2</b> 加载态 · 1000ms 轮询中</div>
+        <div class="pb pad">
+          <p><span class="spin st-run">◐</span> <span class="st st-run"><i>◐</i>执行中 EXECUTING</span> <span class="dim mono">WF-2026-1014-007 · 上次轮询 14:02:11</span></p>
+          <div style="margin-top:10px"><div class="sk" style="width:80%"></div><div class="sk" style="width:64%"></div><div class="sk" style="width:72%"></div><div class="sk" style="width:50%"></div></div>
+          <p class="dim" style="margin-top:10px">骨架仅表示“窗格被占用”；轮询刷新<b>不做闪烁</b>，只更新时间戳文字。</p>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="ph"><b>S3</b> 错误态</div>
+        <div class="pb pad">
+          <p class="st st-bad"><i>×</i>✕ 分析发起失败 FAILED</p>
+          <p class="dim mono" style="margin-top:6px">POST /api/analysis → 429<br>Retry-After: 30（真实字段倒计时）</p>
+          <p style="margin-top:10px"><button class="dim" disabled>重试（限流中已禁用）</button></p>
+          <p class="dim" style="margin-top:10px">失败文案统一、不泄露后端堆栈；错误详情以等宽次要文字保留可查证原值。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 命令面板 Ctrl/Cmd+K ============ -->
+  <div id="palette" role="dialog" aria-modal="true" aria-label="命令面板">
+    <input id="pq" placeholder="命令：goto / layout / help …" autocomplete="off" spellcheck="false">
+    <div id="plist" role="listbox" aria-label="命令列表"></div>
+    <div id="phint">↑↓ 选择 · Enter 执行 · Esc 退出面板</div>
+  </div>
+
+  <!-- ============ 详情覆盖层（Enter 打开） ============ -->
+  <div id="detail" role="dialog" aria-modal="true" aria-label="行详情">
+    <div class="ph"><b>DETAIL</b><span id="dtitle"></span><span class="sp"></span><button id="dclose">Esc 关闭</button></div>
+    <div id="dbody"></div>
+  </div>
+
+  <!-- ============ 详情覆盖层（Enter 打开） ============ -->
+
+</main>
+
+<footer id="status">
+  <span id="mode">NORMAL</span>
+  <span class="dim">^K 命令面板 · 1–5 切视图 · j/k·↑↓ 选行 · Enter 详情 · Esc 回退 · [2×2]/[1×3] 布局</span>
+  <span class="sp"></span>
+  <span class="dim">阶段时间线受后端字段限制（无阶段时间戳）</span>
+  <a id="to-login" role="button" tabindex="0">登录原型 [L]</a>
+</footer>
+
+<script>
+/* JS 范围声明（对应文档缺点 1）：实装 = 面板/1–5/jk/Enter/Esc/布局切换；
+ * 未实装 = 面板动态索引全部控件、Ctrl+W 窗格焦点跳转。 */
+(function(){
+"use strict";
+var $=function(s,c){return (c||document).querySelector(s)};
+var $$=function(s,c){return Array.prototype.slice.call((c||document).querySelectorAll(s))};
+var VIEWS={dash:"终端",ana:"分析",run:"运行",rep:"报告",st3:"三态",login:"登录"};
+
+function setMode(m){document.body.setAttribute("data-mode",m);$("#mode").textContent=m.toUpperCase();}
+function setView(v){
+  document.body.setAttribute("data-view",v);
+  $$(".view").forEach(function(s){s.classList.toggle("on",s.getAttribute("data-view")===v);});
+  $$("#tabs button").forEach(function(b){b.setAttribute("aria-selected",String(b.dataset.v===v));});
+}
+function setLayout(l){
+  document.body.setAttribute("data-layout",l);
+  $("#lay22").setAttribute("aria-pressed",String(l==="2x2"));
+  $("#lay13").setAttribute("aria-pressed",String(l==="1x3"));
+}
+$("#lay22").addEventListener("click",function(){setLayout("2x2")});
+$("#lay13").addEventListener("click",function(){setLayout("1x3")});
+$("#tabs").addEventListener("click",function(e){var b=e.target.closest("button[data-v]");if(b)setView(b.dataset.v);});
+$$("[data-goto]").forEach(function(b){b.addEventListener("click",function(){setView(b.dataset.goto)})});
+$("#to-login").addEventListener("click",function(){setView("login")});
+$("#to-login").addEventListener("keydown",function(e){if(e.key==="Enter"||e.key==="l")setView("login")});
+
+/* ---------- 高密度表格：粘性表头由 CSS；键盘选行（↑↓/jk）+ Enter 详情 ---------- */
+var tables=[];
+function initTable(tbl){
+  var t={el:tbl,i:-1,rows:$$("tbody tr",tbl)};
+  t.sel=function(n,scroll){
+    if(!t.rows.length)return;
+    t.i=Math.max(0,Math.min(t.rows.length-1,n));
+    t.rows.forEach(function(r,k){r.classList.toggle("sel",k===t.i)});
+    if(scroll!==false&&document.activeElement!==tbl)tbl.focus();
+    if(scroll!==false)t.rows[t.i].scrollIntoView({block:"nearest"});
+  };
+  tbl.addEventListener("click",function(e){
+    var tr=e.target.closest("tbody tr");if(!tr)return;
+    t.sel(t.rows.indexOf(tr),false);openDetail(tr);
+  });
+  $$("th",tbl).forEach(function(th,k){
+    $$("tbody tr",tbl).forEach(function(tr){var td=tr.children[k];if(td)td.setAttribute("data-th",th.textContent.replace(/[↕].*/,""));});
+  });
+  tables.push(t);return t;
+}
+$$("table.grid").forEach(initTable);
+function activeTable(){
+  var a=document.activeElement;
+  if(a&&a.classList&&a.classList.contains("grid")){
+    for(var i=0;i<tables.length;i++)if(tables[i].el===a)return tables[i];
+  }
+  var vis=(a&&a.closest?a.closest(".view"):null)||$(".view.on");
+  for(var j=0;j<tables.length;j++){
+    if(vis&&vis.contains(tables[j].el))return tables[j];
+  }
+  return null;
+}
+
+/* ---------- 详情覆盖层 ---------- */
+var DS_DETAIL={
+ "华东零售价格面板_2026Q3.csv":[["dataset_id","DS-0141"],["rows / columns","1,284,412 / 18"],["画像（/profile）","语义类型：price·date·region·sku；缺失率 2.1%；重复行 0"],["分位数抽样","price P50=¥28.40 · P95=¥217.90（decimals=2, unit=CNY）"],["告警","无"],["接口","GET /api/datasets/141 + /profile"]],
+ "竞对渠道铺货月报.xlsx":[["dataset_id","DS-0138"],["rows / columns","86,304 / 11"],["画像","channel·share；缺失率 N/A（无空值列）；"],["告警","重复行 0.4%（已列入 data_quality_notes）"],["接口","GET /api/datasets/138 + /profile"]],
+ "经销商库存快照_10月.csv":[["dataset_id","DS-0136"],["rows / columns","412,887 / 22"],["接口","GET /api/datasets/136 + /profile"]]
+};
+var WF_DETAIL={
+ "WF-2026-1014-007":[["status","EXECUTING（执行中）"],["step_index/total_steps","4/6（仅阶段数，无阶段耗时）"],["created_at","2026-10-14 13:58:30"],["报告","GET /api/workflows/…/report（完成后）"]],
+ "WF-2026-1013-002":[["status","FAILED（失败）"],["step_index/total_steps","3/6"],["error","chart 渲染超时（占位样例）"],["整条任务耗时","01:12 = finished_at−created_at"]]
+};
+function openDetail(tr){
+  var k=tr.dataset.k,body=$("#dbody");body.innerHTML="";
+  var first=$("td",tr).textContent.trim(),pairs=null;
+  if(k==="ds"||k==="pick"){var name=tr.children[k==="pick"?1:0].textContent.trim();pairs=DS_DETAIL[name]||[["文件名",name],["详情","（原型内该行的画像数据未展开）"]];title(name);}
+  else if(k==="wf"){pairs=WF_DETAIL[first]||[[first,"（原型内未展开）"],["状态",tr.children[2].textContent.trim()]];title(first);}
+  else if(k==="task"){title(tr.children[1].textContent.trim());pairs=[["task_id",tr.children[0].textContent.trim()],["状态",tr.children[2].textContent.trim()],["error",tr.dataset.err||"无"]];}
+  var dl=document.createElement("dl");
+  pairs.forEach(function(p){var dt=document.createElement("dt"),dd=document.createElement("dd");dt.textContent=p[0];dd.textContent=p[1];dl.appendChild(dt);dl.appendChild(dd);});
+  body.appendChild(dl);
+  function title(s){$("#dtitle").textContent=" · "+s;}
+  $("#detail").classList.add("on");setMode("detail");
+}
+$("#dclose").addEventListener("click",closeDetail);
+function closeDetail(){$("#detail").classList.remove("on");setMode("normal");}
+
+/* ---------- 命令面板：Ctrl/Cmd+K，过滤 + ↑↓ + Enter + Esc（硬编码清单，见缺点 1） ---------- */
+var CMDS=[
+ {t:"goto 终端（2×2 窗格）",k:"1",run:function(){setView("dash")}},
+ {t:"goto 市场分析",k:"2",run:function(){setView("ana")}},
+ {t:"goto 运行监控",k:"3",run:function(){setView("run")}},
+ {t:"goto 报告",k:"4",run:function(){setView("rep")}},
+ {t:"goto 空态/加载/错误 三态",k:"5",run:function(){setView("st3")}},
+ {t:"layout 切换 2×2",k:"",run:function(){setView("dash");setLayout("2x2")}},
+ {t:"layout 切换 1×3",k:"",run:function(){setView("dash");setLayout("1x3")}},
+ {t:"open 选中行详情（对当前表格）",k:"Enter",run:function(){var t=activeTable();if(t&&t.i>=0)openDetail(t.rows[t.i]);}},
+ {t:"help 键盘快捷键一览",k:"?",run:function(){openHelp()}},
+ {t:"goto 登录原型（含 needs_bootstrap）",k:"L",run:function(){setView("login")}},
+ {t:"passwd 修改密码（后端已有·前端未做）",k:"",run:function(){flashStatus("passwd：设计意图占位——实现映射 POST /api/auth/password")}},
+ {t:"sessions 会话列表（后端已有·前端未做）",k:"",run:function(){flashStatus("sessions：设计意图占位——实现映射 GET /api/auth/sessions")}}
+];
+var pal=$("#palette"),pq=$("#pq"),plist=$("#plist"),pi=-1,pf=CMDS.slice();
+function renderPal(){
+  plist.innerHTML="";
+  pf.forEach(function(c,i){
+    var d=document.createElement("div");d.setAttribute("role","option");
+    d.innerHTML="<span>"+c.t+"</span><span class='kbd'>"+(c.k||"")+"</span>";
+    if(i===pi)d.classList.add("cur");
+    d.addEventListener("click",function(){execPal(i)});
+    plist.appendChild(d);
+  });
+}
+function openPal(){pal.classList.add("on");pi=0;pf=CMDS.slice();renderPal();pq.value="";setMode("palette");pq.focus();}
+function closePal(){pal.classList.remove("on");setMode("normal");}
+function execPal(i){var c=pf[i];if(!c)return;closePal();c.run();}
+function palMove(d){if(!pf.length)return;pi=(pi+d+pf.length)%pf.length;renderPal();var cur=$(".cur",plist);if(cur)cur.scrollIntoView({block:"nearest"});}
+$("#brand").addEventListener("click",openPal);
+$$("[data-pal]").forEach(function(b){b.addEventListener("click",openPal)});
+window.addEventListener("keydown",function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();pal.classList.contains("on")?closePal():openPal();return;}
+  if(pal.classList.contains("on")){
+    if(e.key==="Escape"){e.preventDefault();closePal();}
+    else if(e.key==="ArrowDown"){e.preventDefault();palMove(1);}
+    else if(e.key==="ArrowUp"){e.preventDefault();palMove(-1);}
+    else if(e.key==="Enter"){e.preventDefault();execPal(pi);}
+    return;
+  }
+  if(document.getElementById("help").classList.contains("on")){
+    if(e.key==="Escape"||e.key==="?"){hideHelp();}return;
+  }
+  var typing=e.target.closest&&e.target.closest("input,textarea,select");
+  if(e.key==="Escape"){
+    if($("#detail").classList.contains("on")){closeDetail();return;}
+    var t=activeTable();if(t&&t.i>=0&&!typing){/* 保留选中，仅回退模式 */setMode("normal");}
+    return;
+  }
+  if(typing)return;
+  if(e.key>="1"&&e.key<="5"){setView(["dash","ana","run","rep","st3"][+e.key-1]);return;}
+  if(e.key==="?"|| (e.shiftKey&&e.key==="/")){openHelp();return;}
+  if(e.key==="l"&&!e.ctrlKey&&!e.metaKey&&document.body.getAttribute("data-view")!=="login"&&e.target.tagName!=="BUTTON"){setView("login");return;}
+  if(e.key==="Enter"){var t1=activeTable();if(t1&&t1.i>=0){openDetail(t1.rows[t1.i]);}return;}
+  var n=(e.key==="ArrowDown"||e.key==="j")?1:(e.key==="ArrowUp"||e.key==="k")?-1:0;
+  if(n){var t2=activeTable();if(t2)t2.sel(t2.i<0?(n>0?0:t2.rows.length-1):t2.i+n);e.preventDefault();}
+});
+pq.addEventListener("input",function(){
+  var q=pq.value.toLowerCase();
+  pf=CMDS.filter(function(c){return c.t.toLowerCase().indexOf(q)>=0});pi=0;renderPal();
+});
+
+/* ---------- 快捷键帮助（面板命令 + ? 键） ---------- */
+var help=document.createElement("div");help.id="help";
+help.setAttribute("style","position:absolute;inset:0;background:rgba(10,13,18,.92);z-index:80;display:none;align-items:center;justify-content:center");
+help.innerHTML="<div style='width:520px;border:1px solid var(--amber);background:var(--bg1)'><div class='ph'><b>KEYMAP</b><span class='sp'></span><button onclick=\"document.getElementById('help').style.display='none'\">Esc</button></div><div style='padding:10px 14px' class='mono'>"+
+"<p>Ctrl/Cmd+K …… 命令面板（↑↓/Enter/Esc）</p><p>1 … 5 ········ 切视图（终端/分析/运行/报告/三态）</p><p>↑↓ 或 j/k ···· 当前窗格表格选行</p><p>Enter ········ 打开选中行详情</p><p>Esc ·········· 关闭覆盖层 / 回退</p><p>[2×2]/[1×3] ··· 布局切换（本会话内有效，不持久化）</p><p>Ctrl+Enter ····· 发起分析（输入区内）</p><p style='color:var(--ink2);margin-top:8px'>未实装（文档缺点 1）：面板动态索引全部控件、Ctrl+W 窗格焦点跳转。</p></div></div>";
+$("#views").appendChild(help);
+function openHelp(){help.style.display="flex";setMode("palette");}
+function hideHelp(){help.style.display="none";setMode("normal");}
+
+/* ---------- 报告：cites 角标 → 证据窗格定位高亮（可追溯主结构） ---------- */
+$$("a.cite").forEach(function(a){
+  a.setAttribute("tabindex","0");
+  function jump(){
+    var el=document.getElementById(a.dataset.t);if(!el)return;
+    el.scrollIntoView({block:"center"});
+    el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash");
+    setTimeout(function(){el.classList.remove("flash")},1400);
+  }
+  a.addEventListener("click",jump);
+  a.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();jump();}});
+});
+
+/* ---------- 运行监控：step 阶梯 + 会话观察时间线 + 真实总耗时口径 ---------- */
+var STATES=[["PENDING","等待中","○","st-idle"],["PROFILING","画像中","◐","st-run"],["PLANNING","规划中","◐","st-run"],["EXECUTING","执行中","◐","st-run"],["CHARTING","图表中","◐","st-run"],["REPORTING","报告中","◐","st-run"],["VALIDATING","校验中","◐","st-run"],["SUCCESS","已完成","■","st-ok"]];
+var step=3,total=6,created=Date.now()-221000;
+function hhmmss(ms){var s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");}
+function renderLadder(){
+  var L=$("#ladder");L.innerHTML="";
+  for(var i=0;i<total;i++){var b=document.createElement("i");
+    b.className=i<step-1?"done":(i===step-1?"cur":"idle");
+    b.title=STATES[Math.min(i,STATES.length-1)][0];L.appendChild(b);}
+  var t=document.createElement("span");t.className="dim";t.style.marginLeft="8px";
+  t.textContent=(step)+"/"+total;L.appendChild(t);
+  $("#live-step")&&($("#live-step").textContent=step+"/"+total);
+}
+function tlNode(obs){
+  var d=document.createElement("div");d.className="n";
+  d.innerHTML="<b>"+obs.glyph+"</b><span class='v'><span class='"+obs.cls+"'>"+obs.name+" <span class='dim'>"+obs.raw+"</span></span> <span class='dim'>观察于 "+obs.at+"</span></span>";
+  $("#timeline").appendChild(d);
+}
+function at(){var t=new Date();return t.toTimeString().slice(0,8);}
+function pushTimeline(){var s=STATES[Math.min(step,7)];tlNode({glyph:s[2],cls:"st "+s[3],name:s[1],raw:s[0],at:at()});}
+["等待中","画像中","规划中","执行中"].forEach(function(){pushTimeline()});
+renderLadder();
+$("#r-adv").addEventListener("click",function(){
+  if(step<total){step++;renderLadder();pushTimeline();}
+  else if(step===total){step++;renderLadder();tlNode({glyph:"■",cls:"st st-ok",name:"已完成",raw:"SUCCESS",at:at()});$("#r-report").style.color="var(--amber)";}
+});
+setInterval(function(){
+  var e=Date.now()-created;
+  $("#r-elapsed").textContent=hhmmss(e)+"（finished_at−created_at，真实可算）";
+  $("#r-poll").textContent=at()+" · 间隔 1000ms（前端轮询，非推送）";
+  var le=$("#live-elapsed");if(le)le.textContent=hhmmss(e);
+},1000);
+
+/* ---------- 分析发起：Ctrl+Enter 与按钮 → 202 语义（原型内直接切运行窗格） ---------- */
+function bindAsk(taId,btnId){
+  var ta=document.getElementById(taId),btn=document.getElementById(btnId);
+  function go(){setView("run");flashStatus("202 Accepted · POST /api/analysis（原型：直接进入运行窗格）");}
+  btn.addEventListener("click",go);
+  ta.addEventListener("keydown",function(e){if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault();go();}});
+  var cnt=document.getElementById(taId==="q-text"?"q-count":"a-count");
+  ta.addEventListener("input",function(){var n=[...ta.value.trim()].length;cnt.textContent=n+"/500"+(n>0&&n<2?" · question 需 2–500 字":"");});
+}
+bindAsk("q-text","q-go");bindAsk("a-text","a-go");
+for(var s=1;s<=8;s++){var o=document.createElement("option");o.textContent=s;$("#q-steps").appendChild(o);}
+$("#q-steps").value="6";
+
+/* ---------- 数据集列过滤（真实参数 q 的客户端演示） ---------- */
+var dsRows=$$("#tbl-ds tbody tr");
+$("#ds-q").addEventListener("input",function(){
+  var q=this.value.toLowerCase(),n=0;
+  dsRows.forEach(function(r){var m=r.textContent.toLowerCase().indexOf(q)>=0;r.style.display=m?"":"none";if(m)n++;});
+  $("#ds-count").textContent=n+"/"+dsRows.length+(q?" · 命中":"");
+});
+$("#ds-q").addEventListener("keydown",function(e){if(e.key==="Escape"){this.value="";this.dispatchEvent(new Event("input"));}});
+
+/* ---------- 登录：needs_bootstrap 双模式原地切换 + 429 演示 ---------- */
+var boot=false;
+$("#lg-swap").addEventListener("click",function(){
+  boot=!boot;
+  $("#lg-boot").hidden=!boot;$("#lg-login").hidden=boot;
+  $("#lg-title").textContent=boot?"auth: bootstrap":"auth: login";
+  $("#lg-sub").textContent=boot?"needs_bootstrap=true · POST /auth/bootstrap":"session 8h · HttpOnly";
+  $("#lg-submit").textContent=(boot?"创建管理员 [Enter]":"登录 [Enter]");
+});
+$("#lg-submit").addEventListener("click",function(){
+  $("#lg-429").classList.toggle("on",!boot&&$("#lg-u").value===""&&false);
+  $("#lg-err").classList.toggle("on",!boot);
+  if(boot){$("#lg-err").classList.remove("on");flashStatus("bootstrap：首个管理员创建成功 → 进入终端 [1]");setView("dash");}
+});
+[["lg-u"],["lg-p"]].forEach(function(x){document.getElementById(x[0]).addEventListener("keydown",function(e){if(e.key==="Enter")$("#lg-submit").click();});});
+
+var HINT=$("#status .dim").textContent;
+function flashStatus(msg){var el=$("#mode"),sp=$("#status .dim");el.textContent="CMD";sp.textContent=msg;setTimeout(function(){sp.textContent=HINT;setMode("normal");},2500);}
+setMode("normal");
+})();
+</script>
+</body>
+</html>

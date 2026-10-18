@@ -196,7 +196,7 @@ ai-data-analyst-agent/
 │  │  ├─ charts.py                    [D5][BE] render_chart(ToolResult, chart_type, ...) → ChartResult
 │  │  └─ validation.py                [D5][AI] validate(state) → ValidationResult（纯代码校验，无模型）；build_report(...) → FinalReport（**调 LLM**，所以本模块算 [AI]）
 │  └─ web/
-│     ├─ index.html                   [D6][FE] 单页应用外壳：顶栏 + 侧边导航 + 6 个视图 + 内联 SVG 图标精灵
+│     ├─ index.html                   [D6][FE] 单页应用外壳（现为方案 01：左侧栏 3 组 6 项 + 顶部命令条 + 8 个视图键）+ 内联 SVG 图标精灵
 │     ├─ app.js                       [D6][FE] fetch 调用 + 1 秒轮询 + 视图路由（hash）+ 渲染
 │     └─ app.css                      [D6][FE] 原生 CSS，设计令牌 + 组件 + 两档响应式断点
 ├─ tests/
@@ -1321,7 +1321,7 @@ def start_analysis(req: QuestionRequest, background: BackgroundTasks) -> ApiResp
 
 ## 9. 前端方案（`app/web/`，原生 HTML + CSS + JS）
 
-### 9.1 页面结构（v1.2 企业级工作台：顶栏 + 侧边导航 + 6 个视图）
+### 9.1 页面结构（v1.2 企业级工作台：顶栏 + 侧边导航 + 6 个视图）【⚠️ 本节描述的是 v1.2；方案 01 重构后外框为「左侧栏 3 组 6 项 + 顶部命令条（非导航）」、视图键增至 8 个（新增 `command` 首屏与 `runs`），首屏改为战略态势带 —— 现行口径见 `docs/COMMAND_CENTER_MIGRATION.md`，本节作为 v1.2 的取证记录保留、不改写，其下列出的 `app.js:NNN` / `index.html:NNN` 行号均无守卫】
 
 v1.1 是"单列 6 张卡片从上往下堆"（上传 → 概览 → 提问 → 进度 → 图表 → 报告），
 v1.2 把它升级成**企业级工作台**：顶部品牌栏固定，左侧导航切换视图，主内容区一次只显示一个视图。

@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 05 · 极简高端数据产品 — AI Market Intelligence Studio</title>
+<style>
+/* 设计底座（方案 05 立场：层级只能靠排版建立，不能靠容器）
+   1. 容器为零：全站无卡片、无投影、无玻璃拟态、无渐变；区隔只用四种边框档 + 留白。
+   2. 层级只用三件事：字号 × 字重 × 颜色深浅（Apple HIG：alignment / indentation / negative space / separator lines）。
+   3. 字号 9 档全部有角色名（display…metadata），借 Vercel 令牌命名当编辑语汇；无裸字号。
+   4. 间距只有 7 档 4/8/12/16/24/32/48，超大留白一律是 48 的整数倍，不随手写值。
+   5. 字重只用 400/500/600；禁用 Light/Thin（雅黑无真 thin，细则见文档第 4 节）。
+   6. 一屏一个焦点：每屏只有一个 h1、一个主元素；UI 全是黑白灰，色彩只属于数据与状态。
+   7. 链接不上色，只加下划线（Adobe：underline 仅用于链接）；主操作用墨色实心，不用品牌色。
+   8. 数字一律 tabular-nums；任何数字与它的溯源行同屏出现，间距不超过 24px。
+   9. 正文测度锁在 42em（Apple layout guide 限制行长），留白不是空，是取舍后的结果。 */
+:root{
+  --ink-900:#1c1c1a; --ink-700:#444440; --ink-600:#5c5c58; --ink-500:#73736e;
+  --paper:#ffffff; --paper-alt:#f7f7f6; --field:#fbfbfa;
+  --hairline:#ececea; --rule:#e0e0dd; --line-field:#c9c9c5; --emphasis:#1c1c1a;
+  --ok:#1a6b42; --warn:#7a5300; --err:#9b2c22; --info:#2c5590; /* info 预留给极少见信息徽标，本 Demo 未动用 */
+  --c-1:#a9c8cc; --c-2:#7fa8ae; --c-3:#5b939a; --c-4:#2c6a72; --c-5:#14434a;
+  --font:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --t-display:96px; --t-metric:40px; --t-page:28px; --t-title:20px; --t-lede:18px;
+  --t-section:16px; --t-body:14px; --t-compact:13px; --t-metadata:12px;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-6:24px; --sp-8:32px; --sp-12:48px;
+  --r-1:2px; --r-2:4px;
+  --topbar-h:56px; --content-max:1080px; --measure:42em;
+  --ease:cubic-bezier(.2,.6,.3,1); --dur:160ms;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink-700);font-family:var(--font);
+  font-size:var(--t-body);line-height:1.7;font-weight:400;
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+h1,h2,h3,p,figure,ul,ol,dl{margin:0}
+ul,ol{padding:0;list-style:none}
+a{color:var(--ink-900);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:2px solid var(--emphasis);outline-offset:2px}
+::selection{background:var(--c-1);color:var(--ink-900)}
+.skip{position:absolute;left:var(--sp-4);top:-48px;background:var(--paper);padding:var(--sp-2) var(--sp-3);z-index:5;
+  transition:top var(--dur) var(--ease)}
+.skip:focus{top:var(--sp-2)}
+.num,.mono{font-family:var(--mono)}
+/* 首屏不允许为排版牺牲标题：h1 保留给读屏，视觉上让位给数字 */
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* 顶栏：只有 5 项 + 一条声明；无侧栏、无面包屑、无搜索、无铃铛 */
+.topbar{position:sticky;top:0;z-index:4;background:var(--paper);
+  border-bottom:1px solid var(--rule);
+  display:flex;align-items:center;gap:var(--sp-8);height:var(--topbar-h);
+  padding:0 var(--sp-8)}
+.brand{font-size:var(--t-compact);font-weight:600;letter-spacing:.08em;color:var(--ink-900);
+  white-space:nowrap}
+.brand span{font-weight:400;color:var(--ink-600);letter-spacing:0;margin-left:var(--sp-2)}
+.nav{display:flex;gap:var(--sp-6);align-self:stretch;align-items:stretch}
+.nav a{display:flex;align-items:center;font-size:var(--t-compact);font-weight:500;
+  color:var(--ink-600);text-decoration:none;border-bottom:2px solid transparent;
+  transition:color var(--dur) var(--ease),border-color var(--dur) var(--ease)}
+.nav a:hover{color:var(--ink-900)}
+.nav a[aria-current="page"]{color:var(--ink-900);border-bottom-color:var(--emphasis)}
+.notice{margin-left:auto;font-size:var(--t-metadata);color:var(--ink-500);white-space:nowrap}
+body[data-auth="anon"] .nav{display:none}
+body[data-auth="anon"] .topbar{gap:var(--sp-4)}
+
+main{display:block}
+.view{display:none}
+.view[aria-hidden="false"]{display:block}
+/* 全宽背景交替是唯一的 section 区隔手段（Apple：没有卡片、没有边框、没有阴影）。
+   三态屏整片换档，读起来立刻知道"这不是内容屏"。 */
+.view[data-view="loading"][aria-hidden="false"],
+.view[data-view="error"][aria-hidden="false"]{background:var(--paper-alt)}
+.wrap{max-width:var(--content-max);margin:0 auto;padding:calc(var(--sp-12)*2) var(--sp-8) calc(var(--sp-12)*2)}
+.wrap.tight{padding-top:calc(var(--sp-12)*1)}
+.measure{max-width:var(--measure)}
+.measure-narrow{max-width:26em}
+
+.eyebrow{font-size:var(--t-compact);font-weight:500;color:var(--ink-600);letter-spacing:.02em}
+h1{font-size:var(--t-page);font-weight:600;color:var(--ink-900);line-height:1.35;letter-spacing:-.01em}
+.h-title{font-size:var(--t-title);font-weight:500;color:var(--ink-900);line-height:1.5}
+.h-section{font-size:var(--t-section);font-weight:500;color:var(--ink-900);line-height:1.5}
+.lede{font-size:var(--t-lede);font-weight:400;color:var(--ink-900);line-height:1.7}
+.body{font-size:var(--t-body);line-height:1.7}
+.meta{font-size:var(--t-metadata);color:var(--ink-600);line-height:1.5}
+.meta .k{color:var(--ink-600)}
+.meta .v{color:var(--ink-700)}
+.compact{font-size:var(--t-compact);color:var(--ink-700)}
+
+/* 首屏主角：一个巨大数字 */
+.focus{padding-bottom:calc(var(--sp-12)*2)}
+.figure-big{display:flex;align-items:baseline;gap:var(--sp-2);margin-top:var(--sp-6)}
+.figure-big .n{font-size:var(--t-display);font-weight:600;color:var(--ink-900);line-height:1;
+  letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.figure-big .u{font-size:var(--t-metric);font-weight:500;color:var(--ink-700);line-height:1}
+.conclusion{margin-top:var(--sp-6);padding-left:var(--sp-1)}
+.provenance{margin-top:var(--sp-6);padding-top:var(--sp-3);border-top:1px solid var(--rule);
+  display:flex;flex-wrap:wrap;gap:var(--sp-2) var(--sp-4);font-size:var(--t-metadata);color:var(--ink-600)}
+.provenance .cite{font-family:var(--mono);font-size:var(--t-metadata)}
+.actions{margin-top:var(--sp-6);display:flex;gap:var(--sp-6);align-items:baseline}
+.healthline{margin-top:calc(var(--sp-12)*2);padding-top:var(--sp-4);border-top:1px solid var(--hairline);
+  font-size:var(--t-metadata);color:var(--ink-600);display:flex;flex-wrap:wrap;gap:var(--sp-2) var(--sp-6)}
+
+/* 通用行/表：只用 hairline 与缩进分层级，绝不套容器 */
+.rows{margin-top:var(--sp-6)}
+.row{display:grid;gap:var(--sp-2) var(--sp-6);padding:var(--sp-4) 0;
+  border-bottom:1px solid var(--hairline);align-items:baseline}
+.row:hover{background:var(--field)}
+.row.lead{padding-left:var(--sp-4);border-left:2px solid var(--emphasis);background:var(--field)}
+.row .r-title{font-size:var(--t-body);font-weight:500;color:var(--ink-900)}
+.row .r-sub{font-size:var(--t-compact);color:var(--ink-600)}
+table{width:100%;border-collapse:collapse;margin-top:var(--sp-6);font-size:var(--t-compact)}
+caption{text-align:left;font-size:var(--t-metadata);color:var(--ink-600);padding-bottom:var(--sp-3)}
+th,td{text-align:left;padding:var(--sp-3) var(--sp-3) var(--sp-3) 0;border-bottom:1px solid var(--hairline);
+  vertical-align:top}
+th{font-size:var(--t-metadata);font-weight:500;color:var(--ink-600);letter-spacing:.02em;white-space:nowrap}
+td.n,th.n{text-align:right;padding-right:0;font-variant-numeric:tabular-nums}
+th button{font:inherit;font-size:var(--t-metadata);color:inherit;background:none;border:0;padding:0;
+  cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+th[aria-sort="ascending"] button,th[aria-sort="descending"] button{color:var(--ink-900);font-weight:600}
+
+/* 控件：两种圆角档（2/4px），墨色实心是唯一主操作 */
+label{display:block;font-size:var(--t-compact);font-weight:500;color:var(--ink-900)}
+input,textarea,select{width:100%;font:inherit;font-size:var(--t-body);color:var(--ink-900);
+  background:var(--paper);border:1px solid var(--line-field);border-radius:var(--r-1);
+  padding:var(--sp-3) var(--sp-3);margin-top:var(--sp-2);line-height:1.6}
+textarea{min-height:calc(var(--sp-12)*2);resize:vertical}
+input:hover,textarea:hover,select:hover{border-color:var(--ink-500)}
+.field{margin-top:var(--sp-6);max-width:32em}
+.field.narrow{max-width:14em}
+.field.row-2{max-width:none;display:grid;grid-template-columns:20em 14em;gap:var(--sp-6)}
+.hint{margin-top:var(--sp-2);font-size:var(--t-metadata);color:var(--ink-600)}
+button.primary{font:inherit;font-size:var(--t-compact);font-weight:500;color:var(--paper);
+  background:var(--ink-900);border:1px solid var(--ink-900);border-radius:var(--r-2);
+  padding:var(--sp-3) var(--sp-6);cursor:pointer;letter-spacing:.02em;
+  transition:background var(--dur) var(--ease)}
+button.primary:hover{background:var(--ink-700)}
+button.ghost{font:inherit;font-size:var(--t-compact);font-weight:500;color:var(--ink-900);
+  background:var(--paper);border:1px solid var(--line-field);border-radius:var(--r-1);
+  padding:var(--sp-3) var(--sp-6);cursor:pointer}
+button.ghost:hover{border-color:var(--emphasis)}
+.submitline{margin-top:var(--sp-6);display:flex;align-items:center;gap:var(--sp-6)}
+.inline{display:inline}
+
+/* 状态：色 + 形 + 字三重编码 */
+.state{font-size:var(--t-metadata);font-weight:500;white-space:nowrap}
+.state.ok{color:var(--ok)} .state.warn{color:var(--warn)} .state.err{color:var(--err)}
+.state.run{color:var(--ink-900)} .state.idle{color:var(--ink-600)}
+.glyph{font-family:var(--mono);margin-right:var(--sp-1)}
+
+/* 阶梯：只按 step_index / total_steps 画，绝不画时间百分比 */
+.ladder{display:flex;gap:var(--sp-2);margin-top:var(--sp-6);align-items:flex-end}
+.ladder i{display:block;width:var(--sp-8);height:var(--sp-1);background:var(--rule)}
+.ladder i.done{background:var(--emphasis);height:var(--sp-1)}
+.ladder i.now{background:var(--emphasis);height:var(--sp-2)}
+.stages{margin-top:var(--sp-8)}
+.stage{display:grid;grid-template-columns:2.4em 8em 1fr auto;gap:var(--sp-4);
+  padding:var(--sp-3) 0;border-bottom:1px solid var(--hairline);align-items:baseline}
+.stage .idx{font-family:var(--mono);font-size:var(--t-metadata);color:var(--ink-500)}
+.stage .nm{font-size:var(--t-body);color:var(--ink-700)}
+.stage.now{border-left:2px solid var(--emphasis);padding-left:var(--sp-3);margin-left:calc(var(--sp-3)*-1)}
+.stage.now .nm{font-weight:600;color:var(--ink-900)}
+.stage .en{font-family:var(--mono);font-size:var(--t-metadata);color:var(--ink-500)}
+.elapsed{margin-top:var(--sp-6);font-size:var(--t-metadata);color:var(--ink-600)}
+.poll{font-size:var(--t-metadata);color:var(--ink-600);margin-top:var(--sp-2)}
+
+/* 报告：单栏文档流，cites 角标 + 来源行 + 数据截至 */
+.doc h2{margin-top:var(--sp-12)}
+.doc p{margin-top:var(--sp-4)}
+.doc .section{margin-top:var(--sp-8);padding-top:var(--sp-6);border-top:1px solid var(--hairline)}
+.doc .section:first-of-type{border-top:0;padding-top:0}
+sup a{font-family:var(--mono);font-size:var(--t-metadata);text-decoration:none;
+  border-bottom:1px solid var(--line-field);padding:0 var(--sp-1);color:var(--ink-600)}
+sup a:hover{color:var(--ink-900);border-bottom-color:var(--emphasis)}
+.srclist li{padding:var(--sp-3) 0;border-bottom:1px solid var(--hairline);font-size:var(--t-compact);
+  color:var(--ink-600);display:grid;grid-template-columns:4em 1fr;gap:var(--sp-4)}
+.srclist .id{font-family:var(--mono);color:var(--ink-900)}
+figure{margin-top:var(--sp-8);padding-top:var(--sp-4)}
+figcaption{font-size:var(--t-metadata);color:var(--ink-600);margin-top:var(--sp-3)}
+.bump{animation:bump var(--dur) var(--ease) 1}
+@keyframes bump{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+
+/* 三态 */
+.stage-note{padding:calc(var(--sp-12)*1) 0}
+.rule-load{display:flex;gap:var(--sp-2);margin-top:var(--sp-6);max-width:16em}
+.rule-load i{display:block;flex:1;height:var(--sp-1);background:var(--rule)}
+.rule-load i.f{background:var(--emphasis);animation:bump 200ms var(--ease) 1}
+.cause{display:flex;gap:var(--sp-4);margin-bottom:var(--sp-8);flex-wrap:wrap}
+.cause button{font:inherit;font-size:var(--t-compact);background:none;border:0;padding:0;
+  color:var(--ink-600);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.cause button[aria-pressed="true"]{color:var(--ink-900);font-weight:600;text-decoration-thickness:2px}
+.specimen{padding-top:var(--sp-6);border-top:1px solid var(--rule)}
+.specimen[hidden]{display:none}
+.errcode{font-family:var(--mono);font-size:var(--t-metadata);color:var(--ink-600)}
+
+/* 登录：极简但有品牌表达（左对齐，不做居中大标题套路） */
+.auth{display:grid;grid-template-columns:1fr;gap:calc(var(--sp-12)*1);max-width:var(--measure)}
+.auth .wordmark{font-size:var(--t-metric);font-weight:600;color:var(--ink-900);letter-spacing:-.02em;
+  line-height:1.15}
+.auth .wordmark em{font-style:normal;color:var(--ink-500)}
+.auth .claim{margin-top:var(--sp-4);font-size:var(--t-title);font-weight:400;color:var(--ink-700);
+  line-height:1.6}
+.auth h1{margin-top:calc(var(--sp-12)*1)}
+.banner{padding:var(--sp-4);border-left:2px solid var(--warn);background:var(--field);
+  font-size:var(--t-compact);color:var(--ink-700);max-width:36em}
+.banner.errline{border-left-color:var(--err)}
+.authfoot{margin-top:calc(var(--sp-12)*1);font-size:var(--t-metadata);color:var(--ink-600);
+  display:flex;gap:var(--sp-6);flex-wrap:wrap}
+
+footer.proto{border-top:1px solid var(--rule);padding:var(--sp-6) var(--sp-8);
+  display:flex;gap:var(--sp-4);align-items:baseline;flex-wrap:wrap;
+  font-size:var(--t-metadata);color:var(--ink-500)}
+footer.proto a{color:var(--ink-600);font-size:var(--t-metadata)}
+footer.proto .stance{margin-left:auto;color:var(--ink-600)}
+
+.reveal-step{animation:slide var(--dur) var(--ease) 1}
+@keyframes slide{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+@media (max-width:900px){
+  :root{--t-display:40px}
+  .wrap{padding:var(--sp-12) var(--sp-6)}
+  /* 窄屏顶栏换两行：字号永远不降到 12px 以下，宁可让导航占满第二行 */
+  .topbar{padding:0 var(--sp-4);gap:var(--sp-2) var(--sp-4);height:auto;min-height:var(--topbar-h);flex-wrap:wrap}
+  .brand{padding-top:var(--sp-3)}
+  .nav{flex:1 1 100%;order:3;align-self:auto;height:var(--sp-12);gap:var(--sp-4);padding-bottom:var(--sp-1)}
+  .notice{white-space:normal}
+  .field.row-2{grid-template-columns:1fr}
+  .stage{grid-template-columns:1fr auto;gap:var(--sp-2) var(--sp-4)}
+  .stage .idx,.stage .en{display:none}
+}
+@media (max-width:820px){
+  :root{--t-page:20px;--t-metric:28px}
+  table thead{display:none}
+  table tr{display:grid;gap:var(--sp-1);padding:var(--sp-4) 0;border-bottom:1px solid var(--rule)}
+  table td{border:0;padding:0;display:grid;grid-template-columns:7em 1fr;gap:var(--sp-4)}
+  table td::before{content:attr(data-label);font-size:var(--t-metadata);color:var(--ink-600)}
+  table td.n{text-align:left}
+}
+</style>
+</head>
+<body data-auth="anon" data-view="login">
+<a class="skip" href="#main">跳到主要内容</a>
+
+<header class="topbar">
+  <p class="brand">AI DATA ANALYST<span>市场情报工作台</span></p>
+  <nav class="nav" aria-label="主导航">
+    <a href="#/workbench" data-nav="workbench">工作台</a>
+    <a href="#/datasets" data-nav="datasets">数据集</a>
+    <a href="#/analysis" data-nav="analysis">分析</a>
+    <a href="#/runs" data-nav="runs">运行</a>
+    <a href="#/report" data-nav="report">报告</a>
+  </nav>
+  <p class="notice">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+</header>
+
+<main id="main">
+
+  <!-- 登录 -->
+  <section class="view" data-view="login" aria-hidden="false" aria-labelledby="login-h">
+    <div class="wrap tight auth">
+      <div>
+        <p class="wordmark">把市场数据<br>变成可追溯的<em>决策依据。</em></p>
+      </div>
+      <div>
+        <h1 id="login-h">登录</h1>
+        <p class="meta" style="margin-top:var(--sp-4)">会话有效期 8 小时，浏览器关闭即失效。</p>
+        <form id="loginForm" autocomplete="on">
+          <div class="field">
+            <label for="u">账号</label>
+            <input id="u" name="username" type="text" autocomplete="username" value="analyst">
+          </div>
+          <div class="field">
+            <label for="p">密码</label>
+            <input id="p" name="password" type="password" autocomplete="current-password" value="••••••••">
+          </div>
+          <p class="submitline">
+            <button class="primary" type="submit">进入工作台</button>
+            <span class="meta">POST /auth/login · HttpOnly 会话 Cookie</span>
+          </p>
+        </form>
+      </div>
+      <p class="authfoot"><span>v1.4.2</span><span>未配置公开注册：账号由管理员创建</span></p>
+    </div>
+  </section>
+
+  <!-- 登录 · needs_bootstrap -->
+  <section class="view" data-view="bootstrap" aria-hidden="true" aria-labelledby="boot-h">
+    <div class="wrap tight auth">
+      <div>
+        <p class="wordmark">第一次部署<br>先建<em>一个管理员。</em></p>
+      </div>
+      <div>
+        <p class="banner">服务端 <span class="mono">GET /api/auth/me</span> 返回 <span class="mono">needs_bootstrap=true</span>：账号库为空。此界面在第一个管理员创建后不再出现。</p>
+        <h1 id="boot-h" style="margin-top:var(--sp-6)">创建第一个管理员</h1>
+        <form>
+          <div class="field">
+            <label for="bu">管理员账号</label>
+            <input id="bu" type="text" autocomplete="username" value="admin">
+          </div>
+          <div class="field">
+            <label for="bp">设置密码</label>
+            <input id="bp" type="password" autocomplete="new-password" value="••••••••">
+            <p class="hint">至少 10 位。创建后登录失败将统一提示，不区分账号与密码错误。</p>
+          </div>
+          <div class="field">
+            <label for="bp2">确认密码</label>
+            <input id="bp2" type="password" autocomplete="new-password" value="••••••••">
+          </div>
+          <p class="submitline">
+            <button class="primary" type="button" data-proto="初始化：POST /auth/bootstrap，原型不发送请求">初始化</button>
+            <span class="meta">成功后自动进入登录</span>
+          </p>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- 工作台：首屏主角 = 一个巨大数字 + 一句结论 -->
+  <section class="view" data-view="workbench" aria-hidden="true" aria-labelledby="wb-h">
+    <div class="wrap focus">
+      <p class="eyebrow">核心指标 · 华东市场销售额同比增速 · 2026 Q1</p>
+      <h1 id="wb-h" class="vh">工作台</h1>
+      <p class="figure-big"><span class="n">+18.4</span><span class="u">%</span></p>
+      <p class="lede conclusion measure-narrow">增速已连续四个季度为正，本季由经销商渠道贡献三分之二增量。</p>
+      <p class="provenance">
+        <span class="cite">依据 <a href="#/report">T1</a> <a href="#/report">T2</a></span>
+        <span>数据截至 2026-09-30</span>
+        <span>口径：<span class="mono">sales_amount</span> 季度聚合，不含退款</span>
+        <span>来源数据集：中国市场季度销售_2024-2026</span>
+      </p>
+      <p class="actions">
+        <a href="#/report">阅读这份报告</a>
+        <a href="#/analysis">换一个指标提问</a>
+      </p>
+      <p class="healthline">
+        <span>服务正常 · v1.4.2 · 已运行 6 天 14 小时</span>
+        <span>上传目录就绪</span>
+        <span>模型已配置</span>
+      </p>
+    </div>
+  </section>
+
+  <!-- 数据集：本方案唯一允许密集的一屏（选物任务），仍无容器 -->
+  <section class="view" data-view="datasets" aria-hidden="true" aria-labelledby="ds-h">
+    <div class="wrap tight">
+      <h1 id="ds-h">数据集</h1>
+      <p class="meta" style="margin-top:var(--sp-3)">共 6 个 · 已按上传时间倒序 · <span class="mono">GET /api/datasets</span></p>
+      <div class="field row-2">
+        <div>
+          <label for="q">按文件名查找</label>
+          <input id="q" type="search" placeholder="输入关键词，如：渠道">
+        </div>
+        <div>
+          <label for="up">上传新数据</label>
+          <p><button class="primary" type="button" id="uploadBtn">选择 CSV / Excel 文件</button></p>
+        </div>
+      </div>
+      <p class="hint" id="uploadNote" hidden></p>
+      <table>
+        <caption>选中一个数据集即可进入分析（本方案不提供删除与重命名：后端无对应接口）</caption>
+        <thead>
+          <tr>
+            <th scope="col"><button type="button">文件名</button></th>
+            <th scope="col" class="n"><button type="button">行数</button></th>
+            <th scope="col" class="n"><button type="button">列数</button></th>
+            <th scope="col" class="n"><button type="button">缺失率</button></th>
+            <th scope="col"><button type="button" aria-label="按上传时间排序，当前升序">上传时间 ↑</button></th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-label="文件名"><a href="#/analysis">中国市场季度销售_2024-2026.csv</a></td>
+            <td class="n" data-label="行数">12,480</td><td class="n" data-label="列数">24</td>
+            <td class="n" data-label="缺失率">1.8%</td>
+            <td data-label="上传时间">2026-09-28 14:07</td>
+            <td data-label="操作"><a href="#/analysis">在此数据集提问</a></td>
+          </tr>
+          <tr>
+            <td data-label="文件名"><a href="#/analysis">渠道效能明细_2026H1.xlsx</a></td>
+            <td class="n" data-label="行数">4,912</td><td class="n" data-label="列数">17</td>
+            <td class="n" data-label="缺失率">0.4%</td>
+            <td data-label="上传时间">2026-09-21 09:32</td>
+            <td data-label="操作"><a href="#/analysis">在此数据集提问</a></td>
+          </tr>
+          <tr>
+            <td data-label="文件名"><a href="#/analysis">竞品价格监测_2026-09.csv</a></td>
+            <td class="n" data-label="行数">28,301</td><td class="n" data-label="列数">31</td>
+            <td class="n" data-label="缺失率"><span class="state warn"><span class="glyph">!</span>12.6%</span></td>
+            <td data-label="上传时间">2026-09-11 18:05</td>
+            <td data-label="操作"><a href="#/analysis">在此数据集提问</a></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="meta" style="margin-top:var(--sp-6)">第 1–3 个，共 6 个 · <a href="#/datasets">下一页</a> · 每页 50（后端 <span class="mono">limit</span> 上限 200）</p>
+    </div>
+  </section>
+
+  <!-- 市场分析：渐进披露，一屏一件事 -->
+  <section class="view" data-view="analysis" aria-hidden="true" aria-labelledby="an-h">
+    <div class="wrap tight" data-stepwrap="1">
+
+      <div data-step="1">
+        <h1 id="an-h">市场分析</h1>
+        <p class="eyebrow" style="margin-top:var(--sp-8)">第 1 步 · 提问</p>
+        <p class="h-title" style="margin-top:var(--sp-3)">作用域：<a href="#/datasets">中国市场季度销售_2024-2026</a> · 12,480 行 · 2026-09-28 更新</p>
+        <p class="meta" style="margin-top:var(--sp-2)">换一个：<a href="#/datasets">渠道效能明细_2026H1</a> · <a href="#/datasets">竞品价格监测_2026-09</a></p>
+        <form id="askForm">
+          <div class="field">
+            <label for="ask">你想弄清楚什么</label>
+            <textarea id="ask" maxlength="500">2026 年第一季度华东市场的销售额增长主要来自哪些渠道？</textarea>
+            <p class="hint"><span id="askCount">31</span> / 500 字 · 2–500 字 · <span class="mono">POST /api/analysis</span></p>
+          </div>
+          <div class="field narrow">
+            <label for="ms">步骤上限（max_steps）</label>
+            <select id="ms"><option>6</option><option>4</option><option>8</option></select>
+            <p class="hint">1–8。上限越小结论越粗，结论粗不代表可以不看溯源。</p>
+          </div>
+          <p class="submitline">
+            <button class="primary" type="submit">发起分析</button>
+            <span class="meta">Ctrl / ⌘ + Enter 直接发起 · 上次使用的数据集会被记住</span>
+          </p>
+        </form>
+      </div>
+
+      <div data-step="2" hidden>
+        <p class="eyebrow">第 2 步 · 运行状态</p>
+        <h1 style="margin-top:var(--sp-3)">分析已发起</h1>
+        <p class="lede measure-narrow" style="margin-top:var(--sp-4)">正在执行第 3 / 6 步：计算渠道贡献。</p>
+        <p class="ladder" aria-hidden="true"><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i><i></i></p>
+        <p class="meta" style="margin-top:var(--sp-6)">当前阶段 <span class="mono">EXECUTING</span> · 已用时 00:41（整条任务真实耗时）</p>
+        <p class="poll">前端每 1000ms 轮询一次，不是实时推送；阶段耗时后端不暴露，因此这里只有已完成步数。</p>
+        <p class="actions" style="margin-top:var(--sp-8)">
+          <a href="#/runs">查看运行详情</a>
+          <button class="ghost" type="button" data-goto="3">原型：跳到已完成的结果</button>
+        </p>
+      </div>
+
+      <div data-step="3" hidden>
+        <p class="eyebrow">第 3 步 · 一个结果</p>
+        <h1 style="margin-top:var(--sp-3)">经销商渠道解释了 66% 的增量</h1>
+        <p class="figure-big" style="margin-top:var(--sp-6)"><span class="n" style="font-size:var(--t-metric)">+18.4</span><span class="u" style="font-size:var(--t-section)">%</span></p>
+        <p class="lede measure-narrow">华东同比增速 18.4%，其中经销商贡献 12.1 个百分点，直营 4.2，线上 2.1。</p>
+        <p class="provenance">
+          <span class="cite">依据 <a href="#/report">T1</a> <a href="#/report">T2</a> <a href="#/report">T3</a></span>
+          <span>数据截至 2026-09-30</span>
+          <span>模型已参与结论生成</span>
+        </p>
+        <p class="actions" style="margin-top:var(--sp-6)">
+          <a href="#/report">阅读完整报告</a>
+          <a href="#/analysis" data-goto="1">再问一个问题</a>
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Agent 运行：阶梯 + 任务行，无时间轴无百分比 -->
+  <section class="view" data-view="runs" aria-hidden="true" aria-labelledby="rn-h">
+    <div class="wrap tight">
+      <h1 id="rn-h">运行</h1>
+      <p class="h-title" style="margin-top:var(--sp-8)">2026 年第一季度华东市场的销售额增长主要来自哪些渠道？</p>
+      <p class="meta" style="margin-top:var(--sp-2)">状态 <span class="state run"><span class="glyph">▸</span>运行中</span> <span class="mono">EXECUTING</span> · 第 3 / 6 步 · 已用时 00:41</p>
+      <ol class="stages" aria-label="流水线阶段">
+        <li class="stage"><span class="idx">01</span><span class="nm">数据理解</span><span class="en">PROFILING</span><span class="state ok"><span class="glyph">✓</span>已完成</span></li>
+        <li class="stage"><span class="idx">02</span><span class="nm">生成计划</span><span class="en">PLANNING</span><span class="state ok"><span class="glyph">✓</span>已完成</span></li>
+        <li class="stage now"><span class="idx">03</span><span class="nm">执行计算</span><span class="en">EXECUTING</span><span class="state run"><span class="glyph">▸</span>运行中</span></li>
+        <li class="stage"><span class="idx">04</span><span class="nm">生成图表</span><span class="en">CHARTING</span><span class="state idle"><span class="glyph">·</span>等待中 <span class="mono">PENDING</span></span></li>
+        <li class="stage"><span class="idx">05</span><span class="nm">撰写报告</span><span class="en">REPORTING</span><span class="state idle"><span class="glyph">·</span>等待中</span></li>
+        <li class="stage"><span class="idx">06</span><span class="nm">校验</span><span class="en">VALIDATING</span><span class="state idle"><span class="glyph">·</span>等待中</span></li>
+      </ol>
+      <p class="poll" role="status" aria-live="polite">每 1000ms 轮询 <span class="mono">GET /api/workflows/{id}</span>；推进时只有当前行换行，不做闪烁。</p>
+
+      <h2 class="h-section" style="margin-top:var(--sp-12)">任务简报</h2>
+      <table>
+        <caption>后端返回的任务级状态，共 5 项 · 无阶段耗时</caption>
+        <thead><tr><th scope="col">任务</th><th scope="col">说明</th><th scope="col">状态</th></tr></thead>
+        <tbody>
+          <tr><td class="mono" data-label="任务">T1</td><td data-label="说明">按季度聚合华东销售额</td><td data-label="状态"><span class="state ok"><span class="glyph">✓</span>已完成</span></td></tr>
+          <tr><td class="mono" data-label="任务">T2</td><td data-label="说明">渠道维度增量分解</td><td data-label="状态"><span class="state ok"><span class="glyph">✓</span>已完成</span></td></tr>
+          <tr><td class="mono" data-label="任务">T3</td><td data-label="说明">渠道贡献占比计算</td><td data-label="状态"><span class="state run"><span class="glyph">▸</span>运行中</span></td></tr>
+          <tr><td class="mono" data-label="任务">T4</td><td data-label="说明">异常月份排查</td><td data-label="状态"><span class="state warn"><span class="glyph">!</span>带告警完成</span> <span class="meta">SUCCESS_WITH_WARNINGS</span></td></tr>
+          <tr><td class="mono" data-label="任务">T5</td><td data-label="说明">价格弹性回归</td><td data-label="状态"><span class="state idle"><span class="glyph">–</span>已跳过</span> <span class="meta">SKIPPED</span></td></tr>
+        </tbody>
+      </table>
+
+      <h2 class="h-section" style="margin-top:var(--sp-12)">历史运行</h2>
+      <p class="meta">后端只支持 <span class="mono">limit</span> / <span class="mono">offset</span>，无排序与关键词筛选，所以这里保持上传即倒序的单一读法。</p>
+      <div class="rows">
+        <p class="row"><span class="r-title">2026 年第一季度华东市场的销售额增长主要来自哪些渠道？</span><span class="r-sub"><span class="state run"><span class="glyph">▸</span>运行中</span> · 2026-10-16 10:22 发起</span></p>
+        <p class="row"><span class="r-title"><a href="#/report">高线城市竞品价格下调对我们的份额影响有多大？</a></span><span class="r-sub"><span class="state warn"><span class="glyph">!</span>带告警完成</span> · 2026-10-15 17:40 · 用时 02:18</span></p>
+        <p class="row"><span class="r-title">把三个区域的经销商复购率拉齐比较</span><span class="r-sub"><span class="state err"><span class="glyph">×</span>失败</span> <span class="mono">FAILED</span> · 2026-10-14 11:03 · 用时 00:57</span></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 报告 -->
+  <section class="view" data-view="report" aria-hidden="true" aria-labelledby="rp-h">
+    <div class="wrap doc measure">
+      <p class="eyebrow">分析报告 · 生成于 2026-10-16 10:31</p>
+      <h1 id="rp-h" style="margin-top:var(--sp-3)">华东市场 2026 Q1 增长来源分析</h1>
+      <p class="meta" style="margin-top:var(--sp-4)">数据截至 2026-09-30 · 数据集：中国市场季度销售_2024-2026（12,480 行 · 24 列） · 模型已参与生成 · 缺失率 1.8%</p>
+
+      <p class="lede" style="margin-top:var(--sp-8)">增速为 18.4%<sup><a href="#src-T1">T1</a></sup>，其中三分之二来自经销商渠道<sup><a href="#src-T2">T2</a></sup>；直营渠道在低线城市的同店口径出现下滑<sup><a href="#src-T3">T3</a></sup>。</p>
+
+      <h2 class="h-section" style="margin-top:var(--sp-12)">总量与趋势</h2>
+      <p class="body">2026 Q1 华东销售额 2.44 亿元，为近五个季度最高<sup><a href="#src-T1">T1</a></sup>。连续四个季度环比为正，且季度间增幅稳定在 3%–6%，说明本轮上行不是单季脉冲<sup><a href="#src-T1">T1</a></sup>。</p>
+
+      <figure>
+        <svg viewBox="0 0 720 250" width="100%" height="auto" role="img" aria-label="华东市场近五个季度销售额柱状图，从 2.06 亿元上升至 2.44 亿元">
+          <g stroke="#e0e0dd" stroke-width="1">
+            <line x1="56" y1="24" x2="696" y2="24"/><line x1="56" y1="74" x2="696" y2="74"/>
+            <line x1="56" y1="124" x2="696" y2="124"/><line x1="56" y1="174" x2="696" y2="174"/>
+          </g>
+          <line x1="56" y1="224" x2="696" y2="224" stroke="#c9c9c5" stroke-width="1"/>
+          <g font-size="12" fill="#73736e" font-family="ui-monospace,Consolas,monospace">
+            <text x="48" y="28" text-anchor="end">2.6</text><text x="48" y="78" text-anchor="end">1.95</text>
+            <text x="48" y="128" text-anchor="end">1.3</text><text x="48" y="178" text-anchor="end">0.65</text>
+            <text x="48" y="228" text-anchor="end">0</text>
+          </g>
+          <g>
+            <rect x="96" y="66" width="96" height="158" fill="var(--c-1)"/>
+            <rect x="216" y="55" width="96" height="169" fill="var(--c-2)"/>
+            <rect x="336" y="46" width="96" height="178" fill="var(--c-3)"/>
+            <rect x="456" y="41" width="96" height="183" fill="var(--c-4)"/>
+            <rect x="576" y="36" width="96" height="188" fill="var(--c-5)"/>
+          </g>
+          <g font-size="12" fill="#444440" font-family="ui-monospace,Consolas,monospace" text-anchor="middle">
+            <text x="144" y="58">2.06</text><text x="264" y="47">2.19</text><text x="384" y="38">2.31</text>
+            <text x="504" y="33">2.38</text><text x="624" y="28" font-weight="600" fill="#1c1c1a">2.44</text>
+          </g>
+          <g font-size="12" fill="#5c5c58" text-anchor="middle" font-family="-apple-system,'Microsoft YaHei',sans-serif">
+            <text x="144" y="242">25 Q1</text><text x="264" y="242">25 Q2</text><text x="384" y="242">25 Q3</text>
+            <text x="504" y="242">25 Q4</text><text x="624" y="242" fill="#1c1c1a" font-weight="600">26 Q1</text>
+          </g>
+        </svg>
+        <figcaption>华东市场季度销售额（亿元）。数据点：<span class="mono">T1</span> · 单位口径为含税销售额，不含退款。</figcaption>
+      </figure>
+
+      <div class="section">
+        <h2 class="h-section">渠道分解</h2>
+        <p class="body">经销商贡献 12.1 个百分点，直营 4.2，线上 2.1<sup><a href="#src-T2">T2</a></sup>。经销商增量集中在江苏与安徽的三家新签总代，剔除后增速降至 9.7%<sup><a href="#src-T2">T2</a></sup>——本轮增长有相当一部分来自渠道铺货而非终端动销。</p>
+        <p class="body">直营在低线城市的同店口径同比下降 3.1%<sup><a href="#src-T3">T3</a></sup>，与经销商侧的扩张方向相反，需要在下一季度确认是否为选址调整所致。</p>
+      </div>
+
+      <div class="section">
+        <h2 class="h-section">需要留意的两件事</h2>
+        <p class="body">其一，2026 年 2 月存在 3 个渠道字段缺失，涉及 214 行，已按渠道均值补齐并标注<sup><a href="#src-T4">T4</a></sup>。其二，价格弹性回归被跳过<sup><a href="#src-T5">T5</a></sup>，因此本报告不对降价影响作出判断。</p>
+        <p class="meta" style="margin-top:var(--sp-6)">
+          <span class="state warn"><span class="glyph">!</span>告警 1 项</span> · 数据质量：字段缺失 214 行已插补 ·
+          <span class="state err"><span class="glyph">×</span>错误 0 项</span> ·
+          <span class="state idle"><span class="glyph">i</span>提示 2 项</span>
+        </p>
+      </div>
+
+      <div class="section">
+        <h2 class="h-section">依据</h2>
+        <ul class="srclist">
+          <li><span class="id">T1</span><span>工具调用 <span class="mono">aggregate_sales_by_quarter</span> · 输出 5 行 · 数据截至 2026-09-30</span></li>
+          <li><span class="id">T2</span><span>工具调用 <span class="mono">decompose_by_channel</span> · 输出 3 行 · 基期 2025 Q1</span></li>
+          <li><span class="id">T3</span><span>工具调用 <span class="mono">same_store_compare</span> · 输出 12 行 · 仅含开业满 12 个月门店</span></li>
+          <li><span class="id">T4</span><span>画像告警 <span class="mono">missing_rate 1.8%</span> · 插补 214 行 · 见数据质量说明</span></li>
+          <li><span class="id">T5</span><span>计划步骤 <span class="mono">price_elasticity_regression</span> · 已跳过 <span class="mono">SKIPPED</span></span></li>
+        </ul>
+        <p class="meta" style="margin-top:var(--sp-6)">校验结论：<span class="state warn"><span class="glyph">!</span>带告警完成</span> <span class="mono">SUCCESS_WITH_WARNINGS</span> · 报告接口 <span class="mono">GET /api/workflows/{id}/report</span></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 空态（三种成因） -->
+  <section class="view" data-view="empty" aria-hidden="true" aria-labelledby="em-h">
+    <div class="wrap tight stage-note">
+      <h1 id="em-h">空态</h1>
+      <div class="rows" style="border-top:0">
+        <div class="specimen" data-cause="none">
+          <p class="eyebrow">成因一 · 还没有数据</p>
+          <p class="h-title" style="margin-top:var(--sp-4)">还没有数据集</p>
+          <p class="body measure-narrow" style="margin-top:var(--sp-3)">这个账号上一次分析还没有发生过。先上传一份 CSV 或 Excel，画像会自动完成。</p>
+          <p class="actions"><button class="primary" type="button" data-proto="上传：POST /api/datasets/upload，原型不发送请求">上传数据集，开始第一次分析</button></p>
+        </div>
+        <div class="specimen" data-cause="filter" hidden>
+          <p class="eyebrow">成因二 · 筛选无结果</p>
+          <p class="h-title" style="margin-top:var(--sp-4)">没有匹配「新能源」的数据集</p>
+          <p class="body measure-narrow" style="margin-top:var(--sp-3)">关键词按文件名子串匹配。当前账号下共有 6 个数据集，都不含该词。</p>
+          <p class="actions"><a href="#/datasets">清除筛选</a><a href="#/datasets">浏览全部数据集</a></p>
+        </div>
+        <div class="specimen" data-cause="failed" hidden>
+          <p class="eyebrow">成因三 · 读取失败</p>
+          <p class="h-title" style="margin-top:var(--sp-4)">数据集列表没能取回来</p>
+          <p class="body measure-narrow" style="margin-top:var(--sp-3)">这不代表你没有数据。<span class="errcode">HTTP 500 · GET /api/datasets · 10:38</span></p>
+          <p class="actions"><a href="#/datasets">重试</a><a href="#/empty">稍后再看</a></p>
+        </div>
+      </div>
+      <div class="cause" role="group" aria-label="切换成因" style="margin-top:var(--sp-12);margin-bottom:0">
+        <button type="button" data-cause="none" aria-pressed="true">还没有数据</button>
+        <button type="button" data-cause="filter" aria-pressed="false">筛选无结果</button>
+        <button type="button" data-cause="failed" aria-pressed="false">读取失败</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 加载态 -->
+  <section class="view" data-view="loading" aria-hidden="true" aria-labelledby="ld-h">
+    <div class="wrap tight stage-note">
+      <h1 id="ld-h">加载态</h1>
+      <p class="h-title" style="margin-top:var(--sp-8)">正在读取报告</p>
+      <p class="lede measure-narrow" style="margin-top:var(--sp-3)">校验已完成，正在取回正文与引用。</p>
+      <p class="rule-load" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i><i></i></p>
+      <p class="poll" role="status" aria-live="polite" style="margin-top:var(--sp-6)">已等待 3 秒 · 这段分段线只证明请求还活着，不代表完成百分比——后端不暴露百分比。</p>
+      <p class="meta" style="margin-top:var(--sp-8)"><span class="mono">GET /api/workflows/17/report</span></p>
+    </div>
+  </section>
+
+  <!-- 错误态 -->
+  <section class="view" data-view="error" aria-hidden="true" aria-labelledby="er-h">
+    <div class="wrap tight stage-note">
+      <h1 id="er-h">读取失败</h1>
+      <p class="lede measure-narrow" style="margin-top:var(--sp-4)">这份报告暂时打不开，运行结果本身没有被破坏。</p>
+      <p class="meta" style="margin-top:var(--sp-6)"><span class="errcode">HTTP 500 · GET /api/workflows/17/report · 2026-10-16 10:38</span></p>
+      <p class="body measure-narrow" style="margin-top:var(--sp-6)">服务端日志显示报告序列化时字段为空。若持续失败，请把运行时间与下面这行标识发给平台负责人。</p>
+      <p class="actions" style="margin-top:var(--sp-8)">
+        <button class="primary" type="button" data-proto="重试：重新请求同一接口（真实前端行为）">重试</button>
+        <a href="#/runs">返回运行列表</a>
+      </p>
+      <div class="specimen" style="margin-top:calc(var(--sp-12)*1)">
+        <p class="eyebrow">同一位置的限流形态</p>
+        <p class="body measure-narrow" style="margin-top:var(--sp-3)">尝试过于频繁，请在 <span class="mono">27</span> 秒后再试。<span class="errcode">429 · Retry-After: 27</span></p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="proto">
+  <span>原型视图（非产品功能）：</span>
+  <a href="#/login">登录</a><a href="#/bootstrap">初始化模式</a><a href="#/empty">空态</a><a href="#/loading">加载</a><a href="#/error">错误</a>
+  <span class="stance">方案 05 · 层级由排版建立，不靠容器</span>
+</footer>
+
+<script>
+(function () {
+  var views = Array.prototype.slice.call(document.querySelectorAll('.view'));
+  var navs = Array.prototype.slice.call(document.querySelectorAll('[data-nav]'));
+  var ANON = { login: 1, bootstrap: 1 };
+  var ROUTES = {
+    '/login': 'login', '/bootstrap': 'bootstrap', '/workbench': 'workbench',
+    '/datasets': 'datasets', '/analysis': 'analysis', '/runs': 'runs', '/report': 'report',
+    '/empty': 'empty', '/loading': 'loading', '/error': 'error'
+  };
+
+  // 顶栏只承载 5 个产品目的地：未登录时导航整体退场，而不是留灰不可点
+  function show(name) {
+    var anon = !!ANON[name];
+    views.forEach(function (v) {
+      v.setAttribute('aria-hidden', String(v.getAttribute('data-view') !== name));
+    });
+    document.body.setAttribute('data-view', name);
+    document.body.setAttribute('data-auth', anon ? 'anon' : 'auth');
+    navs.forEach(function (a) {
+      if (a.getAttribute('data-nav') === name) { a.setAttribute('aria-current', 'page'); }
+      else { a.removeAttribute('aria-current'); }
+    });
+    if (!anon) { window.scrollTo(0, 0); }
+  }
+
+  function route() {
+    var h = (location.hash || '#/workbench').replace('#', '');
+    var name = ROUTES[h] || (h.indexOf('/analysis/') === 0 ? 'analysis' : null) || 'workbench';
+    show(name);
+    if (h.indexOf('/analysis/') === 0) { step(h.split('/')[2]); }
+  }
+
+  // 渐进披露：一步占满一屏，方向感由动画而不是面包屑承担
+  function step(n) {
+    var host = document.querySelector('[data-stepwrap]');
+    if (!host) { return; }
+    Array.prototype.forEach.call(host.querySelectorAll('[data-step]'), function (s) {
+      var on = s.getAttribute('data-step') === String(n);
+      s.hidden = !on;
+      if (on) { s.classList.remove('reveal-step'); void s.offsetWidth; s.classList.add('reveal-step'); }
+    });
+    host.setAttribute('data-stepwrap', String(n));
+  }
+
+  var ask = document.getElementById('ask');
+  function count() {
+    var c = document.getElementById('askCount');
+    if (c) { c.textContent = String(ask.value.length); }
+  }
+  if (ask) { ask.addEventListener('input', count); count(); }
+
+  var form = document.getElementById('askForm');
+  function submit() {
+    if (ask.value.trim().length < 2) { ask.focus(); return; }
+    location.hash = '#/analysis/2';
+  }
+  if (form) {
+    form.addEventListener('submit', function (e) { e.preventDefault(); submit(); });
+    ask.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var g = e.target.closest('[data-goto]');
+    if (g) { location.hash = '#/analysis/' + g.getAttribute('data-goto'); return; }
+
+    // 原型不联网：真实接口名就地说明，避免留下需要后端才生效的假反馈
+    var p = e.target.closest('[data-proto]');
+    if (p) {
+      var note = document.getElementById('uploadNote');
+      if (note) { note.hidden = false; note.textContent = '原型未接入后端 · 实际调用 ' + p.getAttribute('data-proto'); }
+      return;
+    }
+    if (e.target.closest('#uploadBtn')) {
+      var n = document.getElementById('uploadNote');
+      n.hidden = false;
+      n.textContent = '原型未接入后端 · 实际调用 POST /api/datasets/upload（multipart 字段 file），成功后返回完整 Dataset 并自动画像';
+      return;
+    }
+    var c = e.target.closest('.cause button');
+    if (c) {
+      var want = c.getAttribute('data-cause');
+      document.querySelectorAll('.cause button').forEach(function (b) {
+        b.setAttribute('aria-pressed', String(b === c));
+      });
+      document.querySelectorAll('.specimen[data-cause]').forEach(function (s) {
+        s.hidden = s.getAttribute('data-cause') !== want;
+      });
+    }
+  });
+
+  var lf = document.getElementById('loginForm');
+  if (lf) { lf.addEventListener('submit', function (e) { e.preventDefault(); location.hash = '#/workbench'; }); }
+
+  window.addEventListener('hashchange', route);
+  route();
+})();
+</script>
+</body>
+</html>

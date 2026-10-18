@@ -29,13 +29,14 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 
+from app.api.ownership import require_owned_dataset
 from app.core import registry
+from app.core.auth import SessionUser, require_user
 from app.core.background import submit
 from app.data.store import store
-from app.errors import AppError
-from app.schemas import ApiResponse, ErrorCode
+from app.schemas import ApiResponse
 from app.schemas_workflow import (
     AnalysisAccepted,
     QuestionRequest,
@@ -53,7 +54,9 @@ router = APIRouter(tags=["analysis"])
     summary="提交分析问题",
 )
 def start_analysis(
-    req: QuestionRequest, background: BackgroundTasks
+    req: QuestionRequest,
+    background: BackgroundTasks,
+    user: SessionUser = Depends(require_user),
 ) -> ApiResponse[AnalysisAccepted]:
     """受理一个分析问题：登记工作流后**立刻**返回，不等分析跑完。
 
@@ -64,21 +67,23 @@ def start_analysis(
     dump**：`results` / `plan` 这些字段可能有几百行，而前端拿到 `workflow_id`
     就会去轮询接口 6；多传的部分纯属浪费，还会把内部字段变成对外契约。
     """
-    # ① 数据集必须真的在内存里。这里返回 404 而不是"受理后失败"：用户拿一个
-    #    不存在的 dataset_id 提问，是请求本身错了，当场告诉他比让他轮询更省事
-    #    （而且后台线程拿不到 DataFrame，也只能落一条 FAILED，多绕一圈）。
-    if not store.exists(req.dataset_id):
-        raise AppError(
-            ErrorCode.NOT_FOUND,
-            "数据集不存在",
-            # detail 里不回显 dataset_id：它是请求体里来的、长度不受控，
-            # 回显等于把用户的输入原样写进响应体，没必要。
-            detail="这个 dataset_id 没有登记过。数据存在服务进程的内存里，服务重启后全部丢失。",
-        )
+    # ① 数据集必须**属于当前用户**。注意这里查的是归属，不是"全局存在性"：
+    #    只判 `store.exists()` 的话，别人可以拿另一个用户的 dataset_id 提问，
+    #    而受理之后他自己既看不到工作流（前端轮询 404），原主也不知道数据被用了 ——
+    #    实测就是这个症状（202 受理 + 轮询 120 次全 404）。
+    #    走 `require_owned_dataset`：不存在与不属于你走同一条分支，
+    #    文案与 `GET /api/datasets/{id}` 逐字相同（否则可以用 404/403 的差别枚举 id）。
+    #    未登录在更前面就被 `Depends(require_user)` 拦成 401 了。
+    require_owned_dataset(store.get(req.dataset_id), user.id)
 
     # ② workflow_id 必须是 `uuid4().hex`（32 位小写、**没有连字符**）：
     #    `WorkflowState.workflow_id` 上有 `^[0-9a-f]{32}$` 的正则，`str(uuid4())`
     #    会被当场拒掉 —— 这条检查在模型上，不靠"调用方记得写对"。
+    #
+    #    `owner_user_id` / `owner_username` 必须在**创建时**就写死：
+    #    `GET /api/workflows/{id}`、报告、图表、归档全都按它判归属，漏了就等于
+    #    "谁也不给看"（归档那条 `owner_user_id` 是必填无默认值的参数，
+    #    正是为了逼调用方在这里表态）。
     state = WorkflowState(
         workflow_id=uuid4().hex,
         dataset_id=req.dataset_id,
@@ -87,6 +92,8 @@ def start_analysis(
         step="profiling",
         created_at=datetime.now(timezone.utc),
         max_steps=req.max_steps,
+        owner_user_id=user.id,
+        owner_username=user.username,
     )
 
     # ③ 先登记、再排队。顺序反过来的话，后台线程可能比登记跑得还快，

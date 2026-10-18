@@ -973,7 +973,8 @@ DeepSeek key，这条路才通。契约测试与 `MockTransport` 只能证明**�
 终态 `SUCCESS` / `step=done` / `error=None` → `plan.source=llm`、
 `tasks=['group_aggregate']`、参数 `{'group_by': ['地区'], 'metric': '销售额', 'agg': 'sum'}`
 → 工具 `ok/failed = 1/0` → 报告 `llm_used=False`、`sections=1`、每节都带 `cites`，
-首段逐字 `本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总`。
+首段逐字 `本次未使用大模型，以下结论为工具结果的直接汇总`（原文曾带内部字段名
+`（llm_used=false）`，task-28 缺陷 A 已去掉 —— 那句话直接上屏，字段名对用户没有读者）。
 
 **必须说清楚的分工**：这一轮里**模型只参与了"规划"这一步**（`plan.source=llm`），
 报告仍是模板（`llm_used=False`）。这是 D4/D5 的边界，**不是缺陷** ——

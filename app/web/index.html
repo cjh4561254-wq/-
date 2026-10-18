@@ -4,17 +4,44 @@
   <!-- 这一行必须留：Windows 上浏览器没有它就会用 GBK 猜编码，页面里的中文全是乱码。 -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI 市场行情智能分析平台</title>
+  <title>AI 市场情报与智能分析平台</title>
+  <!-- 空 data: URI 的 favicon：明确声明"这里没有图标文件"，浏览器就不会再去请求
+       /favicon.ico（那个请求必定 404，会在控制台留一条没有意义的红字）。 -->
+  <link rel="icon" href="data:,">
+  <!-- 令牌文件必须先于页面样式表加载：app.css 里全是 var(--…)，顺序倒了会整页无色。
+       两条引用的字面量与先后由测试钉住，不要"顺手整理"。 -->
+  <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/app.css">
 </head>
-<body>
+<!--
+  data-auth 是「会话门」的状态开关，取值 pending → ready（app.js 的 renderUser 里改）。
+  确认登录态之前（pending），CSS 把 .frame 整个藏起来：不这么做的话，未登录用户会先看到
+  一屏"自己的工作台"，再被弹去登录页 —— 那一瞬间的界面是假的。
+-->
+<body data-auth="pending">
   <!--
     跳转到主内容：必须是 body 的第一个可聚焦元素。
-    app.css 里 .skip-link 默认被推到视口外（left:-9999px），只有键盘 focus 时才滑回左上角。
     ⚠️ 这个元素曾经只写了 CSS、HTML 里没有，于是那条样式成了死代码，
-    Tab 第一下落在顶栏的「接口文档」上 —— 键盘用户要按 7 下才进得了正文。
+    Tab 第一下落在侧栏导航上 —— 键盘用户要按好多下才进得了正文。
   -->
   <a class="skip-link" href="#content">跳到主内容</a>
+
+  <!--
+    会话门是整页唯一的"未确认登录态"界面，见 app.js 的 checkSession() / showStartupError()。
+    未登录直访 /app 会被服务端转到 /login；请求本身失败（后端挂了 / 503）时就地换成真实错误
+    + 重试按钮 —— 把"服务端故障"说成"你没登录"会让人反复去输密码。
+    这里**不放**演示账号、示例密码或假表单：那些东西一旦写进页面就会被当成真凭据。
+  -->
+  <div class="authgate" id="auth-gate" role="status" aria-live="polite">
+    <div class="authgate__box">
+      <span class="authgate__spinner" aria-hidden="true"></span>
+      <strong>正在确认登录状态…</strong>
+      <p>正在向服务端确认你的会话状态…</p>
+      <noscript>
+        <p class="authgate__warn">需要在浏览器里开启 JavaScript：本页要靠脚本向服务端确认登录状态，脚本被禁用时会一直停在这里。</p>
+      </noscript>
+    </div>
+  </div>
 
   <!--
     图标精灵：内联 SVG <symbol>，不引图标库、不引图标字体（离线可演示的硬约束）。
@@ -24,6 +51,9 @@
     test_page_links_its_own_assets_and_nothing_external 扫的是整个文件的纯文本，
     不看 HTML 语义，注释里的绝对地址一样判红。
     HTML5 解析器本来就会把内联 <svg> 归到 SVG 命名空间，不需要 xmlns。
+
+    symbol 的名字表是 app.js 的 ICON_NAMES 白名单（运行时按 #i-<name> 取用），
+    所以这里**只许加不许减**：删掉一个没人静态引用的 symbol，某个 JS 分支就会安静地画不出图标。
   -->
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
     <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M4 15v3.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V15"/></symbol>
@@ -37,100 +67,282 @@
     <symbol id="i-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9 9l6 6M15 9l-6 6"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="8" r=".9" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 3.5V8h-4.5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
     <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.5v.4"/><circle cx="12" cy="16.8" r=".9" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5l1.8 4.7L18.5 10l-4.7 1.8L12 16.5l-1.8-4.7L5.5 10l4.7-1.8z"/></symbol>
+    <symbol id="i-runs" viewBox="0 0 24 24"><path d="M3 13h4l2.5 5.5L14 6l2.5 7H21"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v11m0 0l4-4M12 14l-4-4M4.5 18.5V21h15v-2.5"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-8.5 8.5"/><path d="M18 14v5.5H4.5V6H10"/></symbol>
   </svg>
 
-  <!-- ==================== 顶部品牌栏 ==================== -->
-  <header class="topbar">
-    <button class="topbar__menu" id="nav-toggle" type="button" aria-label="展开或收起导航" aria-expanded="false" aria-controls="sidebar">
-      <svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>
-    </button>
-
-    <div class="topbar__brand">
-      <span class="topbar__mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span>
-      <span class="topbar__names">
-        <span class="topbar__product">AI Market Intelligence Studio</span>
-        <span class="topbar__product-cn">AI 市场行情智能分析平台</span>
-      </span>
-    </div>
-
-    <div class="topbar__right">
-      <!-- 当前工作区：服务端是单进程、没有多工作区概念，这里如实写「本地单进程」，
-           不做一个点了没反应的工作区切换器。 -->
-      <span class="topbar__workspace" title="服务端是单进程内存态，没有多工作区概念">
-        <span class="dot dot--ok" aria-hidden="true"></span>本地单进程
-      </span>
-      <!-- 17 个必须存在的元素 id 之一。大模型配置状态来自 GET /api/health 的 llm_configured。 -->
-      <span id="llm-badge" class="badge badge--grey" role="status">正在检查大模型配置…</span>
-      <a class="topbar__link" href="/docs" title="打开 FastAPI 自带的接口文档">
-        <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>接口文档
-      </a>
-    </div>
-  </header>
-
-  <div class="shell">
-    <!-- ==================== 左侧导航 ==================== -->
+  <div class="frame" id="frame">
     <aside class="sidebar" id="sidebar">
+      <!-- 中英分两行（英文品牌行是次要行），因为混排成一行会破坏"一眼认出产品"的作用。
+           "单用户本地部署"放在每天都看到的位置：这不是多租户系统，不能让人以为有租户隔离。
+           .topbar__product 挂在中文全名上：侧栏宽 240px，长名字一定会截断，
+           所以 title 里留一份完整值 —— 截断之后用户才有办法知道全名。 -->
+      <p class="sidebar__brand">
+        <strong class="topbar__product" title="AI 市场情报与智能分析平台">AI 市场情报与智能分析平台</strong>
+        <em>AI Market Intelligence Studio</em>
+        <span>单用户本地部署</span>
+      </p>
+
       <nav class="nav" aria-label="主导航">
-        <p class="nav__group">分析工作区</p>
-        <a class="nav__item" href="#/workbench" data-view="workbench">
-          <svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg><span>工作台</span>
-        </a>
-        <a class="nav__item" href="#/dataset" data-view="dataset">
-          <svg class="icon" aria-hidden="true"><use href="#i-dataset"></use></svg><span>数据集</span>
-        </a>
-        <a class="nav__item" href="#/analysis" data-view="analysis">
-          <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg><span>市场分析</span>
-        </a>
-        <a class="nav__item" href="#/report" data-view="report">
-          <svg class="icon" aria-hidden="true"><use href="#i-report"></use></svg><span>分析报告</span>
-        </a>
+        <div class="nav__group-wrap" role="group" aria-labelledby="nav-group-command">
+          <p class="nav__group" id="nav-group-command">指挥</p>
+          <a class="nav__item" href="#/command" data-view="command" aria-current="page">
+            <svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg><span>战略态势</span>
+          </a>
+          <a class="nav__item" href="#/dataset" data-view="dataset">
+            <svg class="icon" aria-hidden="true"><use href="#i-dataset"></use></svg><span>数据资产</span>
+            <span class="nav__badge" id="badge-datasets" hidden>—</span>
+          </a>
+        </div>
 
-        <p class="nav__group">记录</p>
-        <a class="nav__item" href="#/history" data-view="history">
-          <svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg><span>历史任务</span>
-        </a>
+        <div class="nav__group-wrap" role="group" aria-labelledby="nav-group-analysis">
+          <p class="nav__group" id="nav-group-analysis">分析</p>
+          <a class="nav__item" href="#/analysis" data-view="analysis">
+            <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg><span>发起分析</span>
+          </a>
+          <a class="nav__item" href="#/runs" data-view="runs">
+            <svg class="icon" aria-hidden="true"><use href="#i-runs"></use></svg><span>Agent 运行</span>
+            <span class="nav__badge" id="badge-runs" hidden>—</span>
+          </a>
+        </div>
 
-        <p class="nav__group">系统</p>
-        <!-- 设置页没有任何后端写接口。**不做成看似可用的开关**：点了进去，
-             页面会明确写清「这里只能看，不能改」以及为什么。 -->
-        <a class="nav__item" href="#/settings" data-view="settings">
-          <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg><span>设置</span>
-          <span class="nav__flag">只读</span>
-        </a>
+        <div class="nav__group-wrap" role="group" aria-labelledby="nav-group-outcome">
+          <p class="nav__group" id="nav-group-outcome">成果</p>
+          <a class="nav__item" href="#/report" data-view="report">
+            <svg class="icon" aria-hidden="true"><use href="#i-report"></use></svg><span>分析报告</span>
+          </a>
+          <a class="nav__item" href="#/history" data-view="history">
+            <svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg><span>历史记录</span>
+          </a>
+        </div>
       </nav>
 
       <div class="sidebar__foot">
-        <a href="/api/health">健康检查 /api/health</a>
+        <a href="/api/health">健康检查</a>
+        <!-- 「本次会话至 …时到期」逐字来自 GET /api/auth/me 的 session_expires_at；
+             前端不倒计时、不推算剩余时长（那需要一个后端没有的字段才能"准确"）。
+             取不到就整块不显示（app.js 里 hidden 由 renderUser 控制）。 -->
+        <p id="sidebar-session" hidden>本次会话至 <b id="sidebar-session-expires">—</b> 到期</p>
         <p>原始文件只存在服务端内存与上传目录，<br>不通过静态资源对外暴露。</p>
       </div>
     </aside>
 
-    <!-- ==================== 主内容区 ==================== -->
-    <!--
-      tabindex="-1" 是给「跳到主内容」用的：没有它，点跳转链接只会滚动页面，
-      焦点仍留在 body 上，读屏软件不会念出正文，键盘用户按下一个 Tab 又回到顶栏。
-      加了它之后 `<a href="#content">` 才能把焦点真正落到这里。
-      它不会让 main 进入正常的 Tab 顺序（-1 表示只能被脚本/锚点聚焦）。
-    -->
-    <main class="content" id="content" tabindex="-1">
-      <!-- 面包屑 + 页面标题：每个视图一份，由 app.js 切换显示 -->
-      <div class="pagehead">
-        <p class="crumb" id="crumb">工作台</p>
-        <h1 class="pagehead__title" id="page-title">Market Intelligence Workspace</h1>
-        <p class="pagehead__sub" id="page-sub">上传市场数据 → 用自然语言提问 → 真实计算 + 图表 + 可逐条核对的报告</p>
-      </div>
+    <div class="col">
+      <!--
+        命令条不是导航：这里不放 <nav>、不放全局搜索框（方案 01 与 06 的分界线就是这个）。
+        搜索留在数据资产视图页内 —— 那一个搜索只筛这一页的列表，不承诺"搜全站"这种后端没有的能力。
+      -->
+      <header class="cmdbar">
+        <button class="cmdbar__menu" id="nav-toggle" type="button" aria-label="展开或收起导航" aria-expanded="false" aria-controls="sidebar">
+          <svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>
+        </button>
 
-      <!-- ---------- 视图 1：工作台 ---------- -->
-      <section class="view" id="view-workbench" data-view="workbench">
-        <div class="grid grid--main">
-          <!-- 上传 -->
+        <span class="cmdbar__title" id="cmdbar-title">战略态势</span>
+        <!-- 「数据资产更新于」= 已上传数据里最近的那一份的上传日，来自 GET /api/datasets 的真实字段。
+             不写成"数据的截止时间"：归档链路里没有数据集标识，无法证明下面每条结论对应哪份数据。 -->
+        <span class="cmdbar__asof" id="cmdbar-asof">数据资产更新于 <b>—</b></span>
+        <span class="cmdbar__note" id="cmdbar-note">数据来自服务端真实接口 · 内网单进程部署</span>
+
+        <span class="cmdbar__spacer" aria-hidden="true"></span>
+
+        <span class="cmdbar__health" id="cmdbar-health" role="status">
+          <span class="dot dot--ok" aria-hidden="true"></span><span id="health-text">正在检查服务…</span>
+        </span>
+        <!-- 17 个必须存在的元素 id 之一；任何断点都不许把它藏掉（它是业务状态，不是工具链链接）。 -->
+        <span id="llm-badge" class="badge badge--grey" role="status">正在检查大模型配置…</span>
+        <a class="cmdbar__link topbar__link" href="/docs" title="打开自动生成的接口文档">
+          <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>接口文档
+        </a>
+        <a class="btn btn--primary cmdbar__launch" href="#/analysis">发起新分析</a>
+
+        <!--
+          账户浮层：账号、显示名、会话到期全部来自 GET /api/auth/me 的真实返回；
+          确认登录态之前整块 hidden —— 不先渲染一个空壳按钮再"之后补内容"，
+          那样在慢网络上会出现一个点开什么都没有的菜单。
+          刻意不用 role="menu"/menuitem：这不是应用菜单栏，而是一块"展开详情 + 一个动作"的浮层，
+          套菜单语义反而会让读屏软件念错。
+        -->
+        <div class="cmdbar__user">
+          <button class="userbtn" id="user-btn" type="button" hidden
+                  aria-haspopup="true" aria-expanded="false" aria-controls="user-popover">
+            <span class="userbtn__avatar" id="user-initial" aria-hidden="true"></span>
+            <span class="userbtn__name" id="user-display"></span>
+            <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+          </button>
+
+          <div class="userpop" id="user-popover" aria-labelledby="user-btn" hidden>
+            <p class="userpop__row"><span>登录账号</span><strong id="user-account">—</strong></p>
+            <p class="userpop__row"><span>显示名</span><strong id="user-name">—</strong></p>
+            <p class="userpop__row"><span>会话到期</span><strong id="user-expiry">—</strong></p>
+            <!-- 侧栏六项里没有「设置」，这里是它唯一的入口：设置视图与 #/settings 深链都还在，
+                 只是从"系统区"降级成账户区的一个动作。 -->
+            <a class="userpop__row userpop__settings" href="#/settings">
+              <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg>设置（只读）
+            </a>
+            <button class="btn btn--ghost userpop__logout" id="logout" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>退出登录
+            </button>
+            <p class="state" id="logout-state" role="status"></p>
+          </div>
+        </div>
+      </header>
+
+      <!--
+        tabindex="-1" 是给「跳到主内容」用的：没有它，点跳转链接只会滚动页面，焦点仍留在 body 上，
+        读屏软件不会念出正文。-1 表示它不会因此进入正常 Tab 顺序（只能被锚点/脚本聚焦）。
+      -->
+      <main class="content" id="content" tabindex="-1">
+        <div class="pagehead">
+          <!-- H1 初值必须与 app.js VIEWS.command.title 逐字一致；
+               否则首屏从 HTML 里的静态文本闪到 JS 写入的新文本会看得见一次跳动。
+               DEFAULT_VIEW=command 之后，"闪一下"的旧病灶（分析工作台/市场情报工作台）不复存在。 -->
+          <h1 class="pagehead__title" id="page-title">战略态势带</h1>
+          <p class="pagehead__sub" id="page-sub">最近完成的分析里，用户原话与报告首段结论并排放在一起；每条都能点开原文逐句核对</p>
+        </div>
+
+        <section class="view" id="view-command" data-view="command">
+          <section class="posture" id="posture" aria-labelledby="posture-title">
+            <div class="posture__head">
+              <h2 id="posture-title">战略态势带 <span class="posture__asof" id="posture-asof-note">· 列表更新于 —</span></h2>
+              <p class="posture__hint">每行是一次已经出报告的分析：业务问题是你当时问的原话，结论是那份报告的第一段正文，点「查看报告」可以逐条核对数字。</p>
+            </div>
+            <!-- 这里不放示例行：原型那三行（华东销售额 / 品类份额 / 促销 ROI）是占位数据，
+                 写进生产页就是三条假结论。行、骨架、空态、失败态都由 app.js 换进这个容器；
+                 一行四列＝问题 / 结论 / 证据 / 动作（.posture__q / .posture__a / .posture__e / .posture__go）。 -->
+            <div id="posture-body">
+              <p class="state">正在读取归档记录…</p>
+            </div>
+          </section>
+
+          <div class="metrics" id="metrics-grid">
+            <div class="metric">
+              <p class="metric__value" id="metric-datasets">—</p>
+              <p class="metric__label">数据集总数</p>
+              <p class="metric__note"><span class="src src--api" title="口径：本账号已上传的数据集全量条数，数字来自服务端的真实响应">来自本账号已上传的数据集</span><span id="metric-datasets-note">正在读取…</span></p>
+            </div>
+            <div class="metric">
+              <p class="metric__value" id="metric-running">—</p>
+              <p class="metric__label">运行中任务</p>
+              <p class="metric__note"><span class="src src--api" title="口径：本页这一次会话里正在跟踪的分析条数；服务端没有「全部运行中」的统计接口，刷新或换页就不算了">只算本页正在跟踪的运行</span><span id="metric-running-note">正在读取…</span></p>
+            </div>
+            <div class="metric">
+              <p class="metric__value" id="metric-reports">—</p>
+              <p class="metric__label">已出报告</p>
+              <p class="metric__note"><span class="src src--api" title="口径：本次读取的归档记录里已经产出报告的条数，不是全部历史的报告总数">样本＝本次读取的记录</span><span id="metric-reports-note">正在读取…</span></p>
+            </div>
+            <div class="metric">
+              <p class="metric__value" id="metric-failed">—</p>
+              <p class="metric__label">分析失败</p>
+              <p class="metric__note"><span class="src src--api" title="口径：本次读取的归档记录里状态为失败的条数，不是全部历史的失败总数">样本＝本次读取的记录</span><span id="metric-failed-note">正在读取…</span></p>
+            </div>
+          </div>
+          <p class="note" id="metrics-caliber">样本口径：「已出报告」与「分析失败」只统计<strong>本次读取的最近若干条归档记录</strong>（实际条数写在各自下方），不是全部历史；数据集总数是全量计数。凡是没查到的数字都写「—」——「—」是"还没拿到"，不是 0。</p>
+
+          <section class="panel">
+            <!-- 「发起新分析」是整屏唯一的主按钮，这里四条入口全部用次级样式：
+                 一屏两个主按钮等于没有主按钮。 -->
+            <div class="panel__head">
+              <h2 class="panel__title">下一步</h2>
+              <span class="panel__hint">分析按六个阶段推进，状态来自服务端返回的真实进度</span>
+            </div>
+            <div class="row">
+              <a class="btn btn--ghost" href="#/analysis">
+                <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg>发起分析
+              </a>
+              <a class="btn btn--ghost" href="#/runs">
+                <svg class="icon" aria-hidden="true"><use href="#i-runs"></use></svg>Agent 运行
+              </a>
+              <a class="btn btn--ghost" href="#/report">
+                <svg class="icon" aria-hidden="true"><use href="#i-report"></use></svg>分析报告
+              </a>
+              <a class="btn btn--ghost" href="#/workbench">
+                <svg class="icon" aria-hidden="true"><use href="#i-dataset"></use></svg>数据与任务概览
+              </a>
+              <span class="state">读取数据 → 制定计划 → 计算 → 生成图表 → 撰写报告 → 校验数字</span>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="view-workbench" data-view="workbench" hidden>
+          <!-- 这一视图不在侧栏里（侧栏是 3 组 6 项），入口是首屏「下一步」那条链接与 #/workbench 深链。
+               它装的都是"由 loadAssets() / loadRecentTasks() 填"的面板 —— 那两个取数只在进这个视图时发，
+               所以同样的容器不能搬到首屏去：搬过去就会永远停在"正在读取…"。 -->
+          <section class="statstrip" aria-label="数据与任务统计">
+            <div class="stat">
+              <p class="stat__label">数据集</p>
+              <p class="stat__value" id="asset-total">—</p>
+              <p class="stat__note"><span class="src src--api" title="口径：只统计本账号已上传的数据集，数字来自服务端的真实响应">来自本账号已上传的数据集</span><span id="asset-total-note">正在读取…</span></p>
+            </div>
+            <div class="stat">
+              <p class="stat__label">分析任务（归档）</p>
+              <p class="stat__value" id="asset-task-total">—</p>
+              <p class="stat__note"><span class="src src--api" title="口径：只统计本账号的分析归档，数字来自服务端的真实响应">来自本账号的分析归档</span><span id="asset-task-note">正在读取…</span></p>
+            </div>
+            <div class="stat stat--text">
+              <p class="stat__label">最近一次成功</p>
+              <p class="stat__value" id="asset-last-success">—</p>
+              <p class="stat__note" id="asset-last-note">归档里还没有成功记录</p>
+            </div>
+            <div class="stat stat--text">
+              <p class="stat__label">当前分析对象</p>
+              <p class="stat__value" id="asset-current">—</p>
+              <p class="stat__note" id="asset-current-note">还没有选数据集</p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">数据概览</h2>
+              <a class="card__action" href="#/dataset">查看数据资产详情
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></a>
+            </div>
+            <div class="card__body">
+              <p id="dataset-summary" class="state" role="status">还没有数据</p>
+              <div class="kpis" id="kpi-grid">
+                <p class="empty empty--inline">
+                  <svg class="icon" aria-hidden="true"><use href="#i-dataset"></use></svg>
+                  上传数据后，这里会显示行数、字段数、重复行、缺失字段与内存占用 —— 全部来自画像接口的真实字段。
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <div class="two">
+            <section class="panel">
+              <div class="panel__head">
+                <h2 class="panel__title">最近上传</h2>
+                <a class="card__action" href="#/dataset">全部数据集
+                  <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></a>
+              </div>
+              <div id="asset-recent" class="list" role="status">
+                <p class="empty empty--inline">正在读取数据集列表…</p>
+              </div>
+              <p class="state" id="asset-state" role="status"></p>
+              <p class="note">数据集本体存在<strong>服务进程内存</strong>里：服务重启后这份列表会空，原先的链接与记录也会失效 —— 那时候页面会如实说「找不到这份数据」，不会假装它还在。任务历史保存在服务端的归档库中，重启后仍在。</p>
+            </section>
+
+            <section class="panel">
+              <div class="panel__head">
+                <h2 class="panel__title">最近分析任务</h2>
+                <a class="card__action" href="#/history">全部历史
+                  <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></a>
+              </div>
+              <div id="recent-tasks" class="list" role="status">
+                <p class="empty empty--inline">正在读取归档库…</p>
+              </div>
+              <p class="note">这一块读服务端的归档记录，重启后仍在。</p>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="view-dataset" data-view="dataset" hidden>
           <section class="card">
             <div class="card__head">
               <h2 class="card__title">上传数据</h2>
@@ -153,227 +365,391 @@
             </div>
           </section>
 
-          <!-- 数据概览 -->
           <section class="card">
             <div class="card__head">
-              <h2 class="card__title">数据概览</h2>
-              <a class="card__action" href="#/dataset">查看数据集详情
-                <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></a>
-            </div>
-            <div class="card__body">
-              <p id="dataset-summary" class="state" role="status">还没有数据</p>
-              <div class="kpis" id="kpi-grid">
-                <!-- 指标卡由 app.js 用真实字段填充；没有数据时是空状态，不摆假数字 -->
-                <p class="empty empty--inline">
-                  <svg class="icon" aria-hidden="true"><use href="#i-dataset"></use></svg>
-                  上传数据后，这里会显示行数、字段数、重复行、缺失字段与内存占用 —— 全部来自画像接口的真实字段。
-                </p>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        <!-- 快速开始分析 -->
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">开始一次分析</h2>
-            <span class="card__hint">进入市场分析工作区，用自然语言描述你要看的问题</span>
-          </div>
-          <div class="card__body">
-            <div class="row">
-              <a class="btn btn--primary" href="#/analysis">
-                <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg>进入市场分析
-              </a>
-              <span class="state">分析会依次经过：读取数据 → 制定计划 → 计算 → 出图 → 写报告 → 校验数字</span>
-            </div>
-          </div>
-        </section>
-
-        <!-- 最近分析任务：来自真实的历史归档接口 GET /api/workflows/history -->
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">最近分析任务</h2>
-            <a class="card__action" href="#/history">全部历史
-              <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></a>
-          </div>
-          <div class="card__body">
-            <div id="recent-tasks" class="list" role="status">
-              <p class="empty empty--inline">正在读取归档库…</p>
-            </div>
-            <p class="note">这一块读的是服务端 SQLite 归档库（重启后仍在）。<strong>数据集没有列表接口</strong> —— 数据只存在服务进程内存里，所以这里不会出现「最近数据集」，刷新页面也拿不回旧的 dataset_id。</p>
-          </div>
-        </section>
-      </section>
-
-      <!-- ---------- 视图 2：数据集 ---------- -->
-      <section class="view" id="view-dataset" data-view="dataset" hidden>
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">字段结构</h2>
-            <span class="card__hint">列名与 pandas dtype 来自 GET /api/datasets/{id}</span>
-          </div>
-          <div class="card__body">
-            <ul id="columns" class="plain"><li class="muted">上传后显示</li></ul>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">数据预览</h2>
-            <span class="card__hint">前 5 行，值已由服务端统一转成字符串</span>
-          </div>
-          <div class="card__body">
-            <div class="table-wrap"><table id="preview"><tbody><tr><td class="muted">上传后显示</td></tr></tbody></table></div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">数据质量</h2>
-            <span class="card__hint">缺失比例与重复行来自画像接口 GET /api/datasets/{id}/profile</span>
-          </div>
-          <div class="card__body">
-            <h3 class="sub-title">缺失值最多的 3 列</h3>
-            <ul id="missing-top3" class="plain"><li class="muted">上传后显示</li></ul>
-            <h3 class="sub-title">画像提示</h3>
-            <ul id="profile-warnings" class="plain warn-list"></ul>
-            <p class="note" id="dedup-note" hidden></p>
-          </div>
-        </section>
-      </section>
-
-      <!-- ---------- 视图 3：市场分析 ---------- -->
-      <section class="view" id="view-analysis" data-view="analysis" hidden>
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">描述你想了解的市场问题</h2>
-            <span class="card__hint">系统会把它翻译成若干个确定性的 pandas 分析任务</span>
-          </div>
-          <div class="card__body">
-            <p class="ctx" id="analysis-context">
-              <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
-              还没有选择数据集：请先在<strong>工作台</strong>上传一份表格。
-            </p>
-            <label class="field-label" for="question">分析问题</label>
-            <textarea id="question" rows="3" placeholder="例：各地区的销售额汇总"></textarea>
-
-            <p class="field-label">示例问题（点一下填进输入框）</p>
-            <div class="row" id="examples">
-              <button class="btn btn--chip example" type="button" data-question="各地区的销售额汇总">各地区的销售额汇总</button>
-              <button class="btn btn--chip example" type="button" data-question="销售额前 5 的商品">销售额前 5 的商品</button>
-              <button class="btn btn--chip example" type="button" data-question="哪些列有缺失值">哪些列有缺失值</button>
-              <button class="btn btn--chip example" type="button" data-question="销售额与利润的相关性">销售额与利润的相关性</button>
-            </div>
-
-            <div class="row row--between">
-              <span id="ask-state" class="state" role="status"></span>
-              <button id="ask" type="button" class="btn btn--primary">
-                <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg>开始分析
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">执行过程</h2>
-            <span class="card__hint">六个阶段的状态全部来自后端 step 字段，前端不用定时器假装进度</span>
-          </div>
-          <div class="card__body">
-            <ol id="steps" class="steps"></ol>
-            <p class="row">
-              <span id="elapsed" class="state">—</span>
-              <span id="workflow-state" class="state"></span>
-            </p>
-            <ul id="task-list" class="plain tasklist"></ul>
-            <!-- 工作流失败 / 超时的错误框：按 error.code 显示，绝不按 HTTP 状态码判断 -->
-            <div id="workflow-error" class="error-box" hidden></div>
-          </div>
-        </section>
-      </section>
-
-      <!-- ---------- 视图 4：分析报告 ---------- -->
-      <section class="view" id="view-report" data-view="report" hidden>
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">图表</h2>
-            <span class="card__hint">由服务端 matplotlib 生成并落盘，前端只做展示，不在浏览器里重画</span>
-          </div>
-          <div class="card__body">
-            <!-- img 的 src 直接指向后端接口 8 的 URL，不下载、不转 base64 -->
-            <div id="charts" class="charts"><p class="empty empty--inline">分析完成后显示</p></div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">分析报告</h2>
-            <span class="card__hint">正文里每个数字都能回到某次工具调用的结果</span>
-          </div>
-          <div class="card__body" id="report"><p class="empty empty--inline">分析完成后显示</p></div>
-        </section>
-      </section>
-
-      <!-- ---------- 视图 5：历史任务 ---------- -->
-      <section class="view" id="view-history" data-view="history" hidden>
-        <section class="card">
-          <div class="card__head">
-            <h2 class="card__title">历史任务</h2>
-            <span class="card__hint">读服务端 SQLite 归档库（GET /api/workflows/history），重启后仍在</span>
-          </div>
-          <div class="card__body">
-            <div class="row row--between">
-              <span class="state" id="history-meta"></span>
-              <button class="btn btn--ghost" id="history-refresh" type="button">
+              <h2 class="card__title">数据资产列表</h2>
+              <button class="btn btn--ghost btn--sm" id="dataset-refresh" type="button">
                 <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新
               </button>
             </div>
-            <div id="history-list" class="list" role="status"></div>
-          </div>
-        </section>
-
-        <section class="card" id="history-detail-card" hidden>
-          <div class="card__head">
-            <h2 class="card__title">归档详情</h2>
-            <button class="btn btn--ghost" id="history-close" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>关闭
-            </button>
-          </div>
-          <div class="card__body" id="history-detail"></div>
-        </section>
-      </section>
-
-      <!-- ---------- 视图 6：设置 ---------- -->
-      <section class="view" id="view-settings" data-view="settings" hidden>
-        <section class="card">
-          <div class="card__head"><h2 class="card__title">运行状态</h2></div>
-          <div class="card__body">
-            <div class="table-wrap"><table id="settings-health"><tbody></tbody></table></div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card__head"><h2 class="card__title">为什么这里改不了任何东西</h2></div>
-          <div class="card__body">
-            <div class="banner banner--info">
-              <h4><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>本页只读</h4>
-              <p>后端<strong>没有</strong>任何写配置的接口 —— 没有 <code>POST /api/settings</code>，
-              也没有数据集删除、报告导出、历史清理这些接口。</p>
-              <p>所以这里不摆放开关和输入框：<strong>看起来能点、点了没反应</strong>比没有更糟。</p>
+            <div class="card__body">
+              <!-- 排序、分页、搜索全部交给后端（sort/order/limit/offset/q）：前端只筛当前这一页的话，
+                   一次 20 条会让人觉得"总共就这 20 条"，两边各算一遍迟早出现两种口径。 -->
+              <div class="search">
+                <label class="sr-only" for="dataset-search">按文件名搜索数据集</label>
+                <svg class="icon search__icon" aria-hidden="true"><use href="#i-search"></use></svg>
+                <input
+                  type="search"
+                  id="dataset-search"
+                  class="search__input"
+                  placeholder="按文件名搜索（不区分大小写）"
+                  autocomplete="off"
+                  spellcheck="false"
+                >
+                <button class="search__clear" id="dataset-search-clear" type="button" hidden>
+                  <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+                  <span class="sr-only">清空搜索</span>
+                </button>
+              </div>
+              <p class="state" id="dataset-list-summary" role="status">正在读取数据集列表…</p>
+              <div id="dataset-list-state"></div>
+              <div class="table-wrap">
+                <table id="dataset-table" class="dtable">
+                  <thead>
+                    <tr>
+                      <th scope="col" data-sort="filename" aria-sort="none">
+                        <button class="th-sort" type="button" data-sort="filename">文件名</button>
+                      </th>
+                      <th scope="col">类型</th>
+                      <th scope="col" class="is-num" data-sort="size_bytes" aria-sort="none">
+                        <button class="th-sort" type="button" data-sort="size_bytes">大小</button>
+                      </th>
+                      <th scope="col" data-sort="uploaded_at" aria-sort="none">
+                        <button class="th-sort" type="button" data-sort="uploaded_at">上传时间</button>
+                      </th>
+                      <th scope="col" class="is-num" data-sort="rows" aria-sort="none">
+                        <button class="th-sort" type="button" data-sort="rows">行数</button>
+                      </th>
+                      <th scope="col" class="is-num">列数</th>
+                      <th scope="col" class="is-num">缺失单元格</th>
+                      <th scope="col">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="row row--between pager" id="dataset-pager" hidden>
+                <span class="state" id="page-info"></span>
+                <div class="row row--tight">
+                  <button class="btn btn--ghost btn--sm" id="page-prev" type="button">上一页</button>
+                  <button class="btn btn--ghost btn--sm" id="page-next" type="button">下一页</button>
+                </div>
+              </div>
+              <p class="note">大小、行数、列数、上传时间都来自服务端。缺失单元格显示「未计算」，是因为这份数据还没跑过画像：<strong>缺失不等于 0</strong>，写成 0 就是在编数据。</p>
             </div>
-            <h3 class="sub-title">配置怎么改（真实做法）</h3>
-            <ul class="plain">
-              <li>全部配置来自<strong>进程环境变量</strong>（不读 <code>.env</code> 文件）。改完要重启服务。</li>
-              <li>常见几个：<code>UPLOAD_DIR</code>、<code>MAX_UPLOAD_MB</code>、<code>MAX_ROWS</code>、<code>CHARTS_DIR</code>、<code>DB_PATH</code>、<code>LLM_API_KEY</code>。</li>
-              <li>仓库根目录有 <code>.env.example</code> 列出全部键名与默认值，照着在启动前设进环境变量即可。</li>
-              <li>三个大模型字段各认两个名字：<code>LLM_*</code> 优先，<code>DEEPSEEK_*</code> 兜底。</li>
-            </ul>
-            <h3 class="sub-title">接口文档</h3>
-            <p class="state"><a href="/docs">/docs</a> 是 FastAPI 自动生成的交互式文档，比任何手写的设置页都准。</p>
-          </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">字段结构</h2>
+              <span class="card__hint">列名与数据类型读自服务端</span>
+            </div>
+            <div class="card__body">
+              <ul id="columns" class="plain"><li class="muted">上传后显示</li></ul>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">数据预览</h2>
+              <span class="card__hint">前 5 行，值已由服务端统一转成字符串</span>
+            </div>
+            <div class="card__body">
+              <div class="table-wrap"><table id="preview"><tbody><tr><td class="muted">上传后显示</td></tr></tbody></table></div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">数据质量</h2>
+              <span class="card__hint">缺失比例与重复行由服务端统计</span>
+            </div>
+            <div class="card__body">
+              <h3 class="sub-title">缺失值最多的 3 列</h3>
+              <ul id="missing-top3" class="plain"><li class="muted">上传后显示</li></ul>
+              <h3 class="sub-title">画像提示</h3>
+              <ul id="profile-warnings" class="plain warn-list"></ul>
+              <p class="note" id="dedup-note" hidden></p>
+            </div>
+          </section>
         </section>
-      </section>
-    </main>
+
+        <section class="view" id="view-analysis" data-view="analysis" hidden>
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">数据集选择</h2>
+              <span class="card__hint">选项来自服务端的真实数据集列表</span>
+            </div>
+            <div class="card__body">
+              <label class="field-label" for="dataset-select">要用哪一份数据做分析</label>
+              <div class="row row--tight">
+                <select id="dataset-select" class="pick">
+                  <option value="">正在读取数据集列表…</option>
+                </select>
+                <a class="btn btn--ghost btn--sm" href="#/dataset">查看数据资产列表</a>
+              </div>
+              <p class="state" id="dataset-picker-state" role="status"></p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">描述你想了解的市场问题</h2>
+              <span class="card__hint">系统会把它翻译成若干个确定性的分析任务</span>
+            </div>
+            <div class="card__body">
+              <p class="ctx" id="analysis-context">
+                <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+                还没有选择数据集：请先在<strong>数据资产</strong>上传一份表格。
+              </p>
+              <label class="field-label" for="question">分析问题</label>
+              <textarea id="question" rows="3" placeholder="例：各地区的销售额汇总"></textarea>
+
+              <p class="field-label">示例问题（点一下填进输入框）</p>
+              <div class="row" id="examples">
+                <button class="btn btn--chip example" type="button" data-question="各地区的销售额汇总">各地区的销售额汇总</button>
+                <button class="btn btn--chip example" type="button" data-question="销售额前 5 的商品">销售额前 5 的商品</button>
+                <button class="btn btn--chip example" type="button" data-question="哪些列有缺失值">哪些列有缺失值</button>
+                <button class="btn btn--chip example" type="button" data-question="销售额与利润的相关性">销售额与利润的相关性</button>
+              </div>
+
+              <label class="field-label" for="max-steps">规划步数上限（max_steps）</label>
+              <div class="row row--tight">
+                <select id="max-steps" class="pick" title="限定这次分析最多规划几个任务，取值范围 1–8">
+                  <option value="3">快速（最多 3 步）</option>
+                  <option value="5" selected>标准（最多 5 步）</option>
+                  <option value="6">充分（最多 6 步）</option>
+                  <option value="8">深度（最多 8 步）</option>
+                </select>
+              </div>
+              <p class="note">这个值会随请求发给服务端，限定分析计划里最多几个任务（1–8）。</p>
+
+              <div class="row row--between">
+                <span id="ask-state" class="state" role="status"></span>
+                <button id="ask" type="button" class="btn btn--primary">
+                  <svg class="icon" aria-hidden="true"><use href="#i-analysis"></use></svg>开始分析
+                </button>
+              </div>
+              <p class="note">这一页只负责发起；跑起来的六个阶段状态在「Agent 运行」里看。</p>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="view-runs" data-view="runs" hidden>
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">执行过程</h2>
+              <span class="card__hint">六个阶段的状态全部来自服务端的真实进度，前端不用定时器假装进度</span>
+            </div>
+            <div class="card__body">
+              <!-- 六段的 data-step 逐字等于 app.js 的 STEP_ORDER（也就是后端 orchestrator 的 _STEPS）：
+                   差一个字母那一段会安静地不亮，页面看起来"卡在第一步"，肉眼查不出来。 -->
+              <div class="ladder" id="ladder" role="img" aria-label="进度：已完成 — 步 / 共 6 步">
+                <div class="seg" data-step="profiling"><i class="seg__bar" aria-hidden="true"></i><span class="seg__lb">读取数据</span></div>
+                <div class="seg" data-step="planning"><i class="seg__bar" aria-hidden="true"></i><span class="seg__lb">制定计划</span></div>
+                <div class="seg" data-step="execution"><i class="seg__bar" aria-hidden="true"></i><span class="seg__lb">计算</span></div>
+                <div class="seg" data-step="charting"><i class="seg__bar" aria-hidden="true"></i><span class="seg__lb">生成图表</span></div>
+                <div class="seg" data-step="reporting"><i class="seg__bar" aria-hidden="true"></i><span class="seg__lb">撰写报告</span></div>
+                <div class="seg" data-step="validation"><i class="seg__bar" aria-hidden="true"></i><span class="seg__lb">校验数字</span></div>
+              </div>
+              <p class="ladder__caliber">进度口径 = 已完成阶段数 / 总阶段数（<span id="ladder-count">— / 6</span>）。后端只给阶段序号，不给阶段级耗时。</p>
+              <p class="row">
+                <!-- 已用时是每秒都在动的数字，故意不给它 role="status"：
+                     读屏会每秒念一遍"已用时 N 秒"，比不播报更糟。
+                     状态文字变了才是真正需要通知的事，所以只给 #workflow-state。 -->
+                <span id="elapsed" class="state">尚未开始分析</span>
+                <span id="workflow-state" class="state" role="status"></span>
+              </p>
+              <!-- Wave E 缺陷 3：深链到一条**已经结束并归档**的运行时的说明区。
+                   三种真实状态各写各的话（正在跑 / 已归档 / 查不到），各用各的数据源；
+                   阶梯只由服务端真实给的 step_index 点亮，这里不用定时器、不按时间推算。 -->
+              <div id="run-note" class="run-note" role="status" hidden></div>
+              <ol id="steps" class="steps">
+                <li data-step="profiling" data-index="0" data-state="waiting"><span class="dot"></span><span class="steps__name">读取数据</span><span class="steps__state">等待执行</span></li>
+                <li data-step="planning" data-index="1" data-state="waiting"><span class="dot"></span><span class="steps__name">制定计划</span><span class="steps__state">等待执行</span></li>
+                <li data-step="execution" data-index="2" data-state="waiting"><span class="dot"></span><span class="steps__name">计算</span><span class="steps__state">等待执行</span></li>
+                <li data-step="charting" data-index="3" data-state="waiting"><span class="dot"></span><span class="steps__name">生成图表</span><span class="steps__state">等待执行</span></li>
+                <li data-step="reporting" data-index="4" data-state="waiting"><span class="dot"></span><span class="steps__name">撰写报告</span><span class="steps__state">等待执行</span></li>
+                <li data-step="validation" data-index="5" data-state="waiting"><span class="dot"></span><span class="steps__name">校验数字</span><span class="steps__state">等待执行</span></li>
+              </ol>
+              <!-- 这一行是故意写在这里的：用户看六个阶段时最容易问"每个阶段花了多久"，
+                   而后端只给了整条任务的创建与结束时间，没有任何阶段时间戳。
+                   与其让界面上出现一个编出来的耗时，不如在同一个位置写明它不存在。 -->
+              <p class="note">状态每 1000 毫秒向服务端确认一次，不是实时推送。上面的「已用时」是整条任务的真实墙钟时间；阶段级耗时后端暂未提供。</p>
+              <ul id="task-list" class="plain tasklist"></ul>
+              <!-- 工作流失败 / 超时的错误框：按 error.code 显示，绝不按 HTTP 状态码判断 -->
+              <div id="workflow-error" class="error-box" hidden></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="view-report" data-view="report" hidden>
+          <!--
+            报告目录的数据源就是历史那一条真实接口（GET /api/workflows/history），只筛已经出报告的记录；
+            没有新接口、没有第二个导航项。深链接 #/report/<id> 会把这张卡片收起，直接进阅读态。
+          -->
+          <section class="card" id="report-catalog-card">
+            <div class="card__head">
+              <h2 class="card__title">报告目录</h2>
+              <span class="card__hint">来自服务端归档的真实记录，只列已经有报告的</span>
+              <div class="card__action">
+                <button class="btn btn--ghost btn--sm" id="report-catalog-refresh" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新
+                </button>
+              </div>
+            </div>
+            <div class="card__body">
+              <p class="state" id="report-catalog-state" role="status"></p>
+              <ul class="list" id="report-catalog" aria-busy="false"></ul>
+              <p class="note">
+                每行的「数据集」暂时为空：目前这一列还显示不出这份报告用的是哪份数据（现有记录里只有
+                问题、状态、时间、有没有报告、报告是谁写的这几项）。
+                等后续版本把数据集信息也一并记录下来，这一列才会显示真实值。
+              </p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">图表</h2>
+              <span class="card__hint">图表由服务端按真实数据生成，前端只做展示，不在浏览器里重画</span>
+            </div>
+            <div class="card__body">
+              <!-- img 的 src 直接指向后端出图接口的地址，不下载、不转 base64 -->
+              <div id="charts" class="charts"><p class="empty empty--inline">分析完成后显示</p></div>
+            </div>
+          </section>
+
+          <p class="note">正文里每个数字都能回到某一次取数的结果；报告末尾的证据区按任务编号逐条列出这些调用。</p>
+          <article class="doc" id="report"><p class="empty empty--inline">分析完成后显示</p></article>
+        </section>
+
+        <section class="view" id="view-history" data-view="history" hidden>
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">历史记录</h2>
+              <span class="card__hint">每一次分析都留在这里：问题、状态、有没有出报告、什么时候跑的，重启服务后仍在</span>
+            </div>
+            <div class="card__body">
+              <div class="row row--between">
+                <span class="state" id="history-meta"></span>
+                <button class="btn btn--ghost" id="history-refresh" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新
+                </button>
+              </div>
+              <div id="history-list" class="list" role="status"></div>
+              <div class="row row--between pager" id="history-pager" hidden>
+                <span class="state" id="history-page-info"></span>
+                <div class="row row--tight">
+                  <button class="btn btn--ghost btn--sm" id="history-prev" type="button">上一页</button>
+                  <button class="btn btn--ghost btn--sm" id="history-next" type="button">下一页</button>
+                </div>
+              </div>
+              <p class="note">翻页会重新向服务端要那一页的真实记录：前端不缓存整份列表，也不会用假数据把页码凑满。每页 20 条。</p>
+            </div>
+          </section>
+
+          <section class="card" id="history-detail-card" hidden>
+            <div class="card__head">
+              <h2 class="card__title">归档详情</h2>
+              <button class="btn btn--ghost" id="history-close" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>关闭
+              </button>
+            </div>
+            <div class="card__body" id="history-detail"></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-settings" data-view="settings" hidden>
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">当前账号</h2>
+              <span class="card__hint">读的是你当前的登录会话，不会在浏览器里留副本</span>
+            </div>
+            <div class="card__body">
+              <div class="table-wrap">
+                <table class="kv">
+                  <tbody>
+                    <tr><th scope="row">显示名</th><td id="account-name">—</td></tr>
+                    <tr><th scope="row">登录账号</th><td id="account-login">—</td></tr>
+                    <tr><th scope="row">会话到期</th><td id="account-expiry">—</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="note">
+                以上三行来自你当前的登录会话；有效期由服务端设定（默认 8 小时），
+                到期后需要重新登录才能继续使用。
+              </p>
+              <!-- 这里的退出按钮和账户菜单里那条走同一个 logout()：退出只有一条代码路径 -->
+              <div class="row">
+                <button class="btn btn--ghost" id="logout-settings" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>退出登录
+                </button>
+                <span class="state">退出会真正结束这次登录会话，成功之后才跳到登录页</span>
+              </div>
+              <p class="state" id="logout-settings-state" role="status"></p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">修改密码</h2>
+              <span class="card__hint">后端会销毁该账号其他会话，这台设备仍保留</span>
+            </div>
+            <div class="card__body">
+              <label class="field-label" for="pwd-current">当前密码</label>
+              <input type="password" id="pwd-current" autocomplete="current-password">
+              <label class="field-label" for="pwd-new">新密码</label>
+              <input type="password" id="pwd-new" autocomplete="new-password">
+              <label class="field-label" for="pwd-new2">再输一遍新密码</label>
+              <input type="password" id="pwd-new2" autocomplete="new-password">
+              <p class="note">新密码的强度规则由服务端给（前端不复述一遍，否则后端改规则页面会拒绝合法值）。</p>
+              <div class="row row--between">
+                <span id="password-state" class="state" role="status"></span>
+                <button class="btn btn--primary" id="password-save" type="button">保存新密码</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head">
+              <h2 class="card__title">这个账号在哪些会话里登录着</h2>
+              <span class="card__hint">服务端只给元信息，不给 token（库里存的也只是哈希）</span>
+            </div>
+            <div class="card__body">
+              <div class="row row--between">
+                <span class="state" id="session-state" role="status">正在读取会话列表…</span>
+                <button class="btn btn--ghost btn--sm" id="session-refresh" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新
+                </button>
+              </div>
+              <div class="list" id="session-list" aria-busy="false"></div>
+              <p class="note">列表里的每条是服务端记录的一次登录：创建时间、最近活动、到期时间与「当前这条」标记。这里没有退出他处会话的接口，所以只显示，不摆动作按钮。</p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head"><h2 class="card__title">运行状态</h2></div>
+            <div class="card__body">
+              <div class="table-wrap"><table id="settings-health"><tbody></tbody></table></div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card__head"><h2 class="card__title">为什么这里改不了任何东西</h2></div>
+            <div class="card__body">
+              <div class="banner banner--info">
+                <!-- 设置页没有任何后端写接口。**不做成看似可用的开关**：
+                     看起来能点、点了没反应，比这里什么都没有更糟。 -->
+                <h4><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>本页只读</h4>
+                <p>这一版<strong>没有</strong>在线修改配置的功能，也还没有数据集删除、报告导出、
+                历史清理这些功能。</p>
+                <p>所以这里不摆放开关和输入框：<strong>看起来能点、点了没反应</strong>比没有更糟。</p>
+              </div>
+              <h3 class="sub-title">配置在哪里改</h3>
+              <ul class="plain">
+                <li>配置在<strong>启动服务时</strong>通过环境变量给定，改完要重启服务才生效。</li>
+                <li>能调的项：上传目录、单文件大小上限、单次分析的行数与列数上限、图表输出目录、归档数据库路径、大模型接口地址与密钥。</li>
+                <li>项目目录里的配置文件<strong>不会</strong>被读取：配置只认启动服务时的环境变量。每一项的准确名字与默认值，都写在随包附带的配置样例文件里（项目根目录的 <code>.env.example</code>，每一项都有注释）。</li>
+                <li>大模型那三项各认两个名字（新名优先、旧名兜底）；不确定用哪个时，按样例文件里的写法即可。</li>
+              </ul>
+              <h3 class="sub-title">接口文档</h3>
+              <p class="state">需要通过接口或脚本读取数据的人：<a href="/docs">/docs</a> 是自动生成的交互式文档，内容始终与系统实际能力一致。</p>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

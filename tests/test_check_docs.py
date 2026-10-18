@@ -167,6 +167,17 @@ def _child_env(mirror: Path) -> dict[str, str]:
     # 防止本机环境变量把被测行为带偏（与 conftest 的 _isolate_llm_env 同源考虑）。
     for name in ("DB_PATH", "UPLOAD_DIR", "CHARTS_DIR"):
         env.pop(name, None)
+    # `AUTH_DB_PATH` 不打发掉，而是**重新指向镜像内部**（相对路径，由子进程按
+    # 它自己的 PROJECT_ROOT 解析成 `<镜像>/.tmp/checkdocs-auth/auth.db`）。
+    # 为什么必须这么做（2026-10-16 实测踩到，两个方向都出过事）：
+    #   1. 原样继承：conftest 把真仓库的绝对路径写进了 os.environ，镜像子进程
+    #      会连真仓库的账号库 —— 镜像的绿灯依赖镜像外部的文件，隔离是假的；
+    #   2. 直接 pop 掉：子进程拿到 `Settings.auth_db_path` 的**默认值**
+    #      `data/db/auth.db`，也就是**开发用的真账号库**。`tests/auth_support.py`
+    #      会往里面建 `test-admin` 账号并写会话（实测：真库里多出一行
+    #      `(1, 'test-admin', ...)`），污染了"首次启动应当是空库"的初始状态。
+    # 指向镜像是唯一同时满足"镜像自洽"与"不碰真库"的落点。
+    env["AUTH_DB_PATH"] = str(Path(".tmp") / "checkdocs-auth" / "auth.db")
     return env
 
 
@@ -310,13 +321,17 @@ def test_mirror_never_touches_the_real_repository(view: str) -> None:
 def test_code_anchor_line_drift_is_caught(mirror: Path) -> None:
     """代码里声明的行号漂移一位 → 必须红灯。
 
-    `:215` 与 `:216` 那对锚点（声明紧挨目标行上方）是脆弱点：只要有人在它
-    上面插一行注释，声明就指错了行。
+    声明行紧挨目标行的这对锚点是脆弱点：只要有人在它上面插一行注释，
+    声明就指错了行。
+
+    为什么数字是 219：代码里那个锚点是 `# **:219** ...`（声明行本身在
+    `app/api/routes_workflows.py:218`），它锚定的 `status=_coerce_enum(...)`
+    在 `:219`。这两个数字会随文件增删漂移，改这里时必须回代码里核一遍。
     """
     mut = _Mutation(mirror, ROUTES)
     try:
-        # 把第一处"行号锚点声明"里的 215 改成 216：声明与目标行不再对齐。
-        mut.sub("# **:215**", "# **:216**")
+        # 把第一处"行号锚点声明"里的 219 改成 220：声明与目标行不再对齐。
+        mut.sub("# **:219**", "# **:220**")
         rc, out = _run_check_docs(mirror)
         assert rc == 1, "行号漂移没被抓住：\n%s" % _output_tail(out, 30)
         assert "不一致" in out
@@ -329,12 +344,12 @@ def test_code_anchor_quote_mismatch_is_caught(mirror: Path) -> None:
     """锚点**行号不变**、但那一行的内容被改掉（引文失配）→ 必须红灯。
 
     这是比"行号漂移"更隐蔽的一种腐烂：行号还是对的，读的人不会怀疑。
-    这里用 `replace_line(215, ...)` 只改目标行本身 —— 声明行 `:214` 不动，
-    所以报出来的必须是「声明 :215 是 X，实际是 Y」这种引文失配。
+    这里用 `replace_line(219, ...)` 只改目标行本身 —— 声明行 `:218` 不动，
+    所以报出来的必须是「声明 :219 是 X，实际是 Y」这种引文失配。
     """
     mut = _Mutation(mirror, ROUTES)
     try:
-        mut.replace_line(215, _TARGET_LINE + "  # task-40 尾注")
+        mut.replace_line(219, _TARGET_LINE + "  # task-40 尾注")
         rc, out = _run_check_docs(mirror)
         assert rc == 1, "引文失配没被抓住：\n%s" % _output_tail(out, 30)
         assert "行号漂移" in out, _output_tail(out, 30)
@@ -367,7 +382,7 @@ def test_doc_line_anchor_pointing_at_nothing_is_caught(mirror: Path) -> None:
     """文档声明的行号在代码里没有任何锚点认领它 → 必须红灯。"""
     mut = _Mutation(mirror, DOC)
     try:
-        mut.sub("行号锚点 `app/api/routes_workflows.py:215`",
+        mut.sub("行号锚点 `app/api/routes_workflows.py:219`",
                 "行号锚点 `app/api/routes_workflows.py:999`")
         rc, out = _run_check_docs(mirror)
         assert rc == 1, "悬空行号锚点没被抓住：\n%s" % _output_tail(out, 30)
@@ -401,19 +416,19 @@ def test_doc_expectation_flip_is_caught(mirror: Path) -> None:
 def test_product_code_regression_that_the_case_pins_is_caught(mirror: Path) -> None:
     """★ 最贴近真实回归的一条：**产品代码**退回硬转，文档和用例都不动。
 
-    把 `app/api/routes_workflows.py:215` 的 `_coerce_enum` 换回裸
+    把 `app/api/routes_workflows.py:219` 的 `_coerce_enum` 换回裸
     `WorkflowStatus(...)`，于是非法 `status` 重新抛出 `ValueError` → 500。
     台账脚本会真的去跑那条被投喂的用例，用例自己炸掉。
 
     这一条证明的是台账的**最终价值**：它守住的不只是文档，还有产品行为。
 
-    用 `replace_line(215, ...)` 而不是文本替换：`:214` 那条声明行的引文里
-    原样含有 `:215` 的文本，只按文本替换会同时改掉声明行，于是这一轮变异
+    用 `replace_line(219, ...)` 而不是文本替换：`:218` 那条声明行的引文里
+    原样含有 `:219` 的文本，只按文本替换会同时改掉声明行，于是这一轮变异
     变成"行号漂移 + 用例炸"两件事混在一起，测的就不是单一东西了。
     """
     mut = _Mutation(mirror, ROUTES)
     try:
-        mut.replace_line(215, "        status=WorkflowStatus(record.status),  # task-40 退回硬转")
+        mut.replace_line(219, "        status=WorkflowStatus(record.status),  # task-40 退回硬转")
         rc, out = _run_check_docs(mirror)
         assert rc == 1, "产品代码回归没被抓住：\n%s" % _output_tail(out, 40)
         assert "不一致" in out, _output_tail(out, 40)

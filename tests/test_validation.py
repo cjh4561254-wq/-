@@ -62,7 +62,7 @@ def _now() -> datetime:
     多个用例共用同一个 `created_at` 时看不出"时间有没有被真的写过"。
     """
     return datetime.now(timezone.utc)# 逐字写死。理由见模块 docstring：不许从实现里 import 来比自己。
-TEMPLATE_NOTICE = "本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总"
+TEMPLATE_NOTICE = "本次未使用大模型，以下结论为工具结果的直接汇总"
 LLM_PLANNED_NOTICE = (
     "本次由大模型参与规划（选择了分析工具与参数），"
     "但报告正文是模板自动汇总的，以下结论仍为工具结果的直接汇总"

@@ -1,0 +1,1149 @@
+/* ==========================================================================
+ * login.css — 登录 / 首次部署页（方案 05：Stripe 金融科技流体）
+ * --------------------------------------------------------------------------
+ * 消费方分层（前端文件白名单是全等断言，页面样式只能改写这两个文件）：
+ *   tokens.css → 唯一的令牌来源（本文件一个裸色值都不写，全部走 var()）
+ *   本文件     → 页面结构与状态样式，只消费 --ds-* / 兼容层令牌
+ *
+ * 三态由 <html data-auth-mode> 驱动（login.js 只切属性，样式在这里）：
+ *   pending      状态未知：画"登录形态"的骨架，但提交按钮禁用并写明原因
+ *   login        已有账号：登录表单
+ *   bootstrap    账号库为空：首次部署表单（显示名称 + 确认密码）
+ *   redirecting  已登录，正在跳转应用：隐藏表单，只留提示
+ *
+ * 纪律：不含绝对网址 / 不引外部图片与字体 / 图标全部内联 SVG。
+ * 断点与 app.css 同口径：1080（收窄）、760（单列）、480（紧凑）。
+ * ========================================================================== */
+
+/* 主要三个块：状态门、墨色品牌面板、白卡表单。先用工具类归零，再逐块写。 */
+[hidden] {
+  display: none !important;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--ds-color-canvas);
+}
+
+body.auth {
+  position: relative;
+  min-height: 100vh;
+  margin: 0;
+  font-family: var(--ds-font-sans);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--ds-color-ink);
+  background-color: var(--ds-color-canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 键盘焦点环：只给 :focus-visible，鼠标点击不出环。outline 不占布局，不影响对齐。 */
+:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: var(--ds-focus-w) solid var(--ds-cmd-focus);
+  outline-offset: 2px;
+}
+
+/* 跳到表单：默认移出视口上缘，聚焦时滑入；深底反白保证在画布/品牌面板上都可读。 */
+.skip {
+  position: absolute;
+  top: calc(var(--sp-10) * -1);
+  left: var(--sp-4);
+  z-index: 60;
+  display: inline-block;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--brand-700);
+  color: var(--n-0);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: top var(--dur-1) var(--ease);
+}
+
+.skip:focus,
+.skip:focus-visible {
+  top: var(--sp-4);
+  outline: var(--ds-focus-w) solid var(--brand-300);
+  outline-offset: 2px;
+  color: var(--n-0);
+}
+
+/* ==========================================================================
+ * 一、壳：深墨品牌面板 + 画布上的白卡表单
+ * ========================================================================== */
+
+.auth__shell {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.02fr) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* --------------------------------------------------------------------------
+ * 1.1 品牌面板：深墨底 + 三团 mesh 光斑 + 极淡网格
+ *     光斑全部用令牌里的半透明色，用 CSS 径向渐变画，不用图片。
+ * -------------------------------------------------------------------------- */
+
+.brand {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  overflow: hidden;
+  padding: var(--sp-10) var(--sp-8);
+  background-color: var(--ds-brand-panel-bg);
+  color: var(--ds-brand-panel-ink);
+}
+
+.brand::before,
+.brand::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* mesh：紫 / 青 / 粉三团光斑，压在深墨底上；模糊交给渐变本身，不加 filter 省合成层。 */
+.brand::before {
+  background:
+    radial-gradient(46% 38% at 12% 8%, var(--ds-mesh-purple), transparent 68%),
+    radial-gradient(40% 34% at 92% 22%, var(--ds-mesh-cyan), transparent 70%),
+    radial-gradient(52% 44% at 68% 96%, var(--ds-mesh-pink), transparent 72%);
+}
+
+/* 网格：64px 一格、16% 透明白，只做"科技网格"的暗示，不抢正文。 */
+.brand::after {
+  background-image:
+    linear-gradient(var(--ds-brand-panel-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ds-brand-panel-line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  opacity: .35;
+}
+
+.brand__top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* 品牌记号：与 app.css 的侧栏品牌块同一套语言（渐变方块 + 白色几何符号）。 */
+.brand__mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-lg);
+  background: var(--ds-brand-panel-tile);
+  box-shadow: inset 0 0 0 1px var(--ds-brand-panel-line);
+}
+
+.brand__mark svg {
+  width: 26px;
+  height: 26px;
+  fill: none;
+}
+
+.mark__bar {
+  fill: var(--n-0);
+}
+
+.mark__line {
+  fill: none;
+  stroke: var(--n-0);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mark__dot {
+  fill: var(--n-0);
+}
+
+.brand__wordmark {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.brand__name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: .01em;
+  color: var(--ds-brand-panel-ink);
+}
+
+.brand__name-en {
+  font-size: var(--fs-xs);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ds-brand-panel-ink-muted);
+}
+
+.brand__hero {
+  display: grid;
+  gap: var(--sp-4);
+  max-width: 34ch;
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+.brand__kicker {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ds-brand-panel-accent);
+}
+
+.brand__claim {
+  margin: 0;
+  font-size: var(--fs-3xl);
+  font-weight: 700;
+  line-height: 1.28;
+  letter-spacing: -.01em;
+  color: var(--ds-brand-panel-ink);
+}
+
+.brand__lede {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.8;
+  color: var(--ds-brand-panel-ink-muted);
+}
+
+.brand__facts {
+  display: grid;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-4);
+  border: 1px solid var(--ds-brand-panel-line);
+  border-radius: var(--r-md);
+  background: var(--ds-brand-panel-surface);
+}
+
+.fact__title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ds-brand-panel-ink);
+}
+
+.fact__text {
+  font-size: var(--fs-sm);
+  line-height: 1.75;
+  color: var(--ds-brand-panel-ink-muted);
+}
+
+/* --------------------------------------------------------------------------
+ * 1.2 右列：画布上的居中白卡
+ * -------------------------------------------------------------------------- */
+
+.panel {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow-x: clip;
+  padding: var(--sp-10) var(--sp-6);
+}
+
+/* 右列画布上再补两团很淡的光斑，避免大面积冷白显得"没上色"。 */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 32% at 88% 4%, var(--ds-mesh-purple), transparent 72%),
+    radial-gradient(34% 30% at 4% 100%, var(--ds-mesh-cyan), transparent 74%);
+  opacity: .5;
+}
+
+.panel__inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 460px;
+  padding: var(--sp-8);
+  border: 1px solid var(--ds-color-line-divider);
+  border-radius: var(--ds-radius-surface);
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-card-shadow);
+}
+
+.panel__inner h1 {
+  margin: 0;
+}
+
+.panel__title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-3xl);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -.01em;
+  color: var(--ds-color-ink-strong);
+}
+
+.panel__lead {
+  margin: 0 0 var(--sp-5);
+  font-size: var(--fs-sm);
+  line-height: 1.75;
+  color: var(--ds-color-ink-muted);
+}
+
+/* 首次部署的胶囊标签：只在 bootstrap 形态出现（data-mode 开关在文件尾部统一管）。 */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 var(--sp-3);
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--ds-color-action-line);
+  border-radius: var(--r-pill);
+  background: var(--ds-color-action-surface);
+  color: var(--ds-color-action-hover);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
+/* ==========================================================================
+ * 二、提示与错误
+ * ========================================================================== */
+
+/* 信息级提示（role=status）。会话过期、环境部分能力不可用走这里，不是错误。 */
+.notice {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--ds-color-action-line);
+  border-radius: var(--r-md);
+  background: var(--ds-color-action-surface);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--ds-color-ink);
+}
+
+.notice__mark {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: .6em;
+  border-radius: 50%;
+  background: var(--brand-600);
+}
+
+.notice--warn {
+  border-color: var(--ds-color-warning-line);
+  background: var(--ds-color-warning-surface);
+}
+
+.notice--warn .notice__mark {
+  background: var(--ds-color-warning);
+}
+
+.notice__text {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 错误区（role=alert）。三类图标都在 DOM 里，靠状态类切一张显示，避免 JS 做 DOM 手术。 */
+.alert {
+  display: flex;
+  gap: var(--sp-3);
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-4);
+  border: 1px solid var(--ds-color-danger-line);
+  border-radius: var(--r-md);
+  background: var(--ds-color-danger-surface);
+  color: var(--ds-color-ink);
+}
+
+.alert--warn {
+  border-color: var(--ds-color-warning-line);
+  background: var(--ds-color-warning-surface);
+}
+
+.alert--info {
+  border-color: var(--ds-color-info-line);
+  background: var(--ds-color-info-surface);
+}
+
+.alert__icon {
+  display: none;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 圆点（最后一个 circle）改成实心，和线条图标同一个视觉语言。 */
+.alert__icon circle:last-child {
+  fill: currentColor;
+  stroke: none;
+}
+
+.alert--warn .alert__icon--warn,
+.alert:not(.alert--info):not(.alert--warn) .alert__icon--warn {
+  display: block;
+  color: var(--ds-color-warning);
+}
+
+.alert--info .alert__icon--info {
+  display: block;
+  color: var(--ds-color-info);
+}
+
+.alert__body {
+  min-width: 0;
+}
+
+.alert__title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--ds-color-ink-strong);
+}
+
+.alert__detail {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.75;
+  color: var(--ds-color-ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.alert__retry {
+  margin-top: var(--sp-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ds-cmd-link);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.alert__retry:hover {
+  color: var(--ds-cmd-link-hover);
+}
+
+/* noscript 里的静态告警：不依赖 JS 类，直接给间距。 */
+.alert--static {
+  margin: var(--sp-4) 0 0;
+}
+
+/* ==========================================================================
+ * 三、表单
+ * ========================================================================== */
+
+.form {
+  display: grid;
+  gap: var(--sp-4);
+  margin: 0;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field__label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ds-color-ink-strong);
+}
+
+.field__optional {
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--ds-color-ink-muted);
+}
+
+.field__control {
+  position: relative;
+  display: flex;
+}
+
+.input {
+  width: 100%;
+  min-height: var(--ds-input-h);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--ds-color-line-strong);
+  border-radius: var(--r-md);
+  background: var(--ds-color-surface);
+  color: var(--ds-color-ink-strong);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.4;
+  appearance: none;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    box-shadow var(--dur-1) var(--ease);
+}
+
+.input::placeholder {
+  color: var(--ds-color-ink-subtle);
+}
+
+.input:hover {
+  border-color: var(--n-500);
+}
+
+.input:focus {
+  border-color: var(--ds-color-focus);
+  box-shadow: var(--ds-focus-ring);
+  outline: none;
+}
+
+/* 失效态用"红边 + 淡红环"：只改边色的话 1px 变化在低分屏上几乎看不出来。 */
+.input[aria-invalid="true"],
+.input[aria-invalid="true"]:hover {
+  border-color: var(--ds-color-danger);
+  box-shadow: 0 0 0 3px var(--ds-color-danger-surface);
+}
+
+.input:disabled {
+  background: var(--n-100);
+  color: var(--ds-color-ink-muted);
+  cursor: not-allowed;
+}
+
+/* 带右侧动作按钮的输入框：右侧留出按钮宽度，避免文字压到眼睛图标。 */
+.input--with-action {
+  padding-right: 46px;
+}
+
+.field__hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--ds-color-ink-muted);
+}
+
+.field__error {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--ds-color-danger);
+}
+
+.field__error-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.field__error-text {
+  overflow-wrap: anywhere;
+}
+
+/* 显示/隐藏密码：36px 触控区，绝对定位在输入框右侧。 */
+.reveal {
+  position: absolute;
+  top: 50%;
+  right: var(--sp-2);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ds-color-ink-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition:
+    background-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+
+.reveal:hover {
+  background: var(--ds-color-surface-hover);
+  color: var(--ds-color-ink-strong);
+}
+
+.reveal__icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.reveal__icon--hide {
+  display: none;
+}
+
+.reveal[aria-pressed="true"] .reveal__icon--show {
+  display: none;
+}
+
+.reveal[aria-pressed="true"] .reveal__icon--hide {
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+ * 3.1 记住账号 + 忘记密码（只在登录形态出现）
+ *     记住账号——只把用户名写进 localStorage，密码永远不进客户端存储；
+ *     忘记密码——本期没有自助重置，所以是"展开说清楚"，不是一个点进去就断的假链接。
+ * -------------------------------------------------------------------------- */
+
+.remember {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+  margin-top: calc(var(--sp-1) * -1);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--ds-color-ink);
+  cursor: pointer;
+}
+
+.check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--brand-600);
+  cursor: pointer;
+}
+
+.forgot {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.forgot__summary {
+  color: var(--ds-cmd-link);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+  text-underline-offset: 3px;
+}
+
+.forgot__summary::-webkit-details-marker {
+  display: none;
+}
+
+.forgot__summary:hover {
+  color: var(--ds-cmd-link-hover);
+  text-decoration: underline;
+}
+
+.forgot[open] {
+  flex-basis: 100%;
+}
+
+.forgot__text {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-md);
+  background: var(--ds-color-surface-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.75;
+  color: var(--ds-color-ink-muted);
+}
+
+/* --------------------------------------------------------------------------
+ * 3.2 主按钮：全宽 pill + 紫色主操作 + 柔光投影
+ *     禁用态不用 opacity（对比度锁也会抓），改成"浅底 + 中灰字 + 清晰边"。
+ * -------------------------------------------------------------------------- */
+
+.submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--ds-input-h);
+  margin-top: var(--sp-1);
+  padding: var(--sp-3) var(--sp-5);
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--ds-cmd-action);
+  color: var(--ds-cmd-action-ink);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: .01em;
+  cursor: pointer;
+  box-shadow: var(--shadow-action);
+  transition:
+    background-color var(--dur-1) var(--ease),
+    box-shadow var(--dur-1) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+
+.submit:hover:not(:disabled) {
+  background: var(--ds-cmd-action-hover);
+  box-shadow: var(--shadow-action-hover);
+  transform: translateY(-1px);
+}
+
+.submit:active:not(:disabled) {
+  background: var(--ds-cmd-action-active);
+  box-shadow: none;
+  transform: none;
+}
+
+.submit:disabled {
+  border-color: var(--ds-cmd-action-disabled-line);
+  background: var(--ds-cmd-action-disabled-surface);
+  color: var(--ds-cmd-action-disabled-ink);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* 忙态：JS 同时置 disabled + aria-busy + .is-busy；样式给出深紫底与转圈。 */
+.submit.is-busy,
+.submit[aria-busy="true"] {
+  border-color: transparent;
+  background: var(--ds-cmd-action-hover);
+  color: var(--ds-cmd-action-ink);
+  box-shadow: var(--shadow-action);
+  cursor: progress;
+  transform: none;
+}
+
+.spinner {
+  display: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--rule-on-navy);
+  border-top-color: var(--ds-cmd-action-ink);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+.submit.is-busy .spinner,
+.submit[aria-busy="true"] .spinner {
+  display: block;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 按钮文字：一个按钮三份文案，按形态与忙态切显隐。 */
+.submit__text,
+.submit__text--busy {
+  display: none;
+}
+
+html[data-auth-mode="login"] .submit__text[data-mode="login"],
+html[data-auth-mode="pending"] .submit__text[data-mode="login"],
+html[data-auth-mode="bootstrap"] .submit__text[data-mode="bootstrap"] {
+  display: inline;
+}
+
+.submit.is-busy .submit__text,
+.submit[aria-busy="true"] .submit__text {
+  display: none;
+}
+
+html[data-auth-mode] .submit.is-busy .submit__text--busy,
+html[data-auth-mode] .submit[aria-busy="true"] .submit__text--busy {
+  display: inline;
+}
+
+/* 按钮为什么是灰的，就写在按钮正下方（role=status，挂 aria-describedby）。 */
+.submit__reason {
+  margin: calc(var(--sp-2) * -1) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--ds-color-warning);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--ds-color-warning-surface);
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+  color: var(--ds-color-ink);
+  outline: none;
+}
+
+/* --------------------------------------------------------------------------
+ * 3.3 第三方登录：三个**设计占位**按钮，全部 disabled，下面一句话说清楚。
+ *     不做假跳转、不弹假提示——点了不会有任何请求。
+ * -------------------------------------------------------------------------- */
+
+.oauth {
+  display: grid;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.oauth__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ds-color-ink-muted);
+}
+
+.oauth__divider::before,
+.oauth__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--ds-color-line-divider);
+}
+
+.oauth__btns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.oauth__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: var(--sp-2);
+  border: 1px solid var(--ds-color-line-strong);
+  border-radius: var(--r-md);
+  background: var(--ds-color-surface);
+  color: var(--ds-color-ink);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+
+.oauth__btn:hover:not(:disabled) {
+  border-color: var(--n-500);
+  background: var(--n-25);
+}
+
+.oauth__btn:disabled {
+  border-color: var(--rule-soft);
+  background: var(--ds-color-surface-subtle);
+  color: var(--ds-color-ink-muted);
+  cursor: not-allowed;
+}
+
+.oauth__icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.oauth__note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.65;
+  color: var(--ds-color-ink-muted);
+}
+
+/* ==========================================================================
+ * 四、脚注：本期边界（折叠但摘要常显）+ 接口文档 / 回跳目标
+ * ========================================================================== */
+
+.panel__foot {
+  margin-top: var(--sp-6);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--ds-color-line-divider);
+}
+
+.foot__summary {
+  color: var(--ds-color-ink-muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.6;
+  cursor: pointer;
+  list-style: none;
+}
+
+.foot__summary::-webkit-details-marker {
+  display: none;
+}
+
+.foot__summary:hover {
+  color: var(--ds-color-ink);
+}
+
+.foot__list {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
+  padding-left: 1.1em;
+  font-size: var(--fs-xs);
+  line-height: 1.75;
+  color: var(--ds-color-ink-muted);
+}
+
+.foot__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--ds-color-ink-muted);
+}
+
+.foot__link {
+  color: var(--ds-cmd-link);
+  font-weight: 500;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.foot__link:hover {
+  color: var(--ds-cmd-link-hover);
+  border-bottom-color: currentColor;
+}
+
+.foot__dot {
+  display: none;
+  color: var(--ds-color-line-strong);
+}
+
+/* 回跳目标只在"从应用被踢回登录页"时由 JS 显示；没显示时中间的间隔点也一起藏掉。 */
+.foot__meta:has(#foot-next:not([hidden])) .foot__dot {
+  display: inline;
+}
+
+.code {
+  padding: 1px 5px;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-sm);
+  background: var(--ds-color-surface-subtle);
+  color: var(--ds-color-ink);
+  font-family: var(--ds-font-mono);
+  font-size: .92em;
+}
+
+/* ==========================================================================
+ * 五、形态开关：data-auth-mode 决定"显示哪一态的字段"
+ *     pending 画登录形态（状态未知，先让人能填；提交按钮禁用并写原因）
+ * ========================================================================== */
+
+html[data-auth-mode="login"] [data-mode="bootstrap"],
+html[data-auth-mode="pending"] [data-mode="bootstrap"],
+html[data-auth-mode="redirecting"] [data-mode="bootstrap"] {
+  display: none !important;
+}
+
+html[data-auth-mode="bootstrap"] [data-mode="login"] {
+  display: none !important;
+}
+
+/* redirecting：已登录，900ms 后跳应用；表单与标题都收起，只留状态提示。 */
+html[data-auth-mode="redirecting"] #auth-form,
+html[data-auth-mode="redirecting"] .panel__title,
+html[data-auth-mode="redirecting"] .panel__lead,
+html[data-auth-mode="redirecting"] .eyebrow,
+html[data-auth-mode="redirecting"] .remember,
+html[data-auth-mode="redirecting"] .oauth,
+html[data-auth-mode="redirecting"] .panel__foot {
+  display: none !important;
+}
+
+/* 首次部署形态的纵向节奏收紧：字段更多，卡片别被撑得太高。 */
+html[data-auth-mode="bootstrap"] .form {
+  gap: var(--sp-3);
+}
+
+html[data-auth-mode="bootstrap"] .panel__lead {
+  margin-bottom: var(--sp-4);
+}
+
+/* ==========================================================================
+ * 六、响应式
+ * ========================================================================== */
+
+/* 宽屏：品牌面板够宽，主张句用展示级字号（31px），撑住左栏视觉重量。 */
+@media (min-width: 1200px) {
+  .brand__claim {
+    font-size: var(--fs-4xl);
+  }
+}
+
+/* 1080：品牌面板收窄，主张句降一档，避免和右卡抢宽度。 */
+@media (max-width: 1080px) {
+  .auth__shell {
+    grid-template-columns: minmax(360px, 1fr) minmax(0, 1.1fr);
+  }
+
+  .brand {
+    padding: var(--sp-8) var(--sp-6);
+  }
+
+  .brand__claim {
+    font-size: var(--fs-2xl);
+  }
+
+  .panel {
+    padding: var(--sp-8) var(--sp-5);
+  }
+}
+
+/* 760：单列。品牌面板缩成顶部一条（只留记号 + 产品名），表单占满宽度。 */
+@media (max-width: 760px) {
+  .auth__shell {
+    display: block;
+    min-height: 100vh;
+  }
+
+  .brand {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-4) var(--sp-5);
+  }
+
+  .brand::after {
+    display: none;
+  }
+
+  .brand__mark {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--r-md);
+  }
+
+  .brand__mark svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .brand__name-en {
+    display: none;
+  }
+
+  .brand__hero,
+  .brand__facts {
+    display: none;
+  }
+
+  .panel {
+    padding: var(--sp-6) var(--sp-4) var(--sp-8);
+  }
+
+  .panel__inner {
+    max-width: none;
+    padding: var(--sp-6);
+    border-radius: var(--r-lg);
+  }
+
+  .panel__title {
+    font-size: var(--fs-2xl);
+  }
+
+  /* 触控目标不小于 44px（输入框、按钮、第三方登录）。 */
+  .input,
+  .submit {
+    min-height: var(--ds-touch-min);
+  }
+
+  .oauth__btn {
+    min-height: var(--ds-touch-min);
+    font-size: var(--fs-xs);
+  }
+
+  .reveal {
+    width: var(--ds-touch-min);
+    height: var(--ds-touch-min);
+  }
+
+  .input--with-action {
+    padding-right: 54px;
+  }
+}
+
+/* 480：更紧凑；记住账号与忘记密码不再挤在同一行。 */
+@media (max-width: 480px) {
+  .panel {
+    padding: var(--sp-3) var(--sp-3) var(--sp-6);
+  }
+
+  .panel__inner {
+    padding: var(--sp-5);
+  }
+
+  .remember {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .foot__meta {
+    gap: 4px;
+  }
+}
+
+/* ==========================================================================
+ * 七、减少动效：只压瞬时变化，不隐藏任何内容
+ * ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

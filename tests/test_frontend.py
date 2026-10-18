@@ -340,14 +340,43 @@ def test_error_shell_shape_used_by_the_frontend() -> None:
 
 
 def test_web_directory_has_no_stray_files() -> None:
-    """app/web 里只放前端三件套。
+    """app/web 只允许**白名单**里的文件。
 
     多出来的文件（编辑器备份、导出的截图、临时脚本）会被 StaticFiles 一起公开，
     而且不会有人注意到 —— 这条断言就是那道"看一眼"。
+
+    为什么白名单从"三件套"变成七个名字（2026-10-16，登录页架构变更）：
+    这次改动给前端加了四个**确定要交付**的文件 ——
+      - `login.html`：登录/首次初始化的独立页面（`/login` 路由直接返回它，
+        它必须在 StaticFiles 目录里，否则 `/static/...` 与 `/login` 会指向两处）；
+      - `tokens.css`：设计令牌（颜色/间距/字号）单独一个文件，
+        由 index.html 与 login.html 共用 —— 它就是"两个页面不许各写一套色值"的机制；
+      - `login.css`：登录页自己的版式（login.html 第 17-18 行按
+        `tokens.css` → `login.css` 的顺序引用；令牌只从 tokens.css 来）；
+      - `login.js`：登录页的行为脚本（login.html 第 317 行
+        `<script src="/static/login.js" defer>` 引用它：问 `/api/auth/me`
+        判断"首次部署还是日常登录"、接登录/初始化请求、把 401/429 的文案收在一处）。
+        它**不能并进 app.js**：index.html 与 login.html 是两个页面，
+        共用一份脚本就得在里面按页面分支，登录页的每次改动都会牵动分析页。
+    四个名字都是**显式加进白名单**的，不是放宽判据：
+    断言仍然是"排序后的完整列表全等"，多一个没授权的文件照样红。
+
+    注意这里**不能**改成 `all(n in [...] for n in names)` 那种写法 ——
+    那个表达式在没有多余文件时恒为真，等于把这条断言删掉。
     """
     names = sorted(path.name for path in WEB_DIR.iterdir())
-    assert names == ["app.css", "app.js", "index.html"], names
-    assert Path(WEB_DIR / "index.html").is_file()
+    assert names == [
+        "app.css",
+        "app.js",
+        "index.html",
+        "login.css",
+        "login.html",
+        "login.js",
+        "tokens.css",
+    ], names
+    # 页面路由真的返回得出来（白名单只管"不多不少"，这里补一条"内容能读"）。
+    for page in ("index.html", "login.html"):
+        assert Path(WEB_DIR / page).is_file(), f"{page} 必须真实存在，否则 / 与 /login 会 500"
 
 
 # ------------------------------------------------ 两处窄屏修复（防止改回去）

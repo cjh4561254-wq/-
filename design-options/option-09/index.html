@@ -1,0 +1,1204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 09 · 企业级 AI Operations Center（视觉方案示意）</title>
+<style>
+/* 设计底座 —— 方案 09 的坐标（对应 00 文件第 3 节行 09）
+ * 立场：平台可信度来自"看得见它怎么跑"，所以外壳是运行态，不是文档。
+ * 结构：左侧运行态泳道（按状态分组）+ 首屏队列四列 + 底部事件流抽屉；密度极高（基准 13px）。
+ * 双主题 = 同屏分层，不是开关：外壳暗（--ops-*），报告层永远是亮纸（--paper/--ink）。
+ * 硬约束落在视觉语法上：阶段块等宽（后端无阶段时间戳，等宽即"我不假装是时长"）；
+ * 状态色（--st-*）只讲状态，统计条带用品牌单色顺序阶（--bar-*），报告图表用 --chart-*；
+ * 三套色板互不借用，因为"红色=慢"这类假因果是这个界面最大的风险。
+ * 动效只服务状态推进与抽屉开合，轮询刷新不闪烁（120/180/200ms，见 prefers-reduced-motion）。 */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+:root{
+  --ops-canvas:#0d1420;
+  --ops-surface:#141d2b;
+  --ops-surface-2:#1a2534;
+  --ops-sunken:#0a1017;
+  --ops-line:#27344a;
+  --ops-line-strong:#3a4b66;
+  --ops-ink:#e9eef7;
+  --ops-ink-2:#c3cfe0;
+  --ops-ink-muted:#9aa8be;
+  --ops-brand:#4f86c9;
+  --ops-brand-strong:#78a9e4;
+  --ops-on-brand:#0b1220;
+  --st-pending:#a8b6cb; --st-pending-ink:#d2dbe8;
+  --st-running:#3ea6ea; --st-running-ink:#8ecdf7;
+  --st-success:#3fbe85; --st-success-ink:#84dcae;
+  --st-warn:#e4b551; --st-warn-ink:#f2ce7c;
+  --st-failed:#ef7368; --st-failed-ink:#f9a199;
+  --st-limit:#c78ada; --st-limit-ink:#ddbaea;
+  --st-skip:#7c8ba1; --st-skip-ink:#aebac9;
+  --bar-a:#24405f; --bar-b:#2f567d; --bar-c:#3d6d9c; --bar-d:#4f86c9; --bar-e:#78a9e4;
+  --paper:#ffffff; --paper-2:#f6f7f5; --paper-3:#edeee9; --paper-line:#e0e0dd; --paper-line-2:#c9c9c5;
+  --ink:#2e2e2b; --ink-strong:#1c1c1a; --ink-muted:#5c5c58; --ink-faint:#6f6f6a;
+  --chart-1:#3b6ea5; --chart-2:#c0504d; --chart-3:#2f7d6b; --chart-4:#a5701a; --chart-5:#5b5fa8; --chart-6:#8a5a8f;
+  --font:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --r-sm:4px; --r-md:6px;
+  --dur-1:120ms; --dur-2:200ms; --ease:cubic-bezier(.2,.6,.3,1);
+  --z-prototype:120; --z-drawer:60; --z-sticky:40;
+}
+body{
+  background:var(--ops-canvas);color:var(--ops-ink);
+  font-family:var(--font);font-size:13px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+:focus-visible{outline:2px solid var(--ops-brand-strong);outline-offset:2px;border-radius:var(--r-sm)}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:none;cursor:pointer}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;vertical-align:top}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums lining-nums}
+.num{font-variant-numeric:tabular-nums lining-nums}
+
+/* 原型视图切换条：静态原型的取景器，不属于产品界面 */
+.prototype{
+  position:sticky;top:0;z-index:var(--z-prototype);
+  display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+  padding:6px 14px;background:var(--ops-sunken);border-bottom:1px solid var(--ops-line);
+  font-size:11px;
+}
+.prototype__label{color:var(--ops-ink-muted);letter-spacing:.08em;margin-right:4px}
+.prototype__view{padding:3px 9px;border:1px solid var(--ops-line);border-radius:var(--r-sm);color:var(--ops-ink-2);background:var(--ops-surface)}
+.prototype__view[aria-current="true"]{background:var(--ops-brand);color:var(--ops-on-brand);border-color:var(--ops-brand-strong);font-weight:600}
+.prototype__note{margin-left:auto;color:var(--ops-ink-muted);font-family:var(--mono);letter-spacing:.02em}
+
+/* 顶栏 */
+.topbar{
+  position:sticky;top:32px;z-index:var(--z-sticky);
+  display:flex;align-items:center;gap:14px;
+  padding:8px 14px;background:var(--ops-surface);border-bottom:1px solid var(--ops-line);
+}
+.brand{display:flex;align-items:baseline;gap:8px;font-size:15px;font-weight:600;letter-spacing:-.01em}
+.brand__mark{
+  display:inline-block;width:9px;height:9px;background:var(--ops-brand);
+  border-radius:2px;transform:translateY(-1px)
+}
+.brand__sub{font-size:11px;color:var(--ops-ink-muted);font-weight:400}
+.health{display:flex;gap:12px;margin-left:auto;font-size:11px;color:var(--ops-ink-2)}
+.health span b{color:var(--ops-ink);font-weight:600}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:0}
+.dot--ok{background:var(--st-success)}
+.dot--warn{background:var(--st-warn)}
+.poll{
+  display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;
+  padding:4px 8px;border:1px dashed var(--ops-line-strong);border-radius:var(--r-sm);color:var(--ops-ink-2)
+}
+
+/* 视图容器 */
+.view{display:none;padding:12px 14px 26px}
+.view.is-active{display:block}
+.viewhead{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.viewhead h1{margin:0;font-size:17px;font-weight:600;letter-spacing:-.01em}
+.viewhead p{margin:0;font-size:11px;color:var(--ops-ink-muted)}
+.disclaim{
+  font-size:11px;color:var(--ops-ink-2);border-left:2px solid var(--ops-brand);
+  padding:0 0 2px 8px;line-height:1.4
+}
+
+/* 声明条（首屏左上，不遮挡内容） */
+.ops-shell{display:grid;grid-template-columns:210px minmax(0,1fr);gap:12px;align-items:start}
+.lanes{
+  background:var(--ops-surface);border:1px solid var(--ops-line);border-radius:var(--r-md);
+  position:sticky;top:88px
+}
+.lanes__title{
+  padding:8px 10px;border-bottom:1px solid var(--ops-line);
+  font-size:11px;letter-spacing:.08em;color:var(--ops-ink-muted);text-transform:uppercase
+}
+.lane{
+  display:grid;grid-template-columns:9px 1fr auto;gap:8px;align-items:center;width:100%;
+  padding:7px 10px;border-bottom:1px solid var(--ops-sunken);text-align:left;
+  transition:background var(--dur-1) var(--ease),box-shadow var(--dur-1) var(--ease)
+}
+.lane:hover{background:var(--ops-surface-2)}
+.lane[aria-pressed="true"]{background:var(--ops-surface-2);box-shadow:inset 2px 0 0 var(--ops-brand-strong)}
+.lane__key{width:9px;height:9px;border-radius:2px}
+.lane__name{font-size:12px;color:var(--ops-ink)}
+.lane__enum{display:block;font-family:var(--mono);font-size:10px;color:var(--ops-ink-muted)}
+.lane__count{font-family:var(--mono);font-size:12px;color:var(--ops-ink-2)}
+.lanes__foot{padding:8px 10px;font-size:10px;line-height:1.5;color:var(--ops-ink-muted)}
+.key--pending{background:var(--st-pending)}
+.key--running{background:var(--st-running)}
+.key--done{background:var(--st-success)}
+.key--failed{background:var(--st-failed)}
+.key--limit{background:var(--st-limit)}
+
+/* 统计带 */
+.band{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.metric{background:var(--ops-surface);border:1px solid var(--ops-line);border-radius:var(--r-md);padding:8px 9px}
+.metric__k{font-size:11px;color:var(--ops-ink-2)}
+.metric__v{font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.01em;margin:2px 0 4px}
+.metric__bar{height:4px;border-radius:2px;background:var(--ops-sunken);overflow:hidden}
+.metric__bar i{display:block;height:100%;background:var(--bar-d)}
+.metric__bar i.b1{background:var(--bar-a)}.metric__bar i.b2{background:var(--bar-b)}.metric__bar i.b3{background:var(--bar-c)}
+.metric__scope{margin:5px 0 0;font-size:10px;line-height:1.45;color:var(--ops-ink-muted)}
+.bandnote{
+  display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center;
+  background:var(--ops-surface-2);border:1px solid var(--ops-line);border-left:3px solid var(--bar-e);
+  border-radius:var(--r-sm);padding:6px 9px;margin-bottom:10px;font-size:11px;color:var(--ops-ink-2)
+}
+.bandnote b{color:var(--ops-ink)}
+.spark{display:flex;align-items:flex-end;gap:2px;height:22px}
+.spark i{width:5px;background:var(--bar-c);border-radius:1px}
+.spark i.hi{background:var(--bar-e)}
+
+/* 队列四列 */
+.queue{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.col{background:var(--ops-surface);border:1px solid var(--ops-line);border-radius:var(--r-md);display:flex;flex-direction:column;min-height:250px}
+.col__head{padding:7px 9px;border-bottom:1px solid var(--ops-line)}
+.col__row{display:flex;align-items:center;gap:6px}
+.col__name{font-size:12px;font-weight:600}
+.col__enum{font-family:var(--mono);font-size:10px;color:var(--ops-ink-muted);margin-left:auto}
+.col__n{font-family:var(--mono);font-size:11px;color:var(--ops-ink-2)}
+.col__hint{margin:3px 0 0;font-size:10px;color:var(--ops-ink-muted)}
+.col__body{padding:7px 8px;display:flex;flex-direction:column;gap:6px}
+.col--pending{border-top:2px solid var(--st-pending)}
+.col--running{border-top:2px solid var(--st-running)}
+.col--done{border-top:2px solid var(--st-success)}
+.col--failed{border-top:2px solid var(--st-failed)}
+
+.card{
+  background:var(--ops-surface-2);border:1px solid var(--ops-line);border-radius:var(--r-sm);
+  padding:7px 8px;display:grid;gap:5px;text-align:left;width:100%;
+  transition:transform var(--dur-2) var(--ease),opacity var(--dur-2) var(--ease),border-color var(--dur-1) var(--ease)
+}
+.card:hover{border-color:var(--ops-line-strong)}
+.card.is-advancing{transform:translateY(-3px);opacity:.55}
+.card__id{font-family:var(--mono);font-size:10px;color:var(--ops-ink-muted)}
+.card__q{font-size:12px;color:var(--ops-ink);line-height:1.45}
+.card__meta{display:flex;flex-wrap:wrap;gap:4px 8px;font-size:10px;color:var(--ops-ink-2)}
+.card__meta .mono{font-size:10px}
+.ladder{display:flex;align-items:center;gap:3px}
+.ladder i{width:12px;height:5px;border-radius:1px;background:var(--ops-sunken);border:1px solid var(--ops-line)}
+.ladder i.on{background:var(--st-running);border-color:var(--st-running)}
+.ladder i.step-warn{background:var(--st-warn);border-color:var(--st-warn)}
+.ladder i.step-fail{background:var(--st-failed);border-color:var(--st-failed)}
+.ladder i.step-skip{background:transparent;border-style:dashed;border-color:var(--st-skip)}
+/* 同一套阶梯在四列里语义不同：完成列的实心格必须转绿，否则"蓝=还在跑"会被读错 */
+.col--done .ladder i.on,.col--done .ladder i.on.step-warn{background:var(--st-success);border-color:var(--st-success)}
+.col--done .ladder i.on.step-warn{background:var(--st-warn);border-color:var(--st-warn)}
+.col--failed .ladder i.on{background:var(--st-success);border-color:var(--st-success)}
+.badge{
+  display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:999px;
+  font-size:10px;border:1px solid var(--ops-line-strong);color:var(--ops-ink-2);background:var(--ops-sunken)
+}
+.badge--pending{color:var(--st-pending-ink);border-color:var(--st-pending)}
+.badge--running{color:var(--st-running-ink);border-color:var(--st-running)}
+.badge--success{color:var(--st-success-ink);border-color:var(--st-success)}
+.badge--warn{color:var(--st-warn-ink);border-color:var(--st-warn)}
+.badge--failed{color:var(--st-failed-ink);border-color:var(--st-failed)}
+.badge--limit{color:var(--st-limit-ink);border-color:var(--st-limit)}
+.badge--skip{color:var(--st-skip-ink);border-color:var(--st-skip)}
+.errline{font-size:10px;color:var(--st-failed-ink);font-family:var(--mono);line-height:1.4}
+.card__actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:1px}
+.act{
+  font-size:11px;padding:3px 8px;border:1px solid var(--ops-line-strong);border-radius:var(--r-sm);
+  color:var(--ops-ink);background:var(--ops-surface);transition:border-color var(--dur-1) var(--ease),background var(--dur-1) var(--ease)
+}
+.act:hover{border-color:var(--ops-brand-strong);background:var(--ops-surface-2)}
+.act--primary{background:var(--ops-brand);border-color:var(--ops-brand-strong);color:var(--ops-on-brand);font-weight:600}
+.act--primary:hover{background:var(--ops-brand-strong)}
+.limitbox{
+  border:1px solid var(--st-limit);border-left:3px solid var(--st-limit);border-radius:var(--r-sm);
+  padding:6px 8px;background:var(--ops-surface-2);font-size:11px;color:var(--ops-ink)
+}
+.limitbox .mono{color:var(--st-limit-ink)}
+.limitbox p{margin:4px 0 0;font-size:10px;color:var(--ops-ink-2);line-height:1.5}
+
+/* 事件流抽屉 */
+.drawer{
+  position:fixed;left:0;right:0;bottom:0;z-index:var(--z-drawer);
+  background:var(--ops-surface);border-top:1px solid var(--ops-line-strong)
+}
+.drawer__bar{display:flex;align-items:center;gap:10px;padding:6px 14px}
+.drawer__title{font-size:12px;font-weight:600}
+.drawer__count{font-family:var(--mono);font-size:11px;color:var(--ops-ink-2)}
+.drawer__tag{font-size:10px;color:var(--st-running-ink);border:1px solid var(--st-running);border-radius:999px;padding:1px 7px}
+.drawer__toggle{margin-left:auto;display:flex;align-items:center;gap:6px}
+.chev{display:inline-block;transition:transform var(--dur-2) var(--ease);font-family:var(--mono);font-size:11px;color:var(--ops-brand-strong)}
+.drawer[data-open="true"] .chev{transform:rotate(180deg)}
+.drawer__body{
+  overflow:auto;max-height:0;transition:max-height var(--dur-2) var(--ease);
+  border-top:1px solid transparent
+}
+.drawer[data-open="true"] .drawer__body{max-height:236px;border-top-color:var(--ops-line)}
+.events{width:100%;font-size:11px}
+.events th{
+  position:sticky;top:0;background:var(--ops-surface-2);color:var(--ops-ink-muted);
+  font-weight:500;font-size:10px;letter-spacing:.04em;padding:5px 14px;border-bottom:1px solid var(--ops-line)
+}
+.events td{padding:5px 14px;border-bottom:1px solid var(--ops-sunken);color:var(--ops-ink-2)}
+.events tr:last-child td{border-bottom:none}
+.events td.t{font-family:var(--mono);white-space:nowrap}
+.events .arrow{color:var(--ops-brand-strong);font-family:var(--mono)}
+.drawer__foot{padding:6px 14px;font-size:10px;color:var(--ops-ink-muted);border-top:1px solid var(--ops-line);line-height:1.5}
+.has-drawer{padding-bottom:300px}
+.has-drawer-closed{padding-bottom:74px}
+
+/* 任务详情：状态时间线 */
+.detail{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:12px;align-items:start}
+.panel{background:var(--ops-surface);border:1px solid var(--ops-line);border-radius:var(--r-md)}
+.panel__head{padding:8px 10px;border-bottom:1px solid var(--ops-line);display:flex;align-items:center;gap:8px}
+.panel__head h2{margin:0;font-size:13px;font-weight:600}
+.panel__head .mono{margin-left:auto;font-size:10px;color:var(--ops-ink-muted)}
+.panel__body{padding:10px}
+.timeline{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.tstate{
+  border:1px solid var(--ops-line);border-radius:var(--r-sm);background:var(--ops-sunken);
+  padding:6px 5px;display:grid;gap:3px;min-height:66px
+}
+.tstate b{font-size:11px;font-weight:600}
+.tstate span{font-family:var(--mono);font-size:9px;color:var(--ops-ink-muted);word-break:break-all}
+.tstate i{font-size:10px;color:var(--ops-ink-2);font-style:normal}
+.tstate--done{border-color:var(--st-success);background:color-mix(in srgb,var(--st-success) 12%,var(--ops-sunken))}
+.tstate--run{border-color:var(--st-running);background:color-mix(in srgb,var(--st-running) 14%,var(--ops-sunken))}
+.tstate--warn{border-color:var(--st-warn);background:color-mix(in srgb,var(--st-warn) 12%,var(--ops-sunken))}
+.tstate--fail{border-color:var(--st-failed);background:color-mix(in srgb,var(--st-failed) 12%,var(--ops-sunken))}
+.tstate--idle{border-style:dashed}
+.axis{margin-top:10px;border-top:1px solid var(--ops-line);padding-top:8px}
+.axis__track{position:relative;height:10px;background:var(--ops-sunken);border-radius:2px}
+.axis__wait{position:absolute;inset:0 auto 0 0;width:14%;background:var(--bar-b)}
+.axis__run{position:absolute;inset:0 0 0 14%;background:var(--bar-d)}
+.axis__ticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ops-ink-muted);margin-top:4px}
+.axis__legend{display:flex;gap:14px;margin-top:6px;font-size:10px;color:var(--ops-ink-2);flex-wrap:wrap}
+.axis__legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+.caveat{
+  border:1px solid var(--st-warn);border-left:3px solid var(--st-warn);border-radius:var(--r-sm);
+  background:var(--ops-surface-2);padding:8px 9px;margin-top:10px
+}
+.caveat h3{margin:0 0 4px;font-size:11px;color:var(--st-warn-ink);font-weight:600}
+.caveat ul{margin:0;padding-left:16px;font-size:11px;line-height:1.55;color:var(--ops-ink-2)}
+.caveat li+li{margin-top:3px}
+.tasktable{font-size:11px}
+.tasktable th{padding:5px 8px;border-bottom:1px solid var(--ops-line);color:var(--ops-ink-muted);font-weight:500;font-size:10px;letter-spacing:.03em}
+.tasktable td{padding:5px 8px;border-bottom:1px solid var(--ops-sunken);color:var(--ops-ink-2)}
+.tasktable td:first-child{font-family:var(--mono);white-space:nowrap;color:var(--ops-ink)}
+.tasktable .d{color:var(--ops-ink)}
+.sev{font-family:var(--mono);font-size:10px;padding:0 5px;border-radius:2px;border:1px solid var(--ops-line-strong)}
+.sev--error{color:var(--st-failed-ink);border-color:var(--st-failed)}
+.sev--warning{color:var(--st-warn-ink);border-color:var(--st-warn)}
+.sev--info{color:var(--st-pending-ink);border-color:var(--st-pending)}
+.kv{display:grid;grid-template-columns:82px 1fr;gap:4px 8px;font-size:11px}
+.kv dt{color:var(--ops-ink-muted)}
+.kv dd{margin:0;color:var(--ops-ink);font-family:var(--mono);word-break:break-all}
+.stack{display:grid;gap:10px}
+
+/* 报告层：永远是亮纸，与暗外壳分层 */
+.reportwrap{background:var(--ops-canvas);border:1px solid var(--ops-line);border-radius:var(--r-md);padding:12px}
+.reportwrap__flag{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--ops-ink-2);margin-bottom:8px}
+.paper{
+  background:var(--paper);color:var(--ink);border-radius:var(--r-sm);
+  padding:18px 22px;max-width:900px;font-size:13.5px;line-height:1.75
+}
+.paper__head{border-bottom:2px solid var(--ink-strong);padding-bottom:10px;margin-bottom:12px}
+.paper__kicker{font-size:10px;letter-spacing:.14em;color:var(--ink-faint);text-transform:uppercase}
+.paper h1{margin:4px 0 6px;font-size:21px;line-height:1.35;color:var(--ink-strong);font-weight:600;letter-spacing:-.01em}
+.paper__meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:var(--ink-muted);font-family:var(--mono)}
+.paper h2{font-size:15px;margin:16px 0 6px;color:var(--ink-strong);font-weight:600}
+.paper p{margin:0 0 8px}
+.paper__sum{border-left:3px solid var(--chart-1);padding:2px 0 2px 10px;background:var(--paper-2)}
+.cite{
+  font-family:var(--mono);font-size:10px;color:var(--chart-1);border:1px solid var(--paper-line-2);
+  border-radius:2px;padding:0 3px;margin-left:2px;background:var(--paper);cursor:pointer;
+  transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)
+}
+.cite:hover,.cite.is-lit{background:var(--chart-1);color:var(--paper);border-color:var(--chart-1)}
+.fig{border:1px solid var(--paper-line);border-radius:var(--r-sm);padding:8px 10px;margin:10px 0;background:var(--paper)}
+.fig__cap{font-size:11px;color:var(--ink-muted);margin-top:4px;line-height:1.5}
+.paper__notes{background:var(--paper-2);border:1px solid var(--paper-line);border-radius:var(--r-sm);padding:8px 10px;margin:12px 0;font-size:12px}
+.paper__notes h3{margin:0 0 4px;font-size:12px;color:var(--ink-strong)}
+.paper__notes ul{margin:0;padding-left:16px;color:var(--ink-muted)}
+.srcs{font-size:11.5px}
+.srcs tr.is-lit td{background:var(--paper-2)}
+.srcs th{text-align:left;padding:4px 8px;border-bottom:1px solid var(--paper-line-2);color:var(--ink-faint);font-weight:600;font-size:10px;letter-spacing:.04em}
+.srcs td{padding:4px 8px;border-bottom:1px solid var(--paper-line);color:var(--ink)}
+.srcs td.t{font-family:var(--mono);white-space:nowrap}
+.vald td{font-size:11.5px}
+
+/* 登录 */
+.auth{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:0;border:1px solid var(--ops-line);border-radius:var(--r-md);overflow:hidden;max-width:1100px}
+.auth__brand{background:var(--ops-sunken);padding:22px 24px;display:flex;flex-direction:column;gap:12px}
+.auth__brand h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.auth__brand p{margin:0;font-size:12px;color:var(--ops-ink-2);line-height:1.6;max-width:36ch}
+.auth__signal{margin-top:auto;display:grid;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ops-ink-muted)}
+.auth__form{background:var(--ops-surface);padding:20px 24px;display:grid;gap:10px;align-content:start}
+.auth__form h2{margin:0;font-size:15px;font-weight:600}
+.field{display:grid;gap:4px}
+.field label{font-size:11px;color:var(--ops-ink-2)}
+.field input{
+  background:var(--ops-sunken);border:1px solid var(--ops-line-strong);border-radius:var(--r-sm);
+  color:var(--ops-ink);padding:9px 10px;font-family:inherit;font-size:13px
+}
+.field input:focus{border-color:var(--ops-brand-strong)}
+.field small{font-size:10px;color:var(--ops-ink-muted)}
+.authmsg{border-radius:var(--r-sm);padding:8px 9px;font-size:11px;line-height:1.55;border:1px solid var(--ops-line-strong)}
+.authmsg--401{border-color:var(--st-failed);color:var(--st-failed-ink);background:var(--ops-surface-2)}
+.authmsg--429{border-color:var(--st-limit);color:var(--st-limit-ink);background:var(--ops-surface-2)}
+.authmsg--boot{border-color:var(--st-running);color:var(--st-running-ink);background:var(--ops-surface-2)}
+.authmsg .mono{font-size:11px}
+.seg{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px}
+.seg button{font-size:11px;padding:3px 8px;border:1px solid var(--ops-line-strong);border-radius:var(--r-sm);color:var(--ops-ink-2)}
+.seg button[aria-pressed="true"]{background:var(--ops-brand);border-color:var(--ops-brand-strong);color:var(--ops-on-brand);font-weight:600}
+.hidden{display:none !important}
+
+/* 发起分析 */
+.launch{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:12px;align-items:start}
+.pick{display:grid;gap:6px}
+.pickrow{
+  display:grid;grid-template-columns:1fr auto;gap:4px 8px;padding:6px 8px;text-align:left;width:100%;
+  border:1px solid var(--ops-line);border-radius:var(--r-sm);background:var(--ops-surface-2)
+}
+.pickrow[aria-pressed="true"]{border-color:var(--ops-brand-strong);background:color-mix(in srgb,var(--ops-brand) 16%,var(--ops-surface-2))}
+.pickrow b{font-size:12px;font-weight:600}
+.pickrow span{font-family:var(--mono);font-size:10px;color:var(--ops-ink-muted)}
+.steps{display:grid;grid-template-columns:repeat(8,1fr);gap:3px}
+.steps button{padding:4px 0;border:1px solid var(--ops-line-strong);border-radius:2px;font-family:var(--mono);font-size:11px;color:var(--ops-ink-2)}
+.steps button[aria-pressed="true"]{background:var(--ops-brand);border-color:var(--ops-brand-strong);color:var(--ops-on-brand)}
+.path{display:grid;gap:5px;font-size:11px;color:var(--ops-ink-2)}
+.path li{list-style:none;display:grid;grid-template-columns:16px 1fr;gap:6px}
+.path ol{margin:0;padding:0;display:grid;gap:5px}
+.path b{color:var(--ops-ink);font-weight:600}
+.numchip{font-family:var(--mono);font-size:10px;color:var(--ops-brand-strong)}
+
+/* 空 / 加载 / 错误 三态 */
+.states{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.statecard{background:var(--ops-surface);border:1px solid var(--ops-line);border-radius:var(--r-md);padding:10px;display:grid;gap:8px}
+.statecard h3{margin:0;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px}
+.statecard p{margin:0;font-size:11px;color:var(--ops-ink-2);line-height:1.6}
+.shape{width:26px;height:26px;border:1px dashed var(--ops-line-strong);border-radius:var(--r-sm);display:grid;place-items:center;font-family:var(--mono);font-size:11px;color:var(--ops-ink-muted)}
+.skel{display:grid;gap:6px}
+.skel i{display:block;height:9px;background:var(--ops-sunken);border-radius:2px}
+.skel i:nth-child(1){width:82%}.skel i:nth-child(2){width:64%}.skel i:nth-child(3){width:73%}
+.pulse{animation:pulse 1400ms var(--ease) infinite}
+@keyframes pulse{0%,100%{opacity:.5}50%{opacity:.9}}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--ops-line-strong);border-top-color:var(--ops-brand-strong);border-radius:50%;animation:spin 700ms linear infinite;vertical-align:-1px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.live{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+
+@media (max-width:1180px){
+  .band{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .queue{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .detail,.launch{grid-template-columns:minmax(0,1fr)}
+  .timeline{grid-template-columns:repeat(4,1fr)}
+}
+@media (max-width:768px){
+  .topbar{flex-wrap:wrap;top:56px}
+  .health{margin-left:0;width:100%;flex-wrap:wrap}
+  .ops-shell{grid-template-columns:minmax(0,1fr)}
+  .lanes{position:static}
+  .lanes__list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .lane{border-bottom:1px solid var(--ops-line)}
+  .band{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .queue{grid-template-columns:minmax(0,1fr)}
+  .timeline{grid-template-columns:repeat(2,1fr)}
+  .states{grid-template-columns:minmax(0,1fr)}
+  .auth{grid-template-columns:minmax(0,1fr)}
+  .steps{grid-template-columns:repeat(4,1fr)}
+  .paper{padding:14px}
+  .drawer__bar{flex-wrap:wrap}
+  .has-drawer{padding-bottom:340px}
+  /* 窄屏下任务表转「标签—值」堆叠，整页不横向滚动 */
+  .tasktable thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .tasktable tr{display:grid;gap:2px;padding:6px 0;border-bottom:1px solid var(--ops-sunken)}
+  .tasktable td{border:none;padding:1px 8px;display:grid;grid-template-columns:74px 1fr;gap:6px}
+  .tasktable td::before{content:attr(data-label);color:var(--ops-ink-muted);font-size:10px}
+  .srcs th{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .srcs td{display:grid;grid-template-columns:74px 1fr;gap:4px}
+  .srcs td::before{content:attr(data-label);color:var(--ink-faint);font-size:10px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:1ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}
+}
+</style>
+</head>
+<body>
+
+<nav class="prototype" aria-label="原型视图切换">
+  <span class="prototype__label">原型视图</span>
+  <button class="prototype__view" data-target="login" aria-current="false">登录</button>
+  <button class="prototype__view" data-target="ops" aria-current="true">运行中心首屏</button>
+  <button class="prototype__view" data-target="events" aria-current="false">事件流抽屉</button>
+  <button class="prototype__view" data-target="run" aria-current="false">单条任务详情</button>
+  <button class="prototype__view" data-target="report" aria-current="false">报告（亮色层）</button>
+  <button class="prototype__view" data-target="launch" aria-current="false">发起新分析</button>
+  <button class="prototype__view" data-target="states" aria-current="false">空 / 加载 / 错误</button>
+  <span class="prototype__note">视觉方案示意 · 数据为占位样例 · 未接入后端</span>
+</nav>
+
+<main>
+
+<!-- ============ 登录 ============ -->
+<section class="view" data-view="login" aria-labelledby="login-h">
+  <div class="viewhead">
+    <h1 id="login-h">登录 · 运行态外壳</h1>
+    <p>覆盖常规登录 / 首次部署 needs_bootstrap / 401 / 429 四种真实返回值</p>
+  </div>
+  <div class="disclaim" style="margin-bottom:10px">视觉方案示意 · 数据为占位样例 · 未接入后端<br>会话为 HttpOnly Cookie（8 小时），前端不持有令牌</div>
+
+  <div class="auth" style="margin-top:12px">
+    <div class="auth__brand">
+      <h1>AI Market Intelligence Studio</h1>
+      <p>把市场数据变成可追溯的决策依据。这里看到的是平台的运行现场：谁在排队、哪一步在跑、失败在哪一步。</p>
+      <div class="auth__signal" aria-label="服务健康（GET /api/health 真实字段）">
+        <div>mis-server · v0.6.2 · uptime 3d 04h</div>
+        <div>llm_configured <b style="color:var(--st-success-ink)">true</b> · upload_dir_ready <b style="color:var(--st-success-ink)">true</b></div>
+        <div>status ok</div>
+      </div>
+    </div>
+    <form class="auth__form" onsubmit="return false">
+      <h2>登录运维台</h2>
+      <div class="seg" role="group" aria-label="登录返回态演示">
+        <button type="button" data-authstate="normal" aria-pressed="true">常规</button>
+        <button type="button" data-authstate="bootstrap" aria-pressed="false">needs_bootstrap</button>
+        <button type="button" data-authstate="e401" aria-pressed="false">401</button>
+        <button type="button" data-authstate="e429" aria-pressed="false">429</button>
+      </div>
+
+      <p class="authmsg authmsg--boot hidden" data-authpanel="bootstrap">
+        首次部署：系统还没有管理员账号。下方表单会切换为「创建第一个管理员」（POST /auth/bootstrap）。<br>
+        <span class="mono">needs_bootstrap: true</span> —— 该模式只出现一次，创建后自动回到常规登录。
+      </p>
+      <p class="authmsg authmsg--401 hidden" data-authpanel="e401">
+        账号或密码不正确。——后端对 401 返回<b>统一文案</b>，不区分"账号不存在"与"密码错误"，界面照实呈现，不做二次猜测。
+      </p>
+      <p class="authmsg authmsg--429 hidden" data-authpanel="e429">
+        尝试过于频繁，请稍后再试。<br>
+        <span class="mono">HTTP 429 · Retry-After: 34</span> · 运维视角：这同时是接口层容量信号，会进入底部事件流。
+      </p>
+
+      <div class="field" data-bootfields="hidden" hidden>
+        <label for="a-confirm">确认管理员密码</label>
+        <input id="a-confirm" type="password" placeholder="至少 8 位，两次输入需一致">
+        <small>仅 needs_bootstrap 模式出现；用户名默认 admin</small>
+      </div>
+      <div class="field">
+        <label for="a-user">用户名</label>
+        <input id="a-user" type="text" autocomplete="username" placeholder="运维账号">
+      </div>
+      <div class="field">
+        <label for="a-pass">密码</label>
+        <input id="a-pass" type="password" autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <button class="act act--primary" type="submit" style="justify-self:start;margin-top:2px">登录</button>
+      <p style="margin:0;font-size:10px;color:var(--ops-ink-muted);line-height:1.5">
+        登录后：会话列表（GET /api/auth/sessions，仅元信息）与修改密码（POST /api/auth/password）在顶栏用户菜单内，属运维台常规入口。
+      </p>
+    </form>
+  </div>
+</section>
+
+<!-- ============ 运行中心首屏 ============ -->
+<section class="view is-active has-drawer-closed" data-view="ops" aria-labelledby="ops-h">
+  <header class="topbar">
+    <div class="brand"><span class="brand__mark" aria-hidden="true"></span>AI Operations Center<span class="brand__sub">运行态 · 平台视角</span></div>
+    <div class="health" role="status" aria-label="服务健康">
+      <span><span class="dot dot--ok" aria-hidden="true"></span>api/health <b>ok</b></span>
+      <span>版本 <b class="mono">0.6.2</b></span>
+      <span>连续运行 <b class="mono">3d 04h</b></span>
+      <span>LLM 配置 <b>已配置</b></span>
+      <span>上传目录 <b>就绪</b></span>
+      <span><span class="dot dot--warn" aria-hidden="true"></span>主题 <b>外壳暗 / 报告亮</b></span>
+    </div>
+  </header>
+
+  <div style="padding:10px 14px 0">
+    <div class="disclaim">视觉方案示意 · 数据为占位样例 · 未接入后端 —— 本页所有队列、统计与事件均由前端占位数据渲染，未发起任何请求</div>
+  </div>
+
+  <div class="ops-shell" style="padding:10px 14px 0">
+    <!-- 左侧运行态泳道（按状态分组） -->
+    <aside class="lanes" aria-labelledby="lanes-h">
+      <div class="lanes__title" id="lanes-h">运行态泳道 / 状态分组</div>
+      <div class="lanes__list">
+        <button class="lane" data-lane="all" aria-pressed="true">
+          <span class="lane__key key--running" aria-hidden="true" style="background:var(--ops-line-strong)"></span>
+          <span class="lane__name">全部任务<span class="lane__enum">10 值状态枚举</span></span>
+          <span class="lane__count">21</span>
+        </button>
+        <button class="lane" data-lane="pending" aria-pressed="false">
+          <span class="lane__key key--pending" aria-hidden="true"></span>
+          <span class="lane__name">等待中<span class="lane__enum">PENDING</span></span>
+          <span class="lane__count">3</span>
+        </button>
+        <button class="lane" data-lane="running" aria-pressed="false">
+          <span class="lane__key key--running" aria-hidden="true"></span>
+          <span class="lane__name">运行中<span class="lane__enum">PROFILING…VALIDATING</span></span>
+          <span class="lane__count">5</span>
+        </button>
+        <button class="lane" data-lane="done" aria-pressed="false">
+          <span class="lane__key key--done" aria-hidden="true"></span>
+          <span class="lane__name">已完成<span class="lane__enum">SUCCESS · SUCCESS_WITH_WARNINGS</span></span>
+          <span class="lane__count">11</span>
+        </button>
+        <button class="lane" data-lane="failed" aria-pressed="false">
+          <span class="lane__key key--failed" aria-hidden="true"></span>
+          <span class="lane__name">失败<span class="lane__enum">FAILED</span></span>
+          <span class="lane__count">1</span>
+        </button>
+        <button class="lane" data-lane="limit" aria-pressed="false">
+          <span class="lane__key key--limit" aria-hidden="true"></span>
+          <span class="lane__name">接口限流<span class="lane__enum">HTTP 429（非工作流状态）</span></span>
+          <span class="lane__count">1</span>
+        </button>
+      </div>
+      <p class="lanes__foot">泳道按后端真实状态枚举分组；429 是接口层返回码，不属于工作流状态，因此单独成列并在事件流里计数。点击泳道只筛选右侧队列。</p>
+    </aside>
+
+    <div>
+      <!-- 统计带：每一条都带样本量与口径 -->
+      <div class="bandnote">
+        <span aria-hidden="true" class="spark"><i style="height:7px"></i><i style="height:9px"></i><i style="height:6px"></i><i style="height:12px"></i><i class="hi" style="height:19px"></i><i style="height:8px"></i><i style="height:5px"></i></span>
+        <span><b>统计口径：GET /api/workflows/history 返回的前 68 条 items（该接口只有 limit/offset，无状态筛选、无排序）。</b>因此下列指标是"最近取回样本"的描述，<b>不是全库指标</b>；成功率与平均耗时由前端计算，接口不返回任何聚合值。</span>
+      </div>
+      <div class="band" role="group" aria-label="样本统计带">
+        <div class="metric">
+          <div class="metric__k">样本量</div>
+          <div class="metric__v num">68 <span style="font-size:11px;color:var(--ops-ink-muted)">/ 100 上限</span></div>
+          <div class="metric__bar"><i class="b1" style="width:68%"></i></div>
+          <p class="metric__scope">limit=68, offset=0；口径：单次取回，未翻页合并</p>
+        </div>
+        <div class="metric">
+          <div class="metric__k">样本内成功率</div>
+          <div class="metric__v num">86.8%</div>
+          <div class="metric__bar"><i class="b3" style="width:86.8%"></i></div>
+          <p class="metric__scope">59/68；分子含 SUCCESS 55 + SUCCESS_WITH_WARNINGS 4</p>
+        </div>
+        <div class="metric">
+          <div class="metric__k">样本内平均耗时</div>
+          <div class="metric__v num">9m 32s</div>
+          <div class="metric__bar"><i class="b2" style="width:57%"></i></div>
+          <p class="metric__scope">口径 finished_at − created_at；仅 59 条终态样本参与，阶段耗时无数据</p>
+        </div>
+        <div class="metric">
+          <div class="metric__k">带警告完成占比</div>
+          <div class="metric__v num">5.9%</div>
+          <div class="metric__bar"><i class="b3" style="width:5.9%"></i></div>
+          <p class="metric__scope">4/68；warning 明细在报告层 data_quality_notes</p>
+        </div>
+        <div class="metric">
+          <div class="metric__k">轮询窗口内 429</div>
+          <div class="metric__v num">1</div>
+          <div class="metric__bar"><i class="b1" style="width:12%"></i></div>
+          <p class="metric__scope">口径：前端 1000ms 轮询观察到的响应码计数，非服务端统计</p>
+        </div>
+      </div>
+
+      <!-- 队列四列 -->
+      <div class="queue" id="queue" role="list" aria-label="任务队列四列">
+        <section class="col col--pending" data-group="pending" role="listitem" aria-labelledby="c-pending">
+          <div class="col__head">
+            <div class="col__row"><span class="col__name" id="c-pending">等待中</span><span class="col__n num">3</span><span class="col__enum">PENDING</span></div>
+            <p class="col__hint">已 202 受理，尚未进入画像阶段</p>
+          </div>
+          <div class="col__body">
+            <button class="card" data-status="pending" data-open="run">
+              <span class="card__id">wf_7f31c0a2e5</span>
+              <span class="card__q">对比华东与华南三个季度的高端品类增速，并给出定价启示</span>
+              <span class="card__meta"><span class="mono">ds_18 · market_q3.xlsx</span><span>max_steps 6</span></span>
+              <span class="ladder" aria-label="阶段阶梯 0/6"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="badge badge--pending">等待中 · PENDING</span>
+            </button>
+            <button class="card" data-status="pending" data-open="run">
+              <span class="card__id">wf_2a90d4b71c</span>
+              <span class="card__q">渠道毛利下滑的主因定位，需拆分到区域 × 品类</span>
+              <span class="card__meta"><span class="mono">ds_22 · channel_margin.csv</span><span>max_steps 4</span></span>
+              <span class="ladder" aria-label="阶段阶梯 0/4"><i></i><i></i><i></i><i></i></span>
+              <span class="badge badge--pending">等待中 · PENDING</span>
+            </button>
+            <div class="limitbox" data-status="limit">
+              <span class="badge badge--limit">接口限流 · HTTP 429</span>
+              <p><span class="mono">Retry-After: 34s</span> · 发起 POST /api/analysis 时被节流，未创建任务。前端暂停新发起 34 秒，运行中任务不受影响。</p>
+              <div class="card__actions"><button class="act" data-open="events">看事件流</button></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="col col--running" data-group="running" role="listitem" aria-labelledby="c-running">
+          <div class="col__head">
+            <div class="col__row"><span class="col__name" id="c-running">运行中</span><span class="col__n num">5</span><span class="col__enum">PROFILING→VALIDATING</span></div>
+            <p class="col__hint">阶梯宽度相等：后端无阶段时间戳，不假装时长</p>
+          </div>
+          <div class="col__body">
+            <button class="card" data-status="running" data-open="run" id="card-advancing">
+              <span class="card__id">wf_b41c78d0a3</span>
+              <span class="card__q">库存周转天数与售价带的相关性，输出异常 SKU 清单</span>
+              <span class="card__meta"><span class="mono">ds_09 · inventory.xlsx</span><span>3 / 6 阶段</span></span>
+              <span class="ladder" aria-label="阶段阶梯 3/6，当前 EXECUTING"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>
+              <span class="badge badge--running">运行中 · EXECUTING</span>
+              <span class="card__meta"><span>阶段耗时：需后端补时间戳后才能显示</span></span>
+            </button>
+            <button class="card" data-status="running" data-open="run">
+              <span class="card__id">wf_55e0aa19f6</span>
+              <span class="card__q">把复购率拆成新老客两群，看补贴弹性差异</span>
+              <span class="card__meta"><span class="mono">ds_27 · cohort_fee.csv</span><span>5 / 6 阶段</span></span>
+              <span class="ladder" aria-label="阶段阶梯 5/6，当前 VALIDATING"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>
+              <span class="badge badge--running">校验中 · VALIDATING</span>
+            </button>
+            <button class="card" data-status="running" data-open="run">
+              <span class="card__id">wf_9d237be440</span>
+              <span class="card__q">季度收入结构变化，重点看新市场贡献</span>
+              <span class="card__meta"><span class="mono">ds_31 · revenue_mix.xlsx</span><span>1 / 5 阶段</span></span>
+              <span class="ladder" aria-label="阶段阶梯 1/5，当前 PROFILING"><i class="on"></i><i></i><i></i><i></i><i></i></span>
+              <span class="badge badge--running">画像中 · PROFILING</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="col col--done" data-group="done" role="listitem" aria-labelledby="c-done">
+          <div class="col__head">
+            <div class="col__row"><span class="col__name" id="c-done">已完成</span><span class="col__n num">11</span><span class="col__enum">SUCCESS · SUCCESS_WITH_WARNINGS</span></div>
+            <p class="col__hint">总耗时来自 created_at → finished_at（真实字段）</p>
+          </div>
+          <div class="col__body">
+            <button class="card" data-status="done" data-open="run">
+              <span class="card__id">wf_0c6be1f58a</span>
+              <span class="card__q">各区域客单价分布与偏离区间识别</span>
+              <span class="card__meta"><span class="mono">12m 08s 总耗时</span><span>校验 0 error / 2 warning</span></span>
+              <span class="ladder" aria-label="6 个阶段全部完成"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on step-warn"></i></span>
+              <span class="badge badge--warn">带警告完成 · SUCCESS_WITH_WARNINGS</span>
+              <span class="card__actions"><span class="act" data-open="report">查看报告</span></span>
+            </button>
+            <button class="card" data-status="done" data-open="run">
+              <span class="card__id">wf_e8805b21d9</span>
+              <span class="card__q">高端品类渗透率趋势与同期对比</span>
+              <span class="card__meta"><span class="mono">7m 41s 总耗时</span><span>校验通过</span></span>
+              <span class="ladder" aria-label="5 个阶段全部完成"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span>
+              <span class="badge badge--success">已完成 · SUCCESS</span>
+              <span class="card__actions"><span class="act" data-open="report">查看报告</span></span>
+            </button>
+            <button class="card" data-status="done" data-open="run">
+              <span class="card__id">wf_4f10c93a7b</span>
+              <span class="card__q">门店坪效排名与异常值复核</span>
+              <span class="card__meta"><span class="mono">18m 52s 总耗时</span><span>3 条图表 · llm_used true</span></span>
+              <span class="ladder" aria-label="6 个阶段全部完成"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span>
+              <span class="badge badge--success">已完成 · SUCCESS</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="col col--failed" data-group="failed" role="listitem" aria-labelledby="c-failed">
+          <div class="col__head">
+            <div class="col__row"><span class="col__name" id="c-failed">失败</span><span class="col__n num">1</span><span class="col__enum">FAILED</span></div>
+            <p class="col__hint">无重试接口：只能查看，或再发起一次新分析</p>
+          </div>
+          <div class="col__body">
+            <button class="card" data-status="failed" data-open="run">
+              <span class="card__id">wf_a73d5e0c12</span>
+              <span class="card__q">把促销期与日常期的销量做可比口径拆分</span>
+              <span class="card__meta"><span class="mono">ds_18 · market_q3.xlsx</span><span>2 / 6 阶段</span><span class="mono">1m 12s 后失败</span></span>
+              <span class="ladder" aria-label="阶段阶梯 2/6，第 3 阶段失败"><i class="on"></i><i class="on"></i><i class="step-fail"></i><i class="step-skip"></i><i class="step-skip"></i><i class="step-skip"></i></span>
+              <span class="badge badge--failed">失败 · FAILED</span>
+              <span class="errline">task T3: 数据集缺少可比口径所需的 date 列（语义类型未识别为日期）</span>
+              <span class="card__actions"><span class="act" data-open="run">查看</span><span class="act" data-open="launch">再发起一次新分析</span></span>
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div class="bandnote" style="margin-top:10px">
+        <span aria-hidden="true" class="spark"><i style="height:6px"></i><i class="hi" style="height:16px"></i><i style="height:9px"></i></span>
+        <span><b>合法操作只有两种：</b>查看（队列 → 详情 → 报告），以及再发起一次新分析（POST /api/analysis）。后端没有取消 / 重试 / 暂停 / 重跑接口，因此界面上不出现这些按钮；heartbeat_at 未在轮询接口暴露，因此不显示"存活"信号。</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 事件流抽屉（展开态展示；也可在首屏开合） ============ -->
+<section class="view" data-view="events" aria-labelledby="ev-h">
+  <div class="viewhead">
+    <h1 id="ev-h">事件流 · 轮询采样</h1>
+    <p>抽屉在运行中心视图底部常驻（收起 34px / 展开 236px）；此处为展开满幅形态，便于读条目结构</p>
+    <p class="disclaim">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+  </div>
+  <div class="panel" style="max-width:1180px">
+    <div class="panel__head">
+      <h2>状态变化事件流</h2>
+      <span class="badge badge--running">轮询采样 · 非实时</span>
+      <span class="drawer__count" id="ev-count2" role="status" aria-live="polite">本轮采样 1 条</span>
+      <span class="mono" style="margin-left:auto">采样间隔 1000ms · 观察窗口 40s</span>
+    </div>
+    <div class="panel__body" style="padding:0">
+      <table class="events">
+        <caption class="live">事件流由前端 1000ms 轮询的状态差异构成，两次采样之间被跳过的阶段以"合并"标注</caption>
+        <thead><tr>
+          <th scope="col">前端采样时刻</th><th scope="col">任务</th><th scope="col">观察到的变化</th><th scope="col">来源</th><th scope="col">备注</th>
+        </tr></thead>
+        <tbody id="ev-body-full">
+          <tr><td class="t">19:11:34.208</td><td class="t">wf_b41c78d0a3</td><td>运行中 <span class="arrow">CHARTING →</span> REPORTING</td><td>轮询差异</td><td>step_index 4 → 5</td></tr>
+          <tr><td class="t">19:11:32.197</td><td class="t">—（接口层）</td><td><span class="badge badge--limit">HTTP 429</span> 发起被节流</td><td>POST /api/analysis</td><td>Retry-After 34s，未创建任务</td></tr>
+          <tr><td class="t">19:11:28.152</td><td class="t">wf_55e0aa19f6</td><td>运行中 <span class="arrow">EXECUTING →</span> VALIDATING</td><td>轮询差异</td><td>合并：中间 CHARTING/REPORTING 未被采到</td></tr>
+          <tr><td class="t">19:11:25.104</td><td class="t">wf_0c6be1f58a</td><td>运行中 <span class="arrow">VALIDATING →</span> 带警告完成</td><td>轮询差异</td><td>SUCCESS_WITH_WARNINGS · 2 warning</td></tr>
+          <tr><td class="t">19:11:19.061</td><td class="t">wf_a73d5e0c12</td><td>运行中 <span class="arrow">EXECUTING →</span> 失败</td><td>轮询差异</td><td>FAILED · 停在 T3，T4–T6 SKIPPED</td></tr>
+          <tr><td class="t">19:11:13.008</td><td class="t">wf_7f31c0a2e5</td><td>等待中 <span class="arrow">PENDING →</span> 画像中</td><td>轮询差异</td><td>created_at 之后首次离开 PENDING</td></tr>
+          <tr><td class="t">19:10:58.944</td><td class="t">mis-server</td><td><span class="badge badge--pending">健康检查</span> status ok → ok</td><td>GET /api/health</td><td>uptime_seconds 371040，无异常</td></tr>
+          <tr><td class="t">19:10:41.883</td><td class="t">wf_9d237be440</td><td>运行中 <span class="arrow">PLANNING →</span> EXECUTING</td><td>轮询差异</td><td>step_index 2 → 3</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="drawer__foot">
+      事件流不是日志：后端没有实时推送（无 WebSocket / SSE），每条记录都是"前端在两次 1000ms 轮询之间发现的状态差异"。同一任务连续两轮的多个阶段推进会被合并成一条并显式标注，采样间隔内的抖动不可见。
+    </div>
+  </div>
+</section>
+
+<!-- ============ 单条任务详情 ============ -->
+<section class="view" data-view="run" aria-labelledby="run-h">
+  <div class="viewhead">
+    <h1 id="run-h">任务详情 · wf_b41c78d0a3</h1>
+    <p>状态时间线（阶段等宽）+ 整条任务真实总耗时 + 任务简报</p>
+    <p class="disclaim">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+  </div>
+
+  <div class="detail">
+    <div class="stack">
+      <div class="panel">
+        <div class="panel__head">
+          <h2>状态时间线</h2>
+          <span class="badge badge--running">运行中 · EXECUTING</span>
+          <span class="mono">step_index 3 / total_steps 6</span>
+        </div>
+        <div class="panel__body">
+          <div class="timeline" role="list" aria-label="七阶段状态阶梯，块宽不代表时长">
+            <div class="tstate tstate--done" role="listitem"><b>① 画像中</b><span>PROFILING</span><i>已完成</i></div>
+            <div class="tstate tstate--done" role="listitem"><b>② 规划中</b><span>PLANNING</span><i>已完成</i></div>
+            <div class="tstate tstate--run" role="listitem"><b>③ 执行中</b><span>EXECUTING</span><i>当前</i></div>
+            <div class="tstate tstate--idle" role="listitem"><b>④ 图表中</b><span>CHARTING</span><i>未开始</i></div>
+            <div class="tstate tstate--idle" role="listitem"><b>⑤ 报告中</b><span>REPORTING</span><i>未开始</i></div>
+            <div class="tstate tstate--idle" role="listitem"><b>⑥ 校验中</b><span>VALIDATING</span><i>未开始</i></div>
+            <div class="tstate tstate--idle" role="listitem"><b>终态</b><span>SUCCESS / …_WITH_WARNINGS / FAILED</span><i>待到达</i></div>
+          </div>
+          <div class="axis">
+            <div class="axis__track" role="img" aria-label="真实总耗时轴：created_at 到 finished_at 共 12m 08s 的参考样本">
+              <span class="axis__wait" aria-hidden="true"></span>
+              <span class="axis__run" aria-hidden="true"></span>
+            </div>
+            <div class="axis__ticks"><span>created_at 19:04:12</span><span>—</span><span>—</span><span>—</span><span>finished_at 19:16:20（同批样本示例）</span></div>
+            <div class="axis__legend">
+              <span><i style="background:var(--bar-b)"></i>受理等待段（只能整体推断，拆分需 started_at）</span>
+              <span><i style="background:var(--bar-d)"></i>真实总耗时 = finished_at − created_at</span>
+              <span>本条运行中，尚无 finished_at，故轴上仅显示参考样本</span>
+            </div>
+          </div>
+          <div class="caveat">
+            <h3>这一屏的降级说明（界面必须自证边界）</h3>
+            <ul>
+              <li><b>阶段级耗时需后端补时间戳后才能显示。</b>轮询接口只暴露 created_at / finished_at，因此七个阶段块<b>等宽</b>，宽度不含时间语义；任何"画像 3.2s"都不予呈现。</li>
+              <li>等待段与执行段的<b>拆分</b>需要 started_at 进入轮询响应（WorkflowState 里有，接口未暴露），当前以单条真实总耗时呈现。</li>
+              <li><b>heartbeat_at 接口未暴露，本界面不显示存活信号</b>，也不做"卡死"判定。</li>
+              <li>状态推进来自 1000ms 轮询差异，<b>非实时</b>；中间态可能未被采到，事件流里标"合并"。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head"><h2>任务简报（轮询接口 task brief）</h2><span class="mono">GET /api/workflows/{id}</span></div>
+        <div class="panel__body" style="padding:0">
+          <table class="tasktable">
+            <thead><tr><th scope="col">task_id</th><th scope="col">description</th><th scope="col">status</th><th scope="col">error</th></tr></thead>
+            <tbody>
+              <tr><td data-label="task_id" class="t">T1</td><td data-label="description" class="d">读取 ds_09 画像并确认周转天数与售价带的可用列</td><td data-label="status"><span class="badge badge--success">已完成 · SUCCESS</span></td><td data-label="error">—</td></tr>
+              <tr><td data-label="task_id" class="t">T2</td><td data-label="description" class="d">按售价带分组计算周转天数分位数</td><td data-label="status"><span class="badge badge--success">已完成 · SUCCESS</span></td><td data-label="error">—</td></tr>
+              <tr><td data-label="task_id" class="t">T3</td><td data-label="description" class="d">识别偏离 p95 的异常 SKU 并落中间表</td><td data-label="status"><span class="badge badge--running">运行中 · EXECUTING</span></td><td data-label="error">—</td></tr>
+              <tr><td data-label="task_id" class="t">T4</td><td data-label="description" class="d">生成售价带 × 周转天数对比图</td><td data-label="status"><span class="badge badge--pending">等待中 · PENDING</span></td><td data-label="error">—</td></tr>
+              <tr><td data-label="task_id" class="t">T5</td><td data-label="description" class="d">跨季度趋势补充图（依赖 T6 的新列）</td><td data-label="status"><span class="badge badge--skip">已跳过 · SKIPPED</span></td><td data-label="error">上游列缺失，计划器标记跳过</td></tr>
+              <tr><td data-label="task_id" class="t">T6</td><td data-label="description" class="d">汇总口径并生成报告段落</td><td data-label="status"><span class="badge badge--failed">失败 · FAILED</span></td><td data-label="error">口径对齐时 date 语义类型未识别</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="drawer__foot">任务状态枚举 6 值全部有实例：<span class="mono">PENDING / PROFILING / EXECUTING / SUCCESS / SUCCESS_WITH_WARNINGS / FAILED / SKIPPED</span>（前 6 项为任务态，此处按接口原值呈现，中文映射同时保留原值以便核对）。</div>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <div class="panel__head"><h2>本次运行</h2></div>
+        <div class="panel__body">
+          <dl class="kv">
+            <dt>workflow</dt><dd>wf_b41c78d0a3</dd>
+            <dt>问题</dt><dd style="font-family:var(--font)">库存周转天数与售价带的相关性，输出异常 SKU 清单</dd>
+            <dt>数据集</dt><dd>ds_09 · inventory.xlsx（42 列 / 18,204 行）</dd>
+            <dt>max_steps</dt><dd>6</dd>
+            <dt>created_at</dt><dd>19:04:12</dd>
+            <dt>finished_at</dt><dd>—（运行中，接口暂无该字段）</dd>
+            <dt>总耗时</dt><dd>—（终态后可算：finished_at − created_at）</dd>
+            <dt>报告</dt><dd>未到 REPORTING 完成，报告接口当前返回 null</dd>
+          </dl>
+          <div class="card__actions" style="margin-top:8px">
+            <button class="act act--primary" data-open="report">查看报告（完成后）</button>
+            <button class="act" data-open="launch">再发起一次新分析</button>
+            <button class="act" data-open="ops">回队列</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head"><h2>校验结果</h2><span class="mono">severity: error/warning/info</span></div>
+        <div class="panel__body" style="padding:0">
+          <table class="tasktable vald">
+            <thead><tr><th scope="col">级别</th><th scope="col">检查项</th><th scope="col">说明</th></tr></thead>
+            <tbody>
+              <tr><td data-label="级别"><span class="sev sev--error">error</span></td><td data-label="检查项" class="d">数字与工具调用一致</td><td data-label="说明">T6 段落 2 处引用无对应 cite</td></tr>
+              <tr><td data-label="级别"><span class="sev sev--warning">warning</span></td><td data-label="检查项" class="d">口径完整性</td><td data-label="说明">售价带分组缺少 2024Q1</td></tr>
+              <tr><td data-label="级别"><span class="sev sev--info">info</span></td><td data-label="检查项" class="d">图表可用性</td><td data-label="说明">T5 跳过，报告不含趋势图</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 报告（亮色层） ============ -->
+<section class="view" data-view="report" aria-labelledby="rep-h">
+  <div class="viewhead">
+    <h1 id="rep-h">报告 · 亮色层</h1>
+    <p>外壳保持暗色，报告体永远是白纸：图表是后端浅底 PNG，反白会变成白斑</p>
+    <p class="disclaim">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+  </div>
+
+  <div class="reportwrap" style="margin-left:14px;margin-right:14px">
+    <div class="reportwrap__flag">
+      <span class="badge badge--success">已完成 · SUCCESS</span>
+      <span>报告主题 <b style="color:var(--ops-ink)">亮色（固定，不随外壳切换）</b></span>
+      <span class="mono">GET /api/workflows/{id}/report</span>
+      <span style="margin-left:auto">图表来源 <span class="mono">/api/workflows/{id}/charts/{filename}</span>（PNG）</span>
+    </div>
+
+    <article class="paper" aria-labelledby="rep-title">
+      <header class="paper__head">
+        <div class="paper__kicker">市场分析报告 · 编号 wf_0c6be1f58a</div>
+        <h1 id="rep-title">各区域客单价分布与偏离区间识别</h1>
+        <div class="paper__meta">
+          <span>数据截至 2026-10-16 19:16</span>
+          <span>generated_at 2026-10-16 19:16:20</span>
+          <span>数据集 ds_18 · market_q3.xlsx</span>
+          <span>llm_used true</span>
+        </div>
+      </header>
+
+      <div class="paper__sum">
+        <p><b>摘要</b>：三个区域的客单价中位数分别为华东 ¥312<span class="cite" data-cite="T1" title="来源：T1 工具调用">T1</span>、华南 ¥268<span class="cite" data-cite="T1" title="来源：T1 工具调用">T1</span>、西南 ¥241<span class="cite" data-cite="T2" title="来源：T2 工具调用">T2</span>；华东上四分位与最低分位之间的差距在 2026Q3 扩大到 ¥188<span class="cite" data-cite="T3" title="来源：T3 工具调用">T3</span>，偏离区间（&gt;p95）样本占 4.1%<span class="cite" data-cite="T3" title="来源：T3 工具调用">T3</span>。建议把高端品类的定价实验放在华东先做<span class="cite" data-cite="T4" title="来源：T4 工具调用">T4</span>。</p>
+      </div>
+
+      <h2>1. 客单价分布的可比口径</h2>
+      <p>分位数按区域 × 季度分组计算，剔除退款行后样本量 18,204 条<span class="cite" data-cite="T1" title="来源：T1 工具调用">T1</span>。西南样本量仅 2,140 条，其分位数波动大于另两区，解读时需带样本量一起看<span class="cite" data-cite="T2" title="来源：T2 工具调用">T2</span>。</p>
+
+      <figure class="fig">
+        <svg viewBox="0 0 520 168" width="100%" height="168" role="img" aria-label="条形图占位：三个区域的客单价中位数，华东 312、华南 268、西南 241 元">
+          <line x1="46" y1="136" x2="510" y2="136" stroke="#c9c9c5" stroke-width="1"></line>
+          <line x1="46" y1="96" x2="510" y2="96" stroke="#e9e9e7" stroke-width="1" stroke-dasharray="3 3"></line>
+          <line x1="46" y1="56" x2="510" y2="56" stroke="#e9e9e7" stroke-width="1" stroke-dasharray="3 3"></line>
+          <text x="8" y="140" font-size="10" fill="#5c5c58" font-family="ui-monospace,Consolas,monospace">0</text>
+          <text x="18" y="60" font-size="10" fill="#5c5c58" font-family="ui-monospace,Consolas,monospace">300</text>
+          <rect x="80" y="39" width="74" height="97" fill="#3b6ea5"></rect>
+          <rect x="212" y="52" width="74" height="84" fill="#3b6ea5"></rect>
+          <rect x="344" y="61" width="74" height="75" fill="#2f7d6b"></rect>
+          <text x="117" y="34" font-size="11" fill="#1c1c1a" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">¥312</text>
+          <text x="249" y="47" font-size="11" fill="#1c1c1a" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">¥268</text>
+          <text x="381" y="56" font-size="11" fill="#1c1c1a" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">¥241</text>
+          <text x="117" y="152" font-size="11" fill="#444440" text-anchor="middle">华东</text>
+          <text x="249" y="152" font-size="11" fill="#444440" text-anchor="middle">华南</text>
+          <text x="381" y="152" font-size="11" fill="#444440" text-anchor="middle">西南</text>
+        </svg>
+        <figcaption class="fig__cap">图 1 · 各区域客单价中位数（2026Q3）。占位绘制：真实运行时这里是后端 matplotlib 生成的浅底 PNG 图表，容器底色固定为白。<span class="cite" data-cite="T1" title="来源：T1 工具调用">T1</span></figcaption>
+      </figure>
+
+      <h2>2. 偏离区间的分布</h2>
+      <p>把高于 p95 的样本视为偏离区间，其占比自 2025Q4 起连续三个季度上行<span class="cite" data-cite="T3" title="来源：T3 工具调用">T3</span>；同期高端品类占比上行 3.8 个百分点<span class="cite" data-cite="T4" title="来源：T4 工具调用">T4</span>，两者方向一致但不构成因果，报告仅陈述共现。</p>
+
+      <figure class="fig">
+        <svg viewBox="0 0 520 152" width="100%" height="152" role="img" aria-label="折线图占位：偏离区间样本占比从 2.4% 上行至 4.1%">
+          <line x1="42" y1="120" x2="510" y2="120" stroke="#c9c9c5" stroke-width="1"></line>
+          <polyline points="60,102 168,94 276,80 384,72 492,58" fill="none" stroke="#c0504d" stroke-width="2.2"></polyline>
+          <circle cx="60" cy="102" r="3.2" fill="#c0504d"></circle>
+          <circle cx="276" cy="80" r="3.2" fill="#c0504d"></circle>
+          <circle cx="492" cy="58" r="3.2" fill="#c0504d"></circle>
+          <text x="52" y="136" font-size="10" fill="#5c5c58" font-family="ui-monospace,Consolas,monospace">2025Q4</text>
+          <text x="268" y="136" font-size="10" fill="#5c5c58" font-family="ui-monospace,Consolas,monospace">2026Q2</text>
+          <text x="450" y="136" font-size="10" fill="#5c5c58" font-family="ui-monospace,Consolas,monospace">2026Q3</text>
+          <text x="452" y="52" font-size="11" fill="#1c1c1a" font-family="ui-monospace,Consolas,monospace">4.1%</text>
+        </svg>
+        <figcaption class="fig__cap">图 2 · 偏离区间样本占比走势。<span class="cite" data-cite="T3" title="来源：T3 工具调用">T3</span></figcaption>
+      </figure>
+
+      <div class="paper__notes">
+        <h3>数据质量说明（data_quality_notes）</h3>
+        <ul>
+          <li>2026Q1 的售价带字段有 12% 空值，分组结果已在表中标注样本口径。</li>
+          <li>退款行按 status 列剔除，剔除量 412 行，占 2.2%。</li>
+          <li>校验：<span class="mono">0 error / 2 warning / 1 info</span>；warning 涉及 2026Q1 可比性，因此该季度未进入趋势结论。</li>
+        </ul>
+      </div>
+
+      <h2>来源与可追溯（citations）</h2>
+      <table class="srcs" id="srcs">
+        <thead><tr><th scope="col">角标</th><th scope="col">工具调用</th><th scope="col">产出物</th><th scope="col">数据截至</th></tr></thead>
+        <tbody>
+          <tr><td class="t" data-label="角标">T1</td><td data-label="工具调用" class="t">query_quantile(region, aov, 2026Q3)</td><td data-label="产出物">quantile_aov（表）</td><td data-label="数据截至" class="t">2026-10-16 19:14</td></tr>
+          <tr><td class="t" data-label="角标">T2</td><td data-label="工具调用" class="t">query_count(region='西南')</td><td data-label="产出物">sample_size_by_region</td><td data-label="数据截至" class="t">2026-10-16 19:14</td></tr>
+          <tr><td class="t" data-label="角标">T3</td><td data-label="工具调用" class="t">detect_outliers(p95, aov)</td><td data-label="产出物">outlier_ratio_by_quarter（表 + 图 2）</td><td data-label="数据截至" class="t">2026-10-16 19:15</td></tr>
+          <tr><td class="t" data-label="角标">T4</td><td data-label="工具调用" class="t">share_by_category('高端')</td><td data-label="产出物">premium_share（表 + 图 1 配色依据）</td><td data-label="数据截至" class="t">2026-10-16 19:16</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:11px;color:#6f6f6a;margin:8px 0 0">正文每个数字后紧跟 T 角标，点任一角标会高亮上表对应来源行；结论可一直回溯到具体工具调用与数据截止时间，这是本产品的核心，不因视觉方案改变而省略。</p>
+    </article>
+  </div>
+</section>
+
+<!-- ============ 发起新分析（Market Analysis 路径） ============ -->
+<section class="view" data-view="launch" aria-labelledby="ln-h">
+  <div class="viewhead">
+    <h1 id="ln-h">发起新分析 · POST /api/analysis（202 受理）</h1>
+    <p>运维台里的"再发起一次"：选数据集 → 写需求 → 定 max_steps → 进队列</p>
+    <p class="disclaim">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+  </div>
+  <div class="launch" style="margin:0 14px">
+    <div class="panel">
+      <div class="panel__head"><h2>1 · 选数据集</h2><span class="mono">GET /api/datasets</span></div>
+      <div class="panel__body stack">
+        <div class="field"><label for="q">按文件名筛选（q 参数，真实存在）</label><input id="q" type="search" placeholder="如 market / channel_margin"></div>
+        <div class="pick" role="group" aria-label="数据集候选">
+          <button class="pickrow" aria-pressed="true"><span><b>market_q3.xlsx</b><br><span>ds_18 · 42 列 · 18,204 行 · 缺失率 1.4%</span></span><span class="mono">2026-10-15</span></button>
+          <button class="pickrow" aria-pressed="false"><span><b>inventory.xlsx</b><br><span>ds_09 · 36 列 · 12,880 行 · 缺失率 3.7%</span></span><span class="mono">2026-10-12</span></button>
+          <button class="pickrow" aria-pressed="false"><span><b>channel_margin.csv</b><br><span>ds_22 · 19 列 · 6,410 行 · 2 条画像告警</span></span><span class="mono">2026-10-10</span></button>
+        </div>
+        <h2 style="font-size:13px;margin:6px 0 0">2 · 分析需求（2–500 字）</h2>
+        <div class="field"><label for="ask">自然语言提问</label><textarea id="ask" rows="3" style="background:var(--ops-sunken);border:1px solid var(--ops-line-strong);border-radius:var(--r-sm);color:var(--ops-ink);padding:8px;font-family:inherit;font-size:12.5px" placeholder="例：把促销期与日常期的销量做可比口径拆分，先看毛利再给定价建议">把促销期与日常期的销量做可比口径拆分，先看毛利再给定价建议</textarea><small>已输入 31 字 / 上限 500</small></div>
+        <div>
+          <div class="field"><label id="ms-l">3 · max_steps（1–8，越大越深但更慢）</label></div>
+          <div class="steps" role="group" aria-labelledby="ms-l">
+            <button aria-pressed="false">1</button><button aria-pressed="false">2</button><button aria-pressed="false">3</button><button aria-pressed="false">4</button><button aria-pressed="true">6</button><button aria-pressed="false">7</button><button aria-pressed="false">8</button>
+          </div>
+        </div>
+        <button class="act act--primary" style="justify-self:start">发起分析</button>
+        <p style="margin:0;font-size:10px;color:var(--ops-ink-muted);line-height:1.5">发起后返回 202 与 workflow_id，任务出现在首屏"等待中"列。若接口返回 429，按钮区显示 Retry-After 并写入事件流，运行中任务不受影响。</p>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel__head"><h2>发起后在运维台会发生什么</h2><span class="mono">路径完整可走</span></div>
+      <div class="panel__body path">
+        <ol>
+          <li><span class="numchip">01</span><span><b>202 受理</b>：任务入"等待中"列，状态 <span class="mono">PENDING</span>，此时只有 created_at。</span></li>
+          <li><span class="numchip">02</span><span><b>轮询差异</b>：前端每 1000ms 调 GET /api/workflows/{id}，看到状态变化才写一条事件，<b>非实时</b>。</span></li>
+          <li><span class="numchip">03</span><span><b>阶段推进</b>：以 <span class="mono">step_index / total_steps</span> 阶梯呈现，<b>阶段级耗时需后端补时间戳后才能显示</b>。</span></li>
+          <li><span class="numchip">04</span><span><b>任务卡</b>：task_id / description / status / error 四列，任务态含 <span class="mono">SKIPPED</span>。</span></li>
+          <li><span class="numchip">05</span><span><b>终态</b>：SUCCESS / SUCCESS_WITH_WARNINGS / FAILED；总耗时 = finished_at − created_at（真实）。</span></li>
+          <li><span class="numchip">06</span><span><b>报告</b>：切亮色层阅读，每个数字带 T 角标可回溯到工具调用。</span></li>
+          <li><span class="numchip">07</span><span><b>不可做的事</b>：取消、重试、暂停、删除、导出——后端没有这些接口，界面上也没有。</span></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 空 / 加载 / 错误 三态 ============ -->
+<section class="view" data-view="states" aria-labelledby="st-h">
+  <div class="viewhead">
+    <h1 id="st-h">空态 / 加载态 / 错误态</h1>
+    <p>空态区分三种成因；运维台的空态必须先说明"为什么是空的"</p>
+    <p class="disclaim">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+  </div>
+  <div class="states" style="margin:0 14px">
+    <div class="statecard">
+      <h3><span class="shape" aria-hidden="true">∅</span>空态 A · 还没有数据</h3>
+      <p>队列四列皆空，历史接口返回 0 条。<br>文案：<b>还没有任何分析任务</b>。<br>出路：上传数据集（POST /api/datasets/upload）→ 发起第一次分析。</p>
+      <button class="act act--primary" style="justify-self:start" data-open="launch">发起第一次分析</button>
+    </div>
+    <div class="statecard">
+      <h3><span class="shape" aria-hidden="true">⌕</span>空态 B · 泳道筛选无结果</h3>
+      <p>共有 21 条，但当前筛选（失败 + 最近 5 分钟）没有命中。<br>文案：<b>该筛选下没有任务</b>，不写"暂无数据"。<br>出路：一键"清除泳道筛选"，保留其他列不动。</p>
+      <button class="act" style="justify-self:start" data-open="ops">清除筛选</button>
+    </div>
+    <div class="statecard">
+      <h3><span class="shape" aria-hidden="true">!</span>空态 C · 读取失败</h3>
+      <p>历史接口 500，队列无法建立基线。<br>文案：<b>任务列表读取失败</b>，并明确"当前显示的不是空队列，是不可用数据"。<br>出路：重试读取（GET /api/workflows/history），同时在事件流记一条采样失败。</p>
+      <button class="act act--primary" style="justify-self:start">重新读取列表</button>
+    </div>
+    <div class="statecard">
+      <h3><span class="spin" aria-hidden="true"></span>加载态 · 采样基线建立中</h3>
+      <p>首轮轮询未返回，列骨架显示占位行，标题写 <b>建立状态基线中（第 1/2 轮采样）</b>。</p>
+      <div class="skel" aria-hidden="true"><i></i><i></i><i></i></div>
+      <p>约定：加载骨架<b>不做闪烁</b>以外的动画，轮询刷新也不整屏闪一下。</p>
+    </div>
+    <div class="statecard">
+      <h3><span class="shape" aria-hidden="true" style="border-color:var(--st-limit)">429</span>错误态 · 接口限流</h3>
+      <p><span class="mono">Retry-After: 34</span>。运维台的处理不是弹提示，而是：把该接口标为"节流"、暂停自动采样 34 秒、把事件写进底部抽屉、其余列保持上次状态不变。</p>
+    </div>
+    <div class="statecard">
+      <h3><span class="shape" aria-hidden="true" style="border-color:var(--st-failed)">401</span>错误态 · 会话失效</h3>
+      <p>HttpOnly 会话过期（默认 8 小时）。界面盖住运行区并回到登录视图，<b>保留当前视图与筛选</b>，重新登录后回到同一列，不丢采样窗口。</p>
+      <button class="act" style="justify-self:start" data-open="login">去登录</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- 底部事件流抽屉（常驻，可开合；在运行中心视图生效） -->
+<div class="drawer" data-open="false" id="drawer" role="region" aria-label="事件流抽屉" aria-labelledby="drawer-title">
+  <div class="drawer__bar">
+    <span class="drawer__title" id="drawer-title">事件流</span>
+    <span class="drawer__tag">轮询采样 · 非实时</span>
+    <span class="drawer__count" id="ev-count" role="status" aria-live="polite">近 40s · 8 条变化 · 含 1 条 429</span>
+    <span class="drawer__count mono">间隔 1000ms</span>
+    <div class="drawer__toggle">
+      <button class="act" id="ev-advance">模拟下一轮采样</button>
+      <button class="act" id="drawer-btn" aria-expanded="false" aria-controls="drawer-body">展开事件流<span class="chev" aria-hidden="true">▾</span></button>
+    </div>
+  </div>
+  <div class="drawer__body" id="drawer-body">
+    <table class="events">
+      <caption class="live">抽屉内为最近采样的状态差异，展开高度固定 236px，超出内部滚动</caption>
+      <thead><tr>
+        <th scope="col">采样时刻</th><th scope="col">任务</th><th scope="col">变化</th><th scope="col">来源</th><th scope="col">备注</th>
+      </tr></thead>
+      <tbody id="ev-body">
+        <tr><td class="t">19:11:34.208</td><td class="t">wf_b41c78d0a3</td><td>CHARTING <span class="arrow">→</span> REPORTING</td><td>轮询差异</td><td>step 4 → 5</td></tr>
+        <tr><td class="t">19:11:32.197</td><td class="t">—（接口层）</td><td>HTTP 429 · 发起被节流</td><td>POST /api/analysis</td><td>Retry-After 34s</td></tr>
+        <tr><td class="t">19:11:28.152</td><td class="t">wf_55e0aa19f6</td><td>EXECUTING <span class="arrow">→</span> VALIDATING</td><td>轮询差异</td><td>合并：中间 2 阶段未采到</td></tr>
+        <tr><td class="t">19:11:25.104</td><td class="t">wf_0c6be1f58a</td><td>VALIDATING <span class="arrow">→</span> 带警告完成</td><td>轮询差异</td><td>SUCCESS_WITH_WARNINGS</td></tr>
+        <tr><td class="t">19:11:19.061</td><td class="t">wf_a73d5e0c12</td><td>EXECUTING <span class="arrow">→</span> 失败</td><td>轮询差异</td><td>FAILED · T4–T6 SKIPPED</td></tr>
+        <tr><td class="t">19:11:13.008</td><td class="t">wf_7f31c0a2e5</td><td>PENDING <span class="arrow">→</span> 画像中</td><td>轮询差异</td><td>step 0 → 1</td></tr>
+        <tr><td class="t">19:11:08.033</td><td class="t">wf_9d237be440</td><td>PROFILING <span class="arrow">→</span> PLANNING</td><td>轮询差异</td><td>step 1 → 2</td></tr>
+        <tr><td class="t">19:10:58.944</td><td class="t">mis-server</td><td>health ok → ok</td><td>GET /api/health</td><td>无变化，仅采样心跳</td></tr>
+      </tbody>
+    </table>
+    <div class="drawer__foot">每条 = 前端在两次 1000ms 轮询之间观察到的状态差异。后端没有实时推送，因此这里不是日志流；采样窗口内的多次阶段推进被合并并标注。</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var views = document.querySelectorAll('.view');
+  var tabs = document.querySelectorAll('.prototype__view');
+  var drawer = document.getElementById('drawer');
+  var drawerBtn = document.getElementById('drawer-btn');
+  var opsView = document.querySelector('[data-view="ops"]');
+
+  function setDrawer(open) {
+    drawer.setAttribute('data-open', open ? 'true' : 'false');
+    drawerBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    drawerBtn.firstChild.nodeValue = open ? '收起事件流' : '展开事件流';
+  }
+
+  function show(name) {
+    views.forEach(function (v) { v.classList.toggle('is-active', v.getAttribute('data-view') === name); });
+    tabs.forEach(function (t) { t.setAttribute('aria-current', t.getAttribute('data-target') === name ? 'true' : 'false'); });
+    if (name !== 'ops' && name !== 'events') { opsView.classList.remove('has-drawer'); opsView.classList.add('has-drawer-closed'); }
+    if (name === 'ops' || name === 'events') { drawer.style.display = ''; }
+    else { drawer.style.display = 'none'; }
+    if (name === 'events') { setDrawer(true); opsView.classList.add('has-drawer'); }
+    window.scrollTo(0, 0);
+    /* 原型以 file:// 打开也要能切视图：写 hash 失败就退化成无地址栏状态 */
+    try { if (location.hash.slice(1) !== name) { history.replaceState(null, '', '#' + name); } } catch (err) { /* 忽略：不影响渲染 */ }
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { show(t.getAttribute('data-target')); });
+  });
+
+  document.addEventListener('click', function (e) {
+    var opener = e.target.closest('[data-open]');
+    if (opener) { show(opener.getAttribute('data-open')); }
+  });
+
+  drawerBtn.addEventListener('click', function () {
+    setDrawer(drawer.getAttribute('data-open') !== 'true');
+    if (opsView.classList.contains('is-active') || document.querySelector('[data-view="events"]').classList.contains('is-active')) {
+      opsView.classList.toggle('has-drawer', drawer.getAttribute('data-open') === 'true');
+      opsView.classList.toggle('has-drawer-closed', drawer.getAttribute('data-open') !== 'true');
+    }
+  });
+
+  var lanes = document.querySelectorAll('.lane');
+  var groups = document.querySelectorAll('[data-group]');
+  lanes.forEach(function (l) {
+    l.addEventListener('click', function () {
+      lanes.forEach(function (x) { x.setAttribute('aria-pressed', String(x === l)); });
+      var want = l.getAttribute('data-lane');
+      groups.forEach(function (g) {
+        g.style.display = (want === 'all' || g.getAttribute('data-group') === want) ? '' : 'none';
+      });
+    });
+  });
+
+  var picks = document.querySelectorAll('.pickrow');
+  picks.forEach(function (p) {
+    p.addEventListener('click', function () {
+      picks.forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      p.setAttribute('aria-pressed', 'true');
+    });
+  });
+
+  var stepBtns = document.querySelectorAll('.steps button');
+  stepBtns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      stepBtns.forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      b.setAttribute('aria-pressed', 'true');
+    });
+  });
+
+  var authBtns = document.querySelectorAll('[data-authstate]');
+  authBtns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      authBtns.forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+      var st = b.getAttribute('data-authstate');
+      document.querySelectorAll('[data-authpanel]').forEach(function (p) {
+        p.classList.toggle('hidden', p.getAttribute('data-authpanel') !== st);
+      });
+      var boot = document.querySelector('[data-bootfields]');
+      boot.hidden = st !== 'bootstrap';
+      boot.setAttribute('data-bootfields', st === 'bootstrap' ? 'shown' : 'hidden');
+    });
+  });
+
+  var tick = 0;
+  var advances = [
+    { id: 'wf_b41c78d0a3', text: 'REPORTING → VALIDATING', note: 'step 5 → 6' },
+    { id: 'wf_b41c78d0a3', text: 'VALIDATING → 带警告完成', note: 'SUCCESS_WITH_WARNINGS · 1 warning' }
+  ];
+  document.getElementById('ev-advance').addEventListener('click', function () {
+    var card = document.getElementById('card-advancing');
+    var ev = advances[Math.min(tick, advances.length - 1)];
+    tick += 1;
+    if (card) { card.classList.add('is-advancing'); setTimeout(function () { card.classList.remove('is-advancing'); }, 200); }
+    var tr = document.createElement('tr');
+    var now = new Date();
+    var stamp = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ':' +
+      String(now.getSeconds()).padStart(2, '0') + '.' + String(now.getMilliseconds()).padStart(3, '0');
+    tr.innerHTML = '<td class="t">' + stamp + '</td><td class="t">' + ev.id + '</td><td>' + ev.text +
+      '</td><td>轮询差异</td><td>' + ev.note + (tick === 1 ? '（阶段级耗时需后端补时间戳）' : '') + '</td>';
+    var body = document.getElementById('ev-body');
+    body.insertBefore(tr, body.firstChild);
+    var full = document.getElementById('ev-body-full');
+    full.insertBefore(tr.cloneNode(true), full.firstChild);
+    document.getElementById('ev-count').textContent = '近 40s · ' + (8 + tick) + ' 条变化 · 含 1 条 429';
+    document.getElementById('ev-count2').textContent = '本轮采样新增 ' + tick + ' 条';
+  });
+
+  document.querySelectorAll('.cite').forEach(function (c) {
+    c.addEventListener('click', function () {
+      var want = c.getAttribute('data-cite');
+      document.querySelectorAll('.cite').forEach(function (x) { x.classList.toggle('is-lit', x.getAttribute('data-cite') === want); });
+      document.querySelectorAll('#srcs tbody tr').forEach(function (r) {
+        r.classList.toggle('is-lit', r.querySelector('.t').textContent.trim() === want);
+      });
+    });
+  });
+
+  var boot = document.querySelector('.prototype__view[aria-current="true"]');
+  if (boot) { boot.setAttribute('aria-current', 'true'); }
+  var hash = location.hash.slice(1);
+  if (hash && document.querySelector('[data-view="' + hash + '"]')) { show(hash); } else { show('ops'); }
+})();
+</script>
+</body>
+</html>

@@ -396,13 +396,13 @@ PowerShell 会重组行尾，数出来是假的。要数行就 `read_bytes()` �
 （代码里写着 ``# **:NNN** `<该行原文>` ``）。**改代码时这两个地方必须一起改**，
 否则 `check_docs.py` 会红 —— 这正是它存在的意义：把「文档腐烂」变成一次红灯。
 
-行号锚点 `app/api/routes_workflows.py:155`
-行号锚点 `app/api/routes_workflows.py:178`
-行号锚点 `app/api/routes_workflows.py:215`
-行号锚点 `app/api/routes_workflows.py:222`
-行号锚点 `app/api/routes_workflows.py:268`
-行号锚点 `app/api/routes_workflows.py:311`
-行号锚点 `app/api/routes_workflows.py:321`
+行号锚点 `app/api/routes_workflows.py:158`
+行号锚点 `app/api/routes_workflows.py:183`
+行号锚点 `app/api/routes_workflows.py:219`
+行号锚点 `app/api/routes_workflows.py:226`
+行号锚点 `app/api/routes_workflows.py:277`
+行号锚点 `app/api/routes_workflows.py:322`
+行号锚点 `app/api/routes_workflows.py:331`
 
 ### ⚠️ 本轮最值钱的坑：只加 `_coerce_enum` 不够
 

@@ -1,0 +1,2003 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 03 · 国际咨询公司商业分析平台｜AI Market Intelligence Studio</title>
+<style>
+/* 设计底座（方案 03 · 坐标：顶部横向主导航 + 页内左侧章节锚点 / 首屏主角 = 编号小节报告流 / 密度中 / 亮色）
+   立场：交付物本身即界面。层级不靠卡片容器，只靠四件排版事实：
+   1) 编号（小节 01-06、图 1/表 1、角标 [T1]、注 1）——依据研究 §3.7 Pentagram：纯黑白灰 + 命名秩序仍具识别度；
+   2) 窄行宽（正文 16px / 672px，约 42 个全角字）——依据 §3.4 Instrument：大面积中性底 + 极少量强调色；
+   3) 脚注与口径块——图卡固定四行（中性标题 / 口径句 / 单位 / 来源 + 数据截至）——依据 §4.4 A14「数据截至」、§5.2 每图需纯文本替代；
+   4) 等宽数字 tabular-nums——依据 §4.1 Linear：等宽字体承担 ID / 时间戳 / 数值的「数据身份」。
+   本机无思源宋体：辨识度全部由版式建立，字族只有「无衬线 + 等宽」两族。
+   状态色（成功/警告/失败/运行中）与图表色（--c1..--c5）分属两套，禁止互用。 */
+:root{
+  --paper:#F6F4EF; --paper-2:#EDEAE2; --surface:#FFFFFF;
+  --ink:#1C2530; --ink-2:#414C59; --ink-3:#6B7683; --ink-4:#96A0AA;
+  --navy:#0B2038; --navy-2:#16385C; --navy-3:#2A5480;
+  --accent:#8F3A2C; --accent-soft:#F3E7E3;
+  --rule:#DEDAD1; --rule-2:#C6C1B5;
+  --st-ok:#2C6E49; --st-warn:#8A6210; --st-err:#9B2C2C; --st-run:#1D4E89;
+  --st-ok-bg:#EAF2EC; --st-warn-bg:#F7F0DE; --st-err-bg:#F6E9E9; --st-run-bg:#EAF0F8;
+  --c1:#254A6B; --c2:#8A6D3B; --c3:#4A6B57; --c4:#7B4B5E; --c5:#5B6B7C;
+  --measure:672px;
+  --font:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;padding:38px 0 0;background:var(--paper);color:var(--ink);
+  font-family:var(--font);font-size:14px;line-height:1.7;-webkit-text-size-adjust:100%}
+h1,h2,h3,h4,p,ul,ol,figure,table{margin:0}
+ul{list-style:none;padding:0}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,textarea,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--navy-3);outline-offset:2px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono)}
+
+/* ---------- 原型切换条与强制声明（评审用，不属于产品界面） ---------- */
+.proto{position:fixed;top:0;left:0;right:0;height:38px;z-index:80;background:var(--navy);
+  display:flex;align-items:center;gap:12px;padding:0 16px;font-size:12px;color:#B9C6D4}
+.proto b{color:#fff;font-weight:600;letter-spacing:.06em;white-space:nowrap}
+.proto-tabs{display:flex;gap:1px;overflow-x:auto}
+.proto-tabs button{padding:4px 9px;font-size:11.5px;color:#9FB0C2;white-space:nowrap}
+.proto-tabs button:hover{background:rgba(255,255,255,.1);color:#fff}
+.proto-tabs button[aria-selected="true"]{background:#fff;color:var(--navy);font-weight:600}
+.proto-disc{margin-left:auto;font-size:11px;letter-spacing:.04em;color:#E7ECF1;
+  border-left:1px solid rgba(255,255,255,.24);padding-left:12px;white-space:nowrap}
+
+/* ---------- 屏切换 ---------- */
+.screen{display:none}
+.screen.is-active{display:block;animation:page .18s ease both}
+@keyframes page{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ---------- 通用件 ---------- */
+.eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 15px;
+  border:1px solid transparent;border-radius:2px;font-size:13px;font-weight:600;
+  transition:background .14s ease,border-color .14s ease,color .14s ease}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover{background:var(--navy-2)}
+.btn-line{border-color:var(--rule-2);background:var(--surface);color:var(--ink)}
+.btn-line:hover{border-color:var(--navy-2);color:var(--navy-2)}
+.btn-block{display:flex;width:100%}
+.btn-sm{padding:5px 11px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.tag{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border:1px solid var(--rule-2);
+  border-radius:2px;font-size:11.5px;color:var(--ink-2);background:var(--surface);white-space:nowrap}
+.tag::before{content:"";width:0;height:0;border:3px solid transparent;flex:none}
+.st-ok{color:var(--st-ok);border-color:#BFD5C7;background:var(--st-ok-bg)}
+.st-ok::before{border-color:transparent transparent var(--st-ok) transparent;border-top-color:var(--st-ok)}
+.st-run{color:var(--st-run);border-color:#BBD0E4;background:var(--st-run-bg)}
+.st-run::before{border-radius:50%;background:var(--st-run);border:0;width:6px;height:6px}
+.st-warn{color:var(--st-warn);border-color:#E2CE9B;background:var(--st-warn-bg)}
+.st-warn::before{content:"!";width:auto;height:auto;border:0;font-weight:700}
+.st-err{color:var(--st-err);border-color:#DDB6B6;background:var(--st-err-bg)}
+.st-err::before{content:"\00d7";width:auto;height:auto;border:0;font-weight:700}
+.st-wait{color:var(--ink-3)}
+.st-wait::before{border-radius:50%;border:1px solid var(--ink-4);width:5px;height:5px}
+/* ---------- 应用外壳：顶部横向主导航（03 唯一允许的导航结构，无全局侧栏） ---------- */
+.topbar{position:sticky;top:38px;z-index:40;height:56px;background:var(--navy);color:#D6DEE7;
+  display:flex;align-items:center;gap:22px;padding:0 24px;border-bottom:1px solid #061424}
+.tb-brand{display:flex;align-items:center;gap:10px;flex:none}
+.tb-mark{width:24px;height:24px;display:grid;place-items:center;background:#fff;color:var(--navy);
+  font-family:var(--mono);font-size:10px;font-weight:700}
+.tb-name{font-size:13px;font-weight:600;color:#fff;letter-spacing:.02em;white-space:nowrap}
+.tb-nav{display:flex;gap:2px;margin-left:6px}
+.tb-link{padding:6px 13px;font-size:13px;color:#A7B8CA;border-radius:2px;
+  transition:background .14s ease,color .14s ease}
+.tb-link:hover{background:rgba(255,255,255,.09);color:#fff}
+.tb-link.is-on{background:rgba(255,255,255,.15);color:#fff;font-weight:600}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:12px;flex:none}
+.tb-out{padding:6px 12px;font-size:12.5px;color:#BCCAD8;border:1px solid rgba(255,255,255,.28);border-radius:2px}
+.tb-out:hover{background:#fff;color:var(--navy);border-color:#fff}
+.tb-who{display:flex;flex-direction:column;line-height:1.3;font-size:12.5px;color:#fff}
+.tb-role{font-size:10.5px;color:#93A7BC}
+.srcpill{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.05em;
+  color:#A9BACB;border:1px solid rgba(255,255,255,.26);padding:2px 8px;border-radius:2px}
+
+.shell-foot{padding:22px 24px 34px;border-top:1px solid var(--rule);background:var(--paper);
+  font-size:11px;color:var(--ink-4);letter-spacing:.03em;text-align:center}
+
+/* ---------- 登录页：左主张 / 右表单（无装饰，权威感来自排版） ---------- */
+.login{min-height:calc(100vh - 38px);display:grid;grid-template-columns:1.1fr .9fr}
+.login-brand{padding:56px 60px 36px 68px;background:var(--paper);border-right:1px solid var(--rule);
+  display:flex;flex-direction:column}
+.login-mark{display:flex;flex-direction:column;gap:2px}
+.login-mark-en{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--navy)}
+.login-mark-cn{font-size:12px;color:var(--ink-3);letter-spacing:.05em}
+.login-pitch{margin-top:auto;padding-bottom:40px;max-width:520px}
+.login-h1{font-size:36px;line-height:1.34;font-weight:700;letter-spacing:-.01em;margin:14px 0 16px}
+.login-h1 span{background:var(--accent-soft);padding:0 4px;box-decoration-break:clone}
+.login-sub{font-size:15px;color:var(--ink-2);line-height:1.85;max-width:470px}
+.login-terms{margin-top:34px;border-top:1px solid var(--rule)}
+.login-terms li{display:flex;gap:16px;align-items:baseline;padding:12px 0;
+  border-bottom:1px solid var(--rule);font-size:13px;color:var(--ink-2)}
+.login-terms b{font-weight:600;color:var(--ink)}
+.login-terms .no{font-family:var(--mono);font-size:11px;color:var(--ink-4);letter-spacing:.08em;flex:none}
+.login-fine{margin-top:auto;padding-top:22px;font-size:11px;color:var(--ink-4);line-height:1.9}
+
+.login-panel{padding:52px 56px;background:var(--paper-2);display:flex;flex-direction:column;justify-content:center}
+.login-card{width:100%;max-width:396px;margin:0 auto;background:var(--surface);border:1px solid var(--rule-2);
+  padding:30px 30px 22px}
+.login-card>h2{font-size:21px;font-weight:700;letter-spacing:-.01em}
+.login-card .lead{font-size:12.5px;color:var(--ink-3);margin:5px 0 20px}
+.seg{display:flex;border:1px solid var(--rule);background:var(--paper-2);padding:2px;margin-bottom:18px}
+.seg button{flex:1;padding:7px 4px;font-size:12.5px;color:var(--ink-2);white-space:nowrap}
+.seg button:hover{color:var(--navy-2)}
+.seg button[aria-selected="true"]{background:var(--surface);color:var(--navy);font-weight:600}
+.form{display:flex;flex-direction:column;gap:15px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:12px;font-weight:600;color:var(--ink-2);letter-spacing:.03em}
+.ctl{height:38px;padding:0 11px;background:var(--surface);border:1px solid var(--rule-2);
+  border-radius:2px;font-size:13.5px;width:100%;transition:border-color .14s ease}
+.ctl:hover{border-color:var(--ink-4)}
+.ctl:focus{outline:2px solid var(--navy-3);outline-offset:1px;border-color:var(--navy-3)}
+.ctl::placeholder{color:var(--ink-4)}
+.ctl[aria-invalid="true"]{border-color:var(--st-err)}
+textarea.ctl{height:auto;padding:10px 11px;line-height:1.75;resize:vertical}
+.help{font-size:11.5px;color:var(--ink-3);line-height:1.7}
+.help b{font-family:var(--mono);font-size:11px;color:var(--ink-2);font-weight:600}
+.notice{font-size:12.5px;line-height:1.65;padding:9px 12px;border-left:2px solid}
+.notice.err{color:#7C2A20;background:var(--st-err-bg);border-color:var(--st-err)}
+.notice.warn{color:#6E4E0C;background:var(--st-warn-bg);border-color:var(--st-warn)}
+.notice.ok{color:#1F5940;background:var(--st-ok-bg);border-color:var(--st-ok)}
+.notice[hidden]{display:none}
+.boot-flag{font-size:11.5px;color:var(--ink-2);background:var(--paper);border:1px dashed var(--rule-2);
+  padding:9px 12px;line-height:1.7}
+.boot-flag .num{color:var(--accent)}
+.login-card-foot{margin-top:20px;padding-top:13px;border-top:1px solid var(--rule);
+  display:flex;gap:9px;align-items:center;font-size:11.5px;color:var(--ink-3);flex-wrap:wrap}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--st-ok);flex:none;display:inline-block}
+.dot.bad{background:var(--st-err)}
+/* ---------- 页共通：报告式的页眉与分节线（分节线代替容器） ---------- */
+.page{max-width:1240px;margin:0 auto;padding:0 28px}
+.page-head{padding:30px 0 18px;border-bottom:2px solid var(--ink);
+  display:flex;align-items:flex-end;justify-content:space-between;gap:28px;flex-wrap:wrap}
+.page-head h1{font-size:25px;font-weight:700;letter-spacing:-.01em;margin-top:7px}
+.page-head p{font-size:13px;color:var(--ink-2);margin-top:7px;max-width:640px}
+.head-facts{display:flex;border:1px solid var(--rule-2);background:var(--surface);flex:none}
+.fact{padding:10px 20px;border-right:1px solid var(--rule);text-align:center;min-width:84px}
+.fact:last-child{border-right:0}
+.fact .k{display:block;font-size:10.5px;letter-spacing:.06em;color:var(--ink-3)}
+.fact .v{display:block;font-size:20px;font-weight:700;color:var(--navy);margin-top:2px}
+.fact .v.warnc{color:var(--st-warn)}
+
+.block{padding:30px 0;border-bottom:1px solid var(--rule)}
+.block:last-of-type{border-bottom:0}
+.block-head{display:flex;align-items:baseline;justify-content:space-between;gap:18px;
+  border-bottom:1px solid var(--ink);padding-bottom:7px;margin-bottom:18px}
+.block-head h2{font-size:16px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+.block-head h2 .no{font-family:var(--mono);font-size:11px;color:#fff;background:var(--navy);padding:2px 7px;
+  letter-spacing:.06em;transform:translateY(-1px)}
+.block-head .aside-note{font-size:11.5px;color:var(--ink-3)}
+.split{display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:34px;align-items:start}
+.col-side{display:flex;flex-direction:column;gap:20px}
+
+/* ---------- 表格共通：真实咨询报告的密排表 ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--ink-2);
+  padding:8px 10px;border-top:2px solid var(--ink-2);border-bottom:1px solid var(--ink-2);background:var(--paper)}
+.tbl td{padding:9px 10px;border-bottom:1px solid var(--rule);color:var(--ink-2);vertical-align:top}
+.tbl tbody tr{transition:background .14s ease}
+.tbl tbody tr:hover{background:var(--paper-2)}
+.tbl .rt{text-align:right}
+.tbl tr.hl{background:var(--accent-soft)}
+.tbl tr.hl td{color:var(--ink)}
+.filecell{font-family:var(--mono);font-size:12px;color:var(--ink)}
+
+/* ---------- 工作台 ---------- */
+.doclist{border-top:1px solid var(--rule)}
+.docrow{display:grid;grid-template-columns:70px minmax(0,1fr) 132px;gap:18px;
+  padding:16px 2px;border-bottom:1px solid var(--rule);transition:background .14s ease}
+.docrow:hover{background:var(--paper-2)}
+.docrow-no{font-family:var(--mono);font-size:11.5px;color:var(--ink-4);padding-top:3px;letter-spacing:.04em}
+.docrow-t{display:block;font-size:15.5px;font-weight:600;line-height:1.5;transition:color .14s ease}
+a:hover>.docrow-t,button:hover .docrow-t{color:var(--navy-3);text-decoration:underline;text-underline-offset:3px}
+button[data-go]{text-align:left;display:block;width:100%}
+.docrow-q{display:block;margin-top:6px;font-size:13px;color:var(--ink-2);line-height:1.7}
+.docrow-q .k{display:inline-block;margin-right:7px;font-size:10.5px;color:var(--ink-3);
+  border:1px solid var(--rule-2);padding:0 5px;letter-spacing:.05em;vertical-align:1px}
+.docrow-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px;font-size:11.5px;color:var(--ink-3)}
+.docrow-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;justify-content:center}
+.excerpt{display:block;font-size:13.5px;color:var(--ink-2);line-height:1.8;margin-top:8px;
+  padding-left:13px;border-left:2px solid var(--rule-2)}
+
+.rail{border:1px solid var(--rule-2);border-left:3px solid var(--navy);background:var(--surface);
+  padding:15px 20px;display:flex;align-items:center;justify-content:space-between;gap:22px;flex-wrap:wrap}
+.rail h3{font-size:14.5px;font-weight:700}
+.rail p{font-size:12.5px;color:var(--ink-2);margin-top:4px}
+.rail-r{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pickfile{display:inline-flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink-3)}
+.pickfile input{font-size:12px;font-family:var(--mono)}
+
+.toolrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.search{display:flex;align-items:center;border:1px solid var(--rule-2);background:var(--surface);border-radius:2px}
+.search input{border:0;height:32px;padding:0 10px;width:230px;font-size:12.5px;background:transparent}
+.search input:focus{outline:2px solid var(--navy-3);outline-offset:-2px}
+.search .lbl{font-size:11px;color:var(--ink-3);padding:0 9px;border-right:1px solid var(--rule);white-space:nowrap}
+.sortbtns{display:flex;border:1px solid var(--rule-2);background:var(--surface)}
+.sortbtns button{padding:5px 11px;font-size:12px;color:var(--ink-2);border-right:1px solid var(--rule)}
+.sortbtns button:last-child{border-right:0}
+.sortbtns button[aria-pressed="true"]{background:var(--navy);color:#fff;font-weight:600}
+/* ---------- 市场分析：提问 → 发起 → 202 受理 ---------- */
+.ask{border:1px solid var(--rule-2);background:var(--surface);padding:22px 26px}
+.ask-h{font-size:13px;font-weight:700;letter-spacing:.02em;padding-bottom:10px;border-bottom:1px solid var(--rule);
+  margin-bottom:16px;display:flex;align-items:baseline;justify-content:space-between;gap:14px}
+.ask-h .no{font-family:var(--mono);font-size:10.5px;color:var(--ink-4);letter-spacing:.08em}
+.stepgrid{display:flex;gap:0;border:1px solid var(--rule);margin-bottom:20px;background:var(--paper-2)}
+.stepitem{flex:1;padding:9px 12px;border-right:1px solid var(--rule);font-size:12px;color:var(--ink-3)}
+.stepitem:last-child{border-right:0}
+.stepitem b{display:block;font-size:12.5px;color:var(--ink);font-weight:600;margin-top:2px}
+.stepitem.on{background:var(--surface);color:var(--navy)}
+.stepitem.on b{color:var(--navy)}
+.stepitem.done{color:var(--st-ok)}
+.stepitem.done b{color:var(--st-ok)}
+.counter{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-3);margin-top:5px}
+.counter .bad{color:var(--st-err);font-weight:600}
+.dslist-pick{display:flex;flex-direction:column;gap:8px}
+.dsradio{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:12px;align-items:center;
+  border:1px solid var(--rule);background:var(--surface);padding:11px 14px;cursor:pointer;
+  transition:border-color .14s ease,background .14s ease}
+.dsradio:hover{border-color:var(--navy-3)}
+.dsradio input{margin:0}
+.dsradio.is-sel{border-left:3px solid var(--navy);background:var(--paper)}
+.dsradio .nm{font-family:var(--mono);font-size:12.5px;color:var(--ink);font-weight:600}
+.dsradio .mt{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+.profile{border:1px solid var(--rule);background:var(--paper);padding:14px 16px}
+.profile h4{font-size:12.5px;font-weight:700;letter-spacing:.03em;margin-bottom:10px}
+.prow{display:flex;justify-content:space-between;gap:14px;font-size:12px;color:var(--ink-2);
+  padding:5px 0;border-bottom:1px dotted var(--rule-2)}
+.prow:last-child{border-bottom:0}
+.prow .num{color:var(--ink);font-weight:600}
+.receipt{border:1px solid var(--rule-2);border-left:3px solid var(--st-run);background:var(--surface);
+  padding:16px 20px;margin-top:18px}
+.receipt h4{font-size:13.5px;font-weight:700;margin-bottom:9px;color:var(--st-run)}
+.receipt .prow{font-size:12.5px}
+.receipt[hidden]{display:none}
+
+/* ---------- Agent 运行：step_index / total_steps 阶梯（不含任何阶段耗时） ---------- */
+.runwrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:30px;align-items:start}
+.ladder{border:1px solid var(--rule-2);background:var(--surface)}
+.ladder-head{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:13px 18px;border-bottom:1px solid var(--rule)}
+.ladder-head h3{font-size:14px;font-weight:700}
+.ladder-head .frac{font-family:var(--mono);font-size:12px;color:var(--navy);font-weight:700;letter-spacing:.04em}
+.rung{display:grid;grid-template-columns:46px 22px minmax(0,1fr);gap:12px;align-items:flex-start;
+  padding:11px 18px;border-bottom:1px solid var(--rule)}
+.rung:last-child{border-bottom:0}
+.rung .i{font-family:var(--mono);font-size:11px;color:var(--ink-4);letter-spacing:.05em;padding-top:3px}
+.rung .g{width:16px;height:16px;border:1px solid var(--rule-2);display:grid;place-items:center;
+  font-size:10px;color:var(--ink-4);margin-top:2px}
+.rung b{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.rung em{font-style:normal;font-size:11.5px;color:var(--ink-3);display:block;margin-top:3px;line-height:1.65}
+.rung .raw{font-family:var(--mono);font-size:10.5px;color:var(--ink-4);letter-spacing:.03em}
+.rung.done .g{background:var(--st-ok);border-color:var(--st-ok);color:#fff}
+.rung.done .i{color:var(--st-ok)}
+.rung.now{background:var(--st-run-bg)}
+.rung.now .g{border-color:var(--st-run);color:var(--st-run);animation:tick 1.6s ease-in-out infinite}
+.rung.now b{color:var(--st-run)}
+.rung.skip .g{border-style:dashed}
+@keyframes tick{0%,100%{opacity:1}50%{opacity:.4}}
+.runfoot{padding:11px 18px;border-top:1px solid var(--rule);font-size:11.5px;color:var(--ink-3);line-height:1.75}
+.runacts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.errbox{border:1px solid #DDB6B6;border-left:3px solid var(--st-err);background:var(--surface);padding:16px 20px;margin-top:20px}
+.errbox h3{font-size:14px;font-weight:700;color:var(--st-err);margin-bottom:8px}
+.errbox p{font-size:13px;color:var(--ink-2);line-height:1.8}
+.errbox .raw{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);margin-top:8px}
+
+/* ---------- 报告中心：历史列表 + 翻页（后端只有 limit/offset） ---------- */
+.pager{display:flex;align-items:center;gap:10px;margin-top:16px;font-size:12.5px;color:var(--ink-2)}
+.pager .rng{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.pager .btn[disabled]{opacity:.4}
+.filterline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--ink-3);
+  background:var(--paper-2);border:1px solid var(--rule);padding:9px 13px;margin-bottom:16px}
+.filterline b{color:var(--ink-2);font-weight:600}
+
+/* ---------- 三态 ---------- */
+.skel{display:flex;flex-direction:column;gap:9px}
+.skel i{display:block;height:11px;background:var(--paper-2);animation:pulse 1.6s ease-in-out infinite}
+.skel i:nth-child(2){width:92%}
+.skel i:nth-child(3){width:78%}
+.skel i:nth-child(4){width:88%}
+.skel i.t{height:17px;width:52%;background:var(--rule-2)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.empty{border:1px dashed var(--rule-2);background:var(--paper-2);padding:20px 22px;text-align:left}
+.empty h4{font-size:14px;font-weight:700;display:flex;align-items:center;gap:9px}
+.empty p{font-size:12.5px;color:var(--ink-2);margin-top:6px;line-height:1.8;max-width:420px}
+.empty .btn{margin-top:13px}
+.empty .why{font-family:var(--mono);font-size:10.5px;color:var(--ink-4);letter-spacing:.05em;margin-top:10px}
+.stategrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
+/* ---------- 报告阅读页：主角。左目录锚点 + 中编号小节长文 + 右口径卡 ---------- */
+.reader{display:grid;grid-template-columns:232px minmax(0,1fr) 268px;gap:0;align-items:start}
+.toc{position:sticky;top:94px;padding:30px 18px 30px 28px;border-right:1px solid var(--rule);
+  max-height:calc(100vh - 94px);overflow:auto}
+.toc .cap{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.toc .doc{font-size:14px;font-weight:700;line-height:1.55;margin:9px 0 8px}
+.toc .idn{font-family:var(--mono);font-size:11px;color:var(--ink-4);line-height:1.7}
+.toc ol{margin-top:18px;display:flex;flex-direction:column;gap:1px}
+.toc li a{display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;padding:6px 8px;font-size:12.5px;
+  color:var(--ink-2);border-left:2px solid transparent;line-height:1.5;
+  transition:color .14s ease,background .14s ease,border-color .14s ease}
+.toc li a .n{font-family:var(--mono);font-size:10.5px;color:var(--ink-4);padding-top:1px}
+.toc li a:hover{color:var(--navy-2);background:var(--paper-2)}
+.toc li a.is-on{color:var(--navy);background:var(--paper-2);border-left-color:var(--accent);font-weight:600}
+.toc li.sub a{padding-left:24px;font-size:12px;color:var(--ink-3)}
+.toc-foot{margin-top:18px;padding-top:14px;border-top:1px solid var(--rule);font-size:11px;color:var(--ink-4);line-height:1.75}
+
+/* 正文：窄行宽 + 编号 + 悬挂脚注 = 全部辨识度 */
+.article{padding:34px 46px 8px;background:var(--surface);min-width:0;display:flex;justify-content:center}
+.doc-body{max-width:var(--measure);width:100%}
+.doc-titlebar{padding-bottom:22px;border-bottom:3px double var(--ink);margin-bottom:6px}
+.doc-titlebar h1{font-size:29px;font-weight:700;line-height:1.42;letter-spacing:-.01em;margin:11px 0 15px}
+.byline{font-size:12.5px;color:var(--ink-3);line-height:1.95;border-left:2px solid var(--rule-2);padding-left:12px}
+.byline b{color:var(--ink-2);font-weight:600}
+.byline .num{color:var(--ink-2)}
+.doc-sec{padding:28px 0 4px;border-bottom:1px solid var(--rule);scroll-margin-top:104px}
+.doc-sec:last-of-type{border-bottom:0}
+.sec-h2,.sec-h3,.fig{scroll-margin-top:104px}
+.sec-h2{font-size:20px;font-weight:700;line-height:1.42;margin-bottom:16px;display:flex;align-items:baseline;gap:13px}
+.sec-h2 .no{font-family:var(--mono);font-size:12px;font-weight:700;color:#fff;background:var(--navy);
+  padding:3px 8px;letter-spacing:.05em;flex:none;transform:translateY(-2px)}
+.sec-h3{font-size:16.5px;font-weight:700;color:var(--navy);margin:24px 0 11px}
+.doc-body p{font-size:16px;line-height:1.85;color:#25303C;margin-bottom:14px}
+.doc-body p b{font-weight:600;color:var(--ink)}
+.lead{font-size:17px;line-height:1.9;color:var(--ink)}
+.findings{margin:2px 0 4px;padding:15px 19px;border-left:3px solid var(--navy);background:var(--paper)}
+.findings .lbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.findings li{position:relative;padding-left:24px;font-size:14.5px;line-height:1.85;color:var(--ink-2);margin-top:10px}
+.findings li b{color:var(--ink);font-weight:600}
+.findings li::before{content:"";position:absolute;left:3px;top:12px;width:7px;height:7px;border:2px solid var(--accent)}
+/* 证据角标：正文数字后 [T#]，点击落到本节末尾的证据表行 */
+a.cite{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--accent);
+  background:var(--accent-soft);border:1px solid #E0CBC5;border-radius:2px;padding:1px 4px;margin:0 2px;
+  white-space:nowrap;text-decoration:none;transition:background .14s ease,color .14s ease}
+a.cite:hover,a.cite.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+/* 图卡四行：① 中性名词标题 ② 一句话口径或结论 ③ 单位 ④ 来源 + 数据截至 */
+.fig{margin:22px 0 24px}
+.fig-l1,.fig-l2,.fig-l3,.fig-l4{display:block}
+.fig-l1{padding:9px 0 6px;border-bottom:1px solid var(--ink);font-size:13px;font-weight:700;color:var(--ink)}
+.fig-l1 .no{font-family:var(--mono);font-size:10.5px;color:#fff;background:var(--navy);padding:2px 6px;
+  margin-right:9px;letter-spacing:.06em}
+.fig-l2{font-size:12.5px;color:var(--ink-2);line-height:1.7;padding:7px 0 2px}
+.fig-l3{font-size:11.5px;color:var(--ink-3);font-family:var(--mono);letter-spacing:.02em;padding-top:2px}
+.fig-l4{font-size:11px;color:var(--ink-4);border-top:1px solid var(--rule);margin-top:9px;padding-top:7px;
+  line-height:1.75;letter-spacing:.01em}
+.fig-plot{padding:14px 2px 2px}
+.chart{width:100%;height:auto;display:block;overflow:visible}
+.grid line{stroke:var(--rule);stroke-width:1}
+.grid .axis{stroke:var(--ink-2);stroke-width:1.2}
+.glabel{font-size:10.5px;fill:var(--ink-3);font-family:var(--font)}
+.glabel.num{font-family:var(--mono)}
+.bval{font-size:11.5px;font-weight:700;fill:var(--ink);font-family:var(--mono)}
+.bcol{transform-origin:50% 250px;transform:scaleY(0);animation:grow .5s cubic-bezier(.2,.8,.25,1) forwards}
+.bcol.d2{animation-delay:.12s}.bcol.d3{animation-delay:.24s}.bcol.d4{animation-delay:.36s}
+@keyframes grow{to{transform:scaleY(1)}}
+.line-a{fill:none;stroke:var(--c1);stroke-width:2.2;stroke-linejoin:round}
+.line-b{fill:none;stroke:var(--c2);stroke-width:2.2;stroke-linejoin:round}
+.series-lab{font-size:10.5px;fill:var(--ink-2);font-weight:600;font-family:var(--font)}
+.thr{stroke:var(--ink);stroke-width:1;stroke-dasharray:3 4}
+.thr-lab{font-size:10.5px;fill:var(--ink-2);font-family:var(--mono)}
+.limits li{position:relative;padding-left:26px;font-size:15px;line-height:1.85;color:#25303C;margin-bottom:10px}
+.limits li::before{content:"";position:absolute;left:4px;top:12px;width:8px;height:1px;background:var(--ink-2)}
+.method{background:var(--paper);border:1px solid var(--rule);padding:13px 16px;margin:6px 0 14px;
+  font-size:12.5px;color:var(--ink-2);line-height:1.8}
+.method h4{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--ink);margin-bottom:7px}
+.method .num{color:var(--ink)}
+/* Endnotes：编号脚注区，悬挂缩进 */
+.endnotes{margin-top:6px}
+.endnotes h3{font-size:14px;font-weight:700;border-bottom:1px solid var(--ink);padding-bottom:6px;margin-bottom:12px}
+.endnotes ol{list-style:decimal;padding-left:26px}
+.endnotes li{font-size:12.5px;line-height:1.85;color:var(--ink-2);margin-bottom:8px;padding-left:4px}
+.endnotes li::marker{font-family:var(--mono);font-size:11px;color:var(--accent)}
+.doc-footline{display:flex;justify-content:space-between;gap:18px;margin-top:26px;padding:13px 0 26px;
+  border-top:1px solid var(--rule);font-size:11.5px;color:var(--ink-4);letter-spacing:.03em;flex-wrap:wrap}
+/* 右：口径卡与图录（交付物的一部分，不是操作面板） */
+.reader-side{position:sticky;top:94px;padding:30px 26px 20px 18px;display:flex;flex-direction:column;gap:18px;
+  max-height:calc(100vh - 94px);overflow:auto}
+.side-block{border:1px solid var(--rule-2);background:var(--paper)}
+.side-block h4{font-size:12.5px;font-weight:700;padding:11px 14px;border-bottom:1px solid var(--rule);
+  display:flex;align-items:center;justify-content:space-between;gap:8px}
+.side-block ul{padding:11px 14px}
+.side-block li{font-size:12px;color:var(--ink-2);line-height:1.75;padding:4px 0}
+.side-block li .num{color:var(--ink);font-weight:600}
+.side-block .foot{padding:10px 14px;border-top:1px solid var(--rule);font-size:11px;color:var(--ink-3);line-height:1.7}
+.linklist a{display:flex;justify-content:space-between;gap:10px;padding:6px 0;font-size:12px;color:var(--navy-3)}
+.linklist a:hover{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+
+/* ---------- 账户与安全（后端真实存在：修改密码 / 会话列表） ---------- */
+.acct{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:34px;align-items:start}
+
+/* ---------- 响应式：1440 / 1180 / 960 / 768，窄屏表格转「标签—值」堆叠 ---------- */
+@media (max-width:1240px){
+  .reader{grid-template-columns:210px minmax(0,1fr)}
+  .reader-side{grid-column:1 / -1;position:static;max-height:none;flex-direction:row;flex-wrap:wrap;
+    padding:24px 28px;border-top:1px solid var(--rule)}
+  .side-block{flex:1 1 260px}
+  .article{padding:30px 32px 8px}
+}
+@media (max-width:1180px){
+  .proto>span:not(.proto-disc){display:none}
+  .split{grid-template-columns:minmax(0,1fr)}
+  .col-side{flex-direction:row;flex-wrap:wrap}
+  .col-side>*{flex:1 1 280px}
+  .runwrap{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:960px){
+  .topbar .srcpill{display:none}
+  .login{grid-template-columns:1fr}
+  .login-brand{padding:38px 30px 28px;border-right:0;border-bottom:1px solid var(--rule)}
+  .login-pitch{margin-top:32px;padding-bottom:26px}
+  .login-h1{font-size:29px}
+  .login-panel{padding:34px 24px 44px}
+  .topbar{gap:12px;padding:0 14px;overflow-x:auto}
+  .tb-name{display:none}
+  .reader{grid-template-columns:1fr}
+  .toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--rule);padding:22px 24px}
+  .toc ol{flex-direction:row;flex-wrap:wrap;gap:2px 14px}
+  .article{padding:26px 22px 8px}
+  .docrow{grid-template-columns:62px minmax(0,1fr)}
+  .docrow-side{grid-column:2;flex-direction:row;align-items:center}
+  .acct{grid-template-columns:1fr}
+  .stepgrid{flex-wrap:wrap}
+  .stepitem{flex:1 1 46%}
+}
+@media (max-width:768px){
+  body{font-size:13.5px}
+  .page{padding:0 16px}
+  .page-head{align-items:flex-start;flex-direction:column;gap:16px}
+  .head-facts{width:100%}
+  .fact{flex:1;min-width:0;padding:9px 8px}
+  .fact .v{font-size:17px}
+  .doc-body p,.lead{font-size:15.5px}
+  .tbl.kv thead{display:none}
+  .tbl.kv tr{display:block;border-bottom:1px solid var(--rule-2);padding:9px 2px}
+  .tbl.kv td{display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;border:0;padding:3px 0}
+  .tbl.kv td::before{content:attr(data-k);font-size:11px;color:var(--ink-3);letter-spacing:.04em}
+  .tbl.kv .rt{text-align:left}
+  .rung{grid-template-columns:40px 20px minmax(0,1fr);gap:9px;padding:10px 12px}
+  .stategrid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<!-- 原型切换条：产品界面外的一行，声明与视图入口 -->
+<div class="proto">
+  <b>方案 03</b>
+  <span>国际咨询公司商业分析平台</span>
+  <div class="proto-tabs" role="tablist" aria-label="演示视图切换">
+    <button role="tab" data-go="login" aria-selected="false">登录</button>
+    <button role="tab" data-go="workbench" aria-selected="false">工作台</button>
+    <button role="tab" data-go="analysis" aria-selected="false">市场分析</button>
+    <button role="tab" data-go="run" aria-selected="false">Agent 运行</button>
+    <button role="tab" data-go="reports" aria-selected="false">报告中心</button>
+    <button role="tab" data-go="report" aria-selected="true">报告阅读</button>
+    <button role="tab" data-go="states" aria-selected="false">空/加载/错误</button>
+    <button role="tab" data-go="account" aria-selected="false">账户与安全</button>
+  </div>
+  <span class="proto-disc">视觉方案示意 · 数据为占位样例 · 未接入后端</span>
+</div>
+
+<!-- 屏 ①：登录。左为机构主张，右为凭据表单；needs_bootstrap 为真实首部署状态 -->
+<section class="screen" id="screen-login" aria-label="登录">
+  <div class="login">
+    <div class="login-brand">
+      <div class="login-mark">
+        <span class="login-mark-en">AI MARKET INTELLIGENCE STUDIO</span>
+        <span class="login-mark-cn">市场情报与智能分析平台</span>
+      </div>
+
+      <div class="login-pitch">
+        <p class="eyebrow">Deliverable-first · 交付物即界面</p>
+        <h1 class="login-h1">把一次分析，<br>做成一份<span>可以交付的报告</span>。</h1>
+        <p class="login-sub">
+          从一份 CSV 或 Excel，到一份每个数字都能回溯到具体工具调用的分析文档。
+          画像、规划、计算、出图、成稿、复核六个阶段真实执行，逐步留痕。
+        </p>
+      </div>
+
+      <ul class="login-terms">
+        <li><span class="no">01</span><span><b>结论与证据同页。</b>正文数字后带 [T#] 角标，点开即定位到对应工具调用记录。</span></li>
+        <li><span class="no">02</span><span><b>图表按研究文档排版。</b>标题只写中性名词，判断写在口径句里，单位与「数据截至」各占一行。</span></li>
+        <li><span class="no">03</span><span><b>数据留在本机。</b>上传文件与结果归档在本机 SQLite，不经第三方托管、不调用外部 CDN。</span></li>
+      </ul>
+
+      <p class="login-fine">
+        会话保存为 HttpOnly Cookie（<span class="mono">mis_session</span>），默认 8 小时有效，前端读不到 token 原文。<br>
+        系统没有预置账号，也没有找回密码接口——忘记密码请由管理员在登录后到「账户与安全」修改。
+      </p>
+    </div>
+
+    <div class="login-panel">
+      <div class="login-card">
+        <h2 id="login-title">登录</h2>
+        <p class="lead" id="login-sub">使用您的工作账户继续。</p>
+
+        <div class="seg" role="tablist" aria-label="账户模式">
+          <button type="button" role="tab" class="" data-mode="signin" aria-selected="true">已有账户</button>
+          <button type="button" role="tab" data-mode="setup" aria-selected="false">首次部署 · 建管理员</button>
+        </div>
+
+        <p class="boot-flag" id="boot-flag" hidden>
+          账户库为空，<span class="num">GET /api/auth/me</span> 返回 <span class="num">needs_bootstrap = true</span>，
+          本页已自动切换为「建立第一个管理员」模式，提交将调用 <span class="num">POST /auth/bootstrap</span>。
+        </p>
+
+        <form class="form" id="login-form" novalidate>
+          <div class="field">
+            <label for="lg-user">用户名</label>
+            <input class="ctl" id="lg-user" name="user" type="text" autocomplete="username" placeholder="例如 analyst">
+          </div>
+          <div class="field">
+            <label for="lg-pass">密码</label>
+            <input class="ctl" id="lg-pass" name="pass" type="password" autocomplete="current-password" placeholder="至少 8 位">
+          </div>
+          <div class="field" id="lg-confirm-field" hidden>
+            <label for="lg-confirm">确认密码</label>
+            <input class="ctl" id="lg-confirm" name="confirm" type="password" autocomplete="new-password" placeholder="再次输入密码">
+          </div>
+
+          <p class="help">
+            演示凭据 <b>analyst / analyst</b>。真实后端行为：凭据不符 <b>401</b>（统一文案，不透露哪个字段错）、
+            连续失败触发限流 <b>429 + Retry-After</b>、维护中 <b>503</b>。
+          </p>
+
+          <p class="notice" id="login-notice" role="status" aria-live="polite" hidden></p>
+
+          <div class="field">
+            <button class="btn btn-primary btn-block" type="submit" id="login-submit">登录工作台</button>
+            <button class="btn btn-line btn-block" type="button" id="login-reset" hidden>返回，重新输入</button>
+          </div>
+        </form>
+
+        <div class="login-card-foot">
+          <span class="dot" id="health-dot"></span>
+          <span id="health-text">服务健康 <span class="mono">/api/health</span> · 正常</span>
+          <span>·</span><span>会话 8 小时后需重新登录</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- 应用外壳顶栏：横向主导航（03 的唯一导航结构；登录页与报告阅读页之外始终可见） -->
+<header class="topbar" id="app-topbar" hidden>
+  <div class="tb-brand">
+    <span class="tb-mark">MIS</span>
+    <span class="tb-name">AI Market Intelligence Studio</span>
+    <span class="srcpill">视觉方案示意 · 数据为占位样例 · 未接入后端</span>
+  </div>
+  <nav class="tb-nav" aria-label="主导航">
+    <button class="tb-link" data-go="workbench">工作台</button>
+    <button class="tb-link" data-go="analysis">市场分析</button>
+    <button class="tb-link" data-go="run">运行记录</button>
+    <button class="tb-link" data-go="reports">报告中心</button>
+    <button class="tb-link" data-go="account">账户与安全</button>
+  </nav>
+  <div class="tb-right">
+    <span class="tb-who">林可<span class="tb-role">市场分析 · analyst</span></span>
+    <button class="tb-out" data-go="login">退出登录</button>
+  </div>
+</header>
+
+<!-- 屏 ②：工作台。首屏主角仍是报告文档流，不是指标墙 -->
+<section class="screen" id="screen-workbench" aria-label="工作台">
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Workspace · 报告台账</p>
+        <h1>从上一份成稿接着读</h1>
+        <p>这里排的不是模块入口，而是交付物：先读已在手的报告，再看仍在跑的运行，最后才是数据集。</p>
+      </div>
+      <div class="head-facts" aria-label="资产计数">
+        <div class="fact"><span class="k">数据集</span><span class="v num">3</span></div>
+        <div class="fact"><span class="k">运行记录</span><span class="v num">20</span></div>
+        <div class="fact"><span class="k">已成稿</span><span class="v num">9</span></div>
+        <div class="fact"><span class="k">带警告</span><span class="v num warnc">2</span></div>
+      </div>
+    </div>
+
+    <section class="block">
+      <div class="block-head">
+        <h2><span class="no">01</span>最近在读的报告</h2>
+        <span class="aside-note">取 <span class="mono">GET /api/workflows/history</span> 中 <span class="mono">has_report = true</span> 的记录</span>
+      </div>
+      <ul class="doclist">
+        <li class="docrow">
+          <span class="docrow-no">R-2026-10-16/01</span>
+          <div>
+            <button data-go="report" style="text-align:left">
+              <span class="docrow-t">2026 年 Q3 国货美妆线上渠道增长归因分析</span>
+              <span class="docrow-q"><span class="k">委托提问</span>「哪些子品类在 Q3 真实驱动了增长，而不是靠折扣？」</span>
+              <span class="excerpt">本季度线上销售额同比增长 <b class="num">34.7%</b>；剔除折扣加深的贡献后，中性口径增速约 <b class="num">19.2%</b>，仅为账面增速的一半。</span>
+              <span class="docrow-meta">
+                <span class="tag st-ok" title="SUCCESS">已完成</span>
+                <span class="mono">成稿 2026-10-16 14:22</span><span>·</span>
+                <span>6 个编号小节</span><span>·</span>
+                <span>引用 <span class="num">17</span> 处工具结果</span><span>·</span>
+                <span>sales_q3_2026.xlsx</span>
+              </span>
+            </button>
+          </div>
+          <div class="docrow-side">
+            <button class="btn btn-primary btn-sm" data-go="report">阅读报告</button>
+            <span class="mono" style="font-size:11px;color:var(--ink-4)">wf_9f3c1a7b</span>
+          </div>
+        </li>
+        <li class="docrow">
+          <span class="docrow-no">R-2026-10-14/02</span>
+          <div>
+            <button data-go="reports" style="text-align:left">
+              <span class="docrow-t">旗舰护肤礼盒定价弹性与折扣依赖度评估</span>
+              <span class="docrow-q"><span class="k">委托提问</span>「礼盒提价 12% 后销量会掉多少，值不值？」</span>
+              <span class="docrow-meta">
+                <span class="tag st-warn" title="SUCCESS_WITH_WARNINGS">带警告完成</span>
+                <span class="mono">成稿 2026-10-14 10:05</span><span>·</span>
+                <span>校验提醒 <span class="num">2</span> 条</span><span>·</span>
+                <span>引用 <span class="num">12</span> 处工具结果</span>
+              </span>
+            </button>
+          </div>
+          <div class="docrow-side">
+            <button class="btn btn-line btn-sm" data-go="reports">在报告中心打开</button>
+            <span class="mono" style="font-size:11px;color:var(--ink-4)">wf_6b02d5ee</span>
+          </div>
+        </li>
+        <li class="docrow">
+          <span class="docrow-no">R-2026-10-09/01</span>
+          <div>
+            <button data-go="reports" style="text-align:left">
+              <span class="docrow-t">华东区渠道折扣深度与毛利率的边际关系</span>
+              <span class="docrow-q"><span class="k">委托提问</span>「折扣每加深 5 个点，毛利率损失多少？」</span>
+              <span class="docrow-meta">
+                <span class="tag st-ok" title="SUCCESS">已完成</span>
+                <span class="mono">成稿 2026-10-09 18:41</span><span>·</span>
+                <span>引用 <span class="num">21</span> 处工具结果</span>
+              </span>
+            </button>
+          </div>
+          <div class="docrow-side">
+            <button class="btn btn-line btn-sm" data-go="reports">在报告中心打开</button>
+            <span class="mono" style="font-size:11px;color:var(--ink-4)">wf_1c8e4a02</span>
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <h2><span class="no">02</span>仍在推进的运行</h2>
+        <span class="aside-note">进度只按 <span class="mono">step_index / total_steps</span>（已完成阶段数）表示，后端不提供阶段耗时</span>
+      </div>
+      <table class="tbl kv">
+        <thead>
+          <tr><th scope="col">运行编号</th><th scope="col">提问</th><th scope="col">数据集</th>
+              <th scope="col">状态</th><th scope="col">已完成阶段</th><th scope="col">提交时间</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-k="运行编号" class="num">wf_4a71f0c3</td>
+            <td data-k="提问">预售期加购到支付转化卡在哪一步</td>
+            <td data-k="数据集" class="filecell">promo_presale_2026.csv</td>
+            <td data-k="状态"><span class="tag st-run" title="EXECUTING">计算执行</span></td>
+            <td data-k="已完成阶段"><span class="num">2 / 6</span></td>
+            <td data-k="提交时间" class="num">10-16 15:02</td>
+          </tr>
+          <tr>
+            <td data-k="运行编号" class="num">wf_82b6de11</td>
+            <td data-k="提问">竞品价格带分布与自研产品定位</td>
+            <td data-k="数据集" class="filecell">competitor_price.csv</td>
+            <td data-k="状态"><span class="tag st-wait" title="PENDING">等待中</span></td>
+            <td data-k="阶段进度"><span class="num">0 / 6</span></td>
+            <td data-k="提交时间" class="num">10-16 15:11</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="runacts">
+        <button class="btn btn-line btn-sm" data-go="run">打开运行详情</button>
+        <span class="help">历史接口只有 <b>limit</b> 与 <b>offset</b>，没有排序与筛选，因此这里不提供排序下拉。</span>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <h2><span class="no">03</span>数据集</h2>
+        <span class="aside-note"><span class="mono">GET /api/datasets</span> · 文件名搜索与三种排序均为真实参数</span>
+      </div>
+      <div class="rail">
+        <div>
+          <h3>上传一份市场数据开始新分析</h3>
+          <p>支持 CSV / Excel。上传后进入数据集画像，再提问成稿。</p>
+        </div>
+        <div class="rail-r">
+          <label class="pickfile">选择文件<input type="file" id="file-pick" accept=".csv,.xlsx,.xls">
+          </label>
+          <span class="help" id="file-name">未选择文件 · 本机演示不发送数据</span>
+          <button class="btn btn-primary btn-sm" data-go="analysis">去发起分析</button>
+        </div>
+      </div>
+
+      <div class="toolrow" style="margin-top:20px">
+        <span class="search">
+          <span class="lbl">按文件名搜索</span>
+          <input type="search" id="ds-q" placeholder="例如 sales" aria-label="按文件名搜索数据集">
+        </span>
+        <span class="sortbtns" role="group" aria-label="排序字段">
+          <button data-sort="uploaded_at" aria-pressed="true">上传时间</button>
+          <button data-sort="filename" aria-pressed="false">文件名</button>
+          <button data-sort="rows" aria-pressed="false">行数</button>
+        </span>
+        <span class="help" id="ds-count">共 <b>3</b> 个数据集 · 第 1 页（limit 50）</span>
+      </div>
+
+      <div class="split">
+        <table class="tbl kv" id="ds-table">
+          <thead>
+            <tr><th scope="col">文件名</th><th scope="col">规模</th><th scope="col">上传时间</th><th scope="col">操作</th></tr>
+          </thead>
+          <tbody>
+            <tr data-name="sales_q3_2026.xlsx" data-rows="18642" data-at="2026-10-02">
+              <td data-k="文件名" class="filecell">sales_q3_2026.xlsx</td>
+              <td data-k="规模"><span class="num">18,642</span> 行 · <span class="num">14</span> 列</td>
+              <td data-k="上传时间" class="num">2026-10-02 09:18</td>
+              <td data-k="操作"><button class="btn btn-line btn-sm" data-go="analysis">选它提问</button></td>
+            </tr>
+            <tr data-name="east_china_sales.csv" data-rows="24105" data-at="2026-09-19">
+              <td data-k="文件名" class="filecell">east_china_sales.csv</td>
+              <td data-k="规模"><span class="num">24,105</span> 行 · <span class="num">11</span> 列</td>
+              <td data-k="上传时间" class="num">2026-09-19 16:44</td>
+              <td data-k="操作"><button class="btn btn-line btn-sm" data-go="analysis">选它提问</button></td>
+            </tr>
+            <tr data-name="promo_presale_2026.csv" data-rows="6317" data-at="2026-10-11">
+              <td data-k="文件名" class="filecell">promo_presale_2026.csv</td>
+              <td data-k="规模"><span class="num">6,317</span> 行 · <span class="num">9</span> 列</td>
+              <td data-k="上传时间" class="num">2026-10-11 11:07</td>
+              <td data-k="操作"><button class="btn btn-line btn-sm" data-go="analysis">选它提问</button></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="col-side">
+          <div class="side-block">
+            <h4>报告的固定五段式</h4>
+            <ul>
+              <li><span class="num">一</span>　目录与编号小节（本页即如此排）</li>
+              <li><span class="num">二</span>　关键发现要点块，结论写在段内</li>
+              <li><span class="num">三</span>　图表与数据表，四行图卡</li>
+              <li><span class="num">四</span>　Endnotes，逐条编号脚注</li>
+              <li><span class="num">五</span>　引用与口径块，[T#] ↔ 工具调用</li>
+            </ul>
+            <p class="foot">交付物长什么样，界面就是什么样。</p>
+          </div>
+          <div class="side-block">
+            <h4>状态口径 <span class="mono" style="font-size:10.5px;color:var(--ink-4)">WorkflowStatus</span></h4>
+            <ul>
+              <li><span class="tag st-wait">等待中</span> PENDING</li>
+              <li><span class="tag st-run">数据画像</span> PROFILING · <span class="tag st-run">制定计划</span> PLANNING</li>
+              <li><span class="tag st-run">计算执行</span> EXECUTING · <span class="tag st-run">生成图表</span> CHARTING</li>
+              <li><span class="tag st-run">撰写报告</span> REPORTING · <span class="tag st-run">校验数字</span> VALIDATING</li>
+              <li><span class="tag st-ok">已完成</span> SUCCESS · <span class="tag st-warn">带警告完成</span> SUCCESS_WITH_WARNINGS</li>
+              <li><span class="tag st-err">失败</span> FAILED</li>
+            </ul>
+            <p class="foot">中文是给读者的，原始枚举值保留在同一行，便于与后端日志核对。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="shell-foot">工作台 · 本页全部数字为占位样例，未接入后端</footer>
+  </div>
+</section>
+<!-- 屏 ③：市场分析。一条提问路径，页面自身按报告的编号节奏走 -->
+<section class="screen" id="screen-analysis" aria-label="市场分析">
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Market Analysis · 发起分析</p>
+        <h1>写下问题，剩下的交给流水线</h1>
+        <p>提问会进入 <span class="mono">POST /api/analysis</span>（返回 202 受理），随后由六阶段流水线逐步产出可追溯的报告。这里不承诺实时推送，状态通过每 1000ms 的轮询取回。</p>
+      </div>
+      <div class="head-facts">
+        <div class="fact"><span class="k">提问长度</span><span class="v num" id="head-count">0</span></div>
+        <div class="fact"><span class="k">最多阶段</span><span class="v num" id="head-steps">6</span></div>
+        <div class="fact"><span class="k">已选数据集</span><span class="v num" id="head-ds">—</span></div>
+      </div>
+    </div>
+
+    <div class="stepgrid" style="margin-top:20px" aria-label="当前路径">
+      <div class="stepitem on"><span class="mono">01</span><b>选数据集</b>已完成 · 18,642 行</div>
+      <div class="stepitem on"><span class="mono">02</span><b>写提问</b>正在输入</div>
+      <div class="stepitem"><span class="mono">03</span><b>发起分析</b>等待提交</div>
+      <div class="stepitem"><span class="mono">04</span><b>看 Agent 状态</b>发起后可见</div>
+      <div class="stepitem"><span class="mono">05</span><b>读报告</b>成稿后可见</div>
+    </div>
+
+    <div class="split">
+      <main>
+        <div class="ask">
+          <div class="ask-h"><span><span class="no">STEP 01</span>　选择数据集</span>
+            <span class="help">单选；画像摘要见右侧</span></div>
+          <div class="dslist-pick" id="ds-pick">
+            <label class="dsradio is-sel">
+              <input type="radio" name="ds" value="ds_01" checked aria-label="选择 sales_q3_2026.xlsx">
+              <span><span class="nm">sales_q3_2026.xlsx</span>
+                <span class="mt">18,642 行 · 14 列 · 上传于 2026-10-02 · 缺失率最高列 8.4%</span></span>
+              <span class="tag st-ok" title="upload_dir_ready = true">可分析</span>
+            </label>
+            <label class="dsradio">
+              <input type="radio" name="ds" value="ds_02" aria-label="选择 east_china_sales.csv">
+              <span><span class="nm">east_china_sales.csv</span>
+                <span class="mt">24,105 行 · 11 列 · 上传于 2026-09-19 · 检出重复行 37</span></span>
+              <span class="tag st-ok">可分析</span>
+            </label>
+            <label class="dsradio">
+              <input type="radio" name="ds" value="ds_03" aria-label="选择 promo_presale_2026.csv">
+              <span><span class="nm">promo_presale_2026.csv</span>
+                <span class="mt">6,317 行 · 9 列 · 上传于 2026-10-11 · 3 列缺失率 &gt; 20%</span></span>
+              <span class="tag st-warn" title="DatasetProfile.warnings">有告警</span>
+            </label>
+          </div>
+
+          <div class="ask-h" style="margin-top:26px"><span><span class="no">STEP 02</span>　写下分析需求</span>
+            <span class="help">2–500 字，中文即可</span></div>
+          <div class="field">
+            <textarea class="ctl" id="ask-q" rows="4"
+              placeholder="例如：哪些子品类在本季度真实驱动了增长，剔除折扣加深之后还剩多少？">哪些子品类在 2026 年 Q3 真实驱动了线上增长，剔除折扣加深之后还剩多少？请同时给出渠道口径的拆解。</textarea>
+            <div class="counter">
+              <span>越具体，规划阶段拆出的子问题越接近你的决策颗粒度。</span>
+              <span><span class="num" id="q-count">0</span> / 500</span>
+            </div>
+          </div>
+
+          <div class="toolrow" style="margin-top:18px;align-items:flex-end">
+            <div class="field" style="max-width:190px">
+              <label for="ask-steps">最多执行阶段数</label>
+              <select class="ctl" id="ask-steps">
+                <option value="3">3（快问快答）</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6" selected>6（默认成稿颗粒度）</option>
+                <option value="7">7</option>
+                <option value="8">8（多子问题）</option>
+              </select>
+            </div>
+            <div style="flex:1">
+              <p class="help"><b>max_steps</b> 是真实入参，范围 1–8：它限制流水线拆出的任务数上限，不是进度百分比。</p>
+            </div>
+          </div>
+
+          <p class="notice" id="ask-notice" role="status" aria-live="polite" hidden></p>
+
+          <div class="runacts">
+            <button class="btn btn-primary" id="ask-submit">发起分析</button>
+            <button class="btn btn-line" data-go="states">查看数据集为空的界面</button>
+          </div>
+        </div>
+
+        <div class="receipt" id="ask-receipt" hidden>
+          <h4>已受理 · HTTP 202</h4>
+          <div class="prow"><span>运行编号</span><span class="num" id="rc-id">wf_—</span></div>
+          <div class="prow"><span>数据集</span><span class="num" id="rc-ds">—</span></div>
+          <div class="prow"><span>状态</span><span class="mono">PENDING · 等待中</span></div>
+          <div class="prow"><span>受理时间</span><span class="num" id="rc-at">—</span></div>
+          <div class="prow"><span>阶段上限</span><span class="num" id="rc-steps">—</span></div>
+          <p class="help" style="margin-top:11px">状态接口此刻还不包含报告与图表；报告只在 <b>REPORTING</b> 阶段完成后由 <b>/report</b> 单独取回。</p>
+          <div class="runacts">
+            <button class="btn btn-primary btn-sm" data-go="run">看 Agent 怎么跑 →</button>
+            <span class="help">演示说明：受理回执为占位数据，未真正调用后端。</span>
+          </div>
+        </div>
+      </main>
+
+      <aside class="col-side" aria-label="数据集画像">
+        <div class="profile">
+          <h4>画像摘要 · sales_q3_2026.xlsx</h4>
+          <div class="prow"><span>行数 / 列数</span><span class="num">18,642 / 14</span></div>
+          <div class="prow"><span>语义类型</span><span class="num">9 数值 · 4 类别 · 1 日期</span></div>
+          <div class="prow"><span>缺失率最高列</span><span class="num">coupon_id 8.4%</span></div>
+          <div class="prow"><span>唯一值示例（品类）</span><span class="num">8 个</span></div>
+          <div class="prow"><span>销售额分位数</span><span class="num">P25 168 · P50 402 · P75 1,190</span></div>
+          <div class="prow"><span>重复行</span><span class="num">0</span></div>
+          <div class="prow"><span>告警</span><span class="num">2 条（日期列含 3 个非标准格式）</span></div>
+          <p class="help" style="margin-top:10px">来源 <b>GET /api/datasets/{id}/profile</b>。画像只描述数据形状，不下结论。</p>
+        </div>
+        <div class="side-block">
+          <h4>提问写得好不好，看这三点</h4>
+          <ul>
+            <li>指定<b>口径</b>：同比还是环比、含税与否、是否含退款。</li>
+            <li>指定<b>切分维度</b>：渠道、子品类、折扣档。</li>
+            <li>指定<b>决策动作</b>：希望据此调整什么，规划阶段会围绕它拆任务。</li>
+          </ul>
+          <p class="foot">缺任何一项，报告会替你补一个假设并写进口径块——但也因此更可能被误读。</p>
+        </div>
+        <div class="side-block">
+          <h4>本视图不含的入口</h4>
+          <ul>
+            <li>没有导出 / 下载 / 打印：后端未提供该接口。</li>
+            <li>没有删除或覆盖数据集：接口只有 upload / get / profile / list。</li>
+            <li>没有实时日志流：前端为 1000ms 轮询。</li>
+          </ul>
+          <p class="foot">宁可少一个入口，不多一个假入口。</p>
+        </div>
+      </aside>
+    </div>
+    <footer class="shell-foot">市场分析 · 提问与回执为占位样例，未接入后端</footer>
+  </div>
+</section>
+<!-- 屏 ④：Agent 运行。只用 step_index / total_steps 画阶梯，绝不出现阶段耗时 -->
+<section class="screen" id="screen-run" aria-label="Agent 运行">
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Agent Run · 运行详情</p>
+        <h1><span class="mono" style="font-size:20px">wf_4a71f0c3</span>　预售期加购到支付转化卡在哪一步</h1>
+        <p>状态由 <span class="mono">GET /api/workflows/{id}</span> 每 1000ms 轮询取回；该接口故意不含报告与结果，只含状态、阶段进度与任务简报。
+          进度读法是 <span class="mono">step_index</span> =<b>已完成</b>的阶段数，正在进行的那一阶段不计入。</p>
+      </div>
+      <div class="head-facts">
+        <div class="fact"><span class="k">状态</span><span class="v" style="font-size:15px" id="run-status">计算执行</span></div>
+        <div class="fact"><span class="k">已完成阶段</span><span class="v num"><span id="run-idx">2</span>/<span id="run-total">6</span></span></div>
+        <div class="fact"><span class="k">提交时间</span><span class="v num" style="font-size:13px">10-16 15:02</span></div>
+      </div>
+    </div>
+
+    <div class="runwrap" style="margin-top:26px">
+      <main>
+        <div class="ladder" id="ladder">
+          <div class="ladder-head">
+            <h3>六阶段阶梯</h3>
+            <span class="frac">已完成 <span id="frac-a">2</span> / <span id="frac-b">6</span> 个阶段</span>
+          </div>
+          <div class="rung done" data-g="1">
+            <span class="i">01</span><span class="g">✓</span>
+            <span><b>数据画像 <span class="tag st-ok" title="PROFILING">已完成</span></b>
+              <em>14 列语义类型判定 · 缺失率与分位数已登记 · 2 条告警写入报告的数据质量说明</em></span>
+          </div>
+          <div class="rung done" data-g="2">
+            <span class="i">02</span><span class="g">✓</span>
+            <span><b>制定计划 <span class="tag st-ok" title="PLANNING">已完成</span></b>
+              <em>拆出 5 个子问题 · 计划 8 次工具调用 · 依赖关系：T5 依赖 T3</em></span>
+          </div>
+          <div class="rung now" data-g="3">
+            <span class="i">03</span><span class="g">●</span>
+            <span><b>计算执行 <span class="tag st-run" title="EXECUTING">进行中</span></b>
+              <em>正在执行 T3 漏斗分段聚合；T5 因 T3 未回结果尚未启动</em></span>
+          </div>
+          <div class="rung" data-g="4">
+            <span class="i">04</span><span class="g">·</span>
+            <span><b>生成图表 <span class="tag st-wait" title="CHARTING">等待中</span></b>
+              <em>图型候选：柱状 / 折线 / 饼图 / 散点（后端真实支持的四种）</em></span>
+          </div>
+          <div class="rung" data-g="5">
+            <span class="i">05</span><span class="g">·</span>
+            <span><b>撰写报告 <span class="tag st-wait" title="REPORTING">等待中</span></b>
+              <em>正文数字只能来自已回传的工具结果，段落带 cites</em></span>
+          </div>
+          <div class="rung" data-g="6">
+            <span class="i">06</span><span class="g">·</span>
+            <span><b>校验数字 <span class="tag st-wait" title="VALIDATING">等待中</span></b>
+              <em>逐条核对正文与工具结果，问题按阻断 / 提醒 / 说明分级</em></span>
+          </div>
+          <p class="runfoot">
+            阶梯只表示<b>已完成阶段数</b>。后端没有阶段级时间戳，任何「本阶段用了 3.2 秒」都是编造，因此这里不出现秒数；
+            只有整条任务在终态时用 <span class="mono">created_at → finished_at</span> 算一次真实总耗时。
+          </p>
+        </div>
+
+        <div class="runacts">
+          <button class="btn btn-primary btn-sm" id="poll-once">演示：推进一次轮询</button>
+          <span class="help">真实前端每 1000ms 取一次状态；为便于评审，这里改为手动推进，避免用计时器伪造进度。</span>
+        </div>
+
+        <section class="block" style="padding-left:0;padding-right:0">
+          <div class="block-head">
+            <h2><span class="no">02</span>任务简报</h2>
+            <span class="aside-note">只暴露 <span class="mono">task_id / description / status / error</span>，工具参数属于排查信息，不给读者</span>
+          </div>
+          <table class="tbl kv">
+            <thead>
+              <tr><th scope="col">task_id</th><th scope="col">子问题</th><th scope="col">状态</th><th scope="col">备注</th></tr>
+            </thead>
+            <tbody>
+              <tr><td data-k="task_id" class="num">T1</td><td data-k="子问题">按日汇总加购、下单、支付笔数</td>
+                  <td data-k="状态"><span class="tag st-ok" title="SUCCESS">已完成</span></td>
+                  <td data-k="备注">返回 92 行</td></tr>
+              <tr><td data-k="task_id" class="num">T2</td><td data-k="子问题">计算各阶段转化率与流失量</td>
+                  <td data-k="状态"><span class="tag st-ok" title="SUCCESS">已完成</span></td>
+                  <td data-k="备注">口径：以加购笔数为分母</td></tr>
+              <tr><td data-k="task_id" class="num">T3</td><td data-k="子问题">按渠道分段拆解漏斗</td>
+                  <td data-k="状态"><span class="tag st-run" title="RETRYING">重试中</span></td>
+                  <td data-k="备注">首次执行结构校验未通过，重试第 1 / 2 次</td></tr>
+              <tr><td data-k="task_id" class="num">T4</td><td data-k="子问题">识别转化异常的日期区间</td>
+                  <td data-k="状态"><span class="tag st-wait" title="PENDING">等待中</span></td>
+                  <td data-k="备注">依赖 T2</td></tr>
+              <tr><td data-k="task_id" class="num">T5</td><td data-k="子问题">输出渠道对比表</td>
+                  <td data-k="状态"><span class="tag st-wait" title="PENDING">等待中</span></td>
+                  <td data-k="备注">依赖 T3，T3 失败则本任务转为「已跳过」</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="block" style="padding-left:0;padding-right:0">
+          <div class="block-head">
+            <h2><span class="no">03</span>另一条运行：失败终态</h2>
+            <span class="aside-note"><span class="mono">wf_2d9c5510</span> · 已完成 1 / 6 个阶段，整条任务真实耗时 41 秒（15:03 → 15:04）</span>
+          </div>
+          <div class="errbox">
+            <h3>失败 · FAILED</h3>
+            <p>这条运行完成 1 个阶段后停在「制定计划」：规划阶段没能从数据里找到提问涉及的字段，流水线判定无法继续，
+              于是没有报告、没有图表——界面不补一份「大概的」结论。失败时 <span class="mono">step_index</span> 不再推进，进度条不会假装走满。</p>
+            <p class="raw">error.code = <span class="mono">PLANNING_NO_MATCHING_COLUMN</span>　|　
+              error.message = 提问涉及的「支付渠道」在 14 列中不存在近似字段</p>
+            <table class="tbl kv" style="margin-top:14px">
+              <thead><tr><th scope="col">task_id</th><th scope="col">子问题</th><th scope="col">状态</th><th scope="col">备注</th></tr></thead>
+              <tbody>
+                <tr><td class="num" data-k="task_id">T1</td><td data-k="子问题">按日汇总支付笔数</td>
+                    <td data-k="状态"><span class="tag st-err" title="FAILED">失败</span></td>
+                    <td data-k="备注">工具返回缺少必需列，重试 2 次仍未通过</td></tr>
+                <tr><td class="num" data-k="task_id">T2</td><td data-k="子问题">按渠道拆解</td>
+                    <td data-k="状态"><span class="tag" title="SKIPPED">已跳过</span></td>
+                    <td data-k="备注">依赖 T1，被跳过而非连坐</td></tr>
+              </tbody>
+            </table>
+            <div class="runacts">
+              <button class="btn btn-primary btn-sm" data-go="analysis">回到提问，换个口径再试</button>
+              <button class="btn btn-line btn-sm" data-go="reports">回报告中心</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside class="col-side" aria-label="运行说明">
+        <div class="side-block">
+          <h4>为什么这里没有进度百分比</h4>
+          <ul>
+            <li>接口给的是 <b>step_index / total_steps</b>，即已完成阶段数。</li>
+            <li>阶段之间耗时差异极大（一次聚合 vs 一次成稿），按时间估算会误导。</li>
+            <li>轮询刷新不做闪烁动画，避免把「刷新」看成「进展」。</li>
+          </ul>
+        </div>
+        <div class="side-block">
+          <h4>校验问题的三级 <span class="mono" style="font-size:10px;color:var(--ink-4)">severity</span></h4>
+          <ul>
+            <li><span class="tag st-err">阻断</span> error：数字与工具结果不一致</li>
+            <li><span class="tag st-warn">提醒</span> warning：口径假设未在使用说明中交代</li>
+            <li><span class="tag">说明</span> info：图表纵轴起点、分组数等呈现提示</li>
+          </ul>
+          <p class="foot">出现「提醒」时终态为「带警告完成」，报告仍可读，但口径块会列出这些提醒。</p>
+        </div>
+        <div class="side-block">
+          <h4>阶段与工具调用怎么对上</h4>
+          <ul>
+            <li>正文角标 [T#] 指向 task_id，不是页码。</li>
+            <li>同一任务的多个数字共用一个角标，点击后证据表整行高亮。</li>
+          </ul>
+          <p class="foot"><button class="btn btn-line btn-sm" data-go="report">看带角标的报告 →</button></p>
+        </div>
+      </aside>
+    </div>
+    <footer class="shell-foot">Agent 运行 · 阶梯与任务简报为占位样例，未接入后端</footer>
+  </div>
+</section>
+<!-- 屏 ⑤：报告中心。历史接口只有 limit/offset，因此只有翻页，没有排序与筛选器 -->
+<section class="screen" id="screen-reports" aria-label="报告中心">
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Report Library · 报告中心</p>
+        <h1>成稿台账</h1>
+        <p>一份报告对应一条已完成的运行。列表不显示「预计完成时间」，因为后端不提供阶段耗时，任何预估都靠不住。</p>
+      </div>
+      <div class="head-facts">
+        <div class="fact"><span class="k">已归档报告</span><span class="v num">9</span></div>
+        <div class="fact"><span class="k">本页</span><span class="v num">1–6</span></div>
+        <div class="fact"><span class="k">每页</span><span class="v num">20</span></div>
+      </div>
+    </div>
+
+    <div class="block" style="padding-top:24px">
+      <div class="filterline">
+        <b>取数方式</b>
+        <span class="mono">GET /api/workflows/history?limit=20&amp;offset=0</span>
+        <span>后端只有这两个参数：没有排序、没有状态筛选、没有关键词，因此界面上不放这三种控件。</span>
+      </div>
+
+      <table class="tbl kv">
+        <thead>
+          <tr><th scope="col">编号</th><th scope="col">报告标题</th><th scope="col">委托提问</th>
+              <th scope="col">终态</th><th scope="col">成稿时间</th><th scope="col">引用</th><th scope="col">操作</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-k="编号" class="num">R-2026-10-16/01</td>
+            <td data-k="标题">2026 年 Q3 国货美妆线上渠道增长归因分析</td>
+            <td data-k="提问">哪些子品类真实驱动了增长，剔除折扣后还剩多少</td>
+            <td data-k="终态"><span class="tag st-ok" title="SUCCESS">已完成</span></td>
+            <td data-k="成稿时间" class="num">10-16 14:22</td>
+            <td data-k="引用" class="num">17</td>
+            <td data-k="操作"><button class="btn btn-primary btn-sm" data-go="report">阅读</button></td>
+          </tr>
+          <tr>
+            <td data-k="编号" class="num">R-2026-10-14/02</td>
+            <td data-k="标题">旗舰护肤礼盒定价弹性与折扣依赖度评估</td>
+            <td data-k="提问">礼盒提价 12% 后销量会掉多少，值不值</td>
+            <td data-k="终态"><span class="tag st-warn" title="SUCCESS_WITH_WARNINGS">带警告完成</span></td>
+            <td data-k="成稿时间" class="num">10-14 10:05</td>
+            <td data-k="引用" class="num">12</td>
+            <td data-k="操作"><button class="btn btn-line btn-sm" data-go="report">阅读</button></td>
+          </tr>
+          <tr>
+            <td data-k="编号" class="num">R-2026-10-09/01</td>
+            <td data-k="标题">华东区渠道折扣深度与毛利率的边际关系</td>
+            <td data-k="提问">折扣每加深 5 个点，毛利率损失多少</td>
+            <td data-k="终态"><span class="tag st-ok" title="SUCCESS">已完成</span></td>
+            <td data-k="成稿时间" class="num">10-09 18:41</td>
+            <td data-k="引用" class="num">21</td>
+            <td data-k="操作"><button class="btn btn-line btn-sm" data-go="report">阅读</button></td>
+          </tr>
+          <tr>
+            <td data-k="编号" class="num">—</td>
+            <td data-k="标题" class="strike">（无报告）</td>
+            <td data-k="提问">会员分层后的复购间隔分布</td>
+            <td data-k="终态"><span class="tag st-err" title="FAILED">失败</span></td>
+            <td data-k="成稿时间" class="num">10-08 09:12</td>
+            <td data-k="引用" class="num">0</td>
+            <td data-k="操作"><button class="btn btn-line btn-sm" data-go="run">看运行详情</button></td>
+          </tr>
+          <tr>
+            <td data-k="编号" class="num">—</td>
+            <td data-k="标题" class="strike">（尚未成稿）</td>
+            <td data-k="提问">预售期加购到支付转化卡在哪一步</td>
+            <td data-k="终态"><span class="tag st-run" title="EXECUTING">计算执行</span></td>
+            <td data-k="成稿时间" class="num">—（15:02 提交）</td>
+            <td data-k="引用" class="num">—</td>
+            <td data-k="操作"><button class="btn btn-line btn-sm" data-go="run">看运行详情</button></td>
+          </tr>
+          <tr>
+            <td data-k="编号" class="num">R-2026-09-28/03</td>
+            <td data-k="标题">大促前 30 天预售转化结构拆解</td>
+            <td data-k="提问">预售期的转化瓶颈在加购还是支付</td>
+            <td data-k="终态"><span class="tag st-ok" title="SUCCESS">已完成</span></td>
+            <td data-k="成稿时间" class="num">09-28 11:36</td>
+            <td data-k="引用" class="num">9</td>
+            <td data-k="操作"><button class="btn btn-line btn-sm" data-go="report">阅读</button></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="pager">
+        <button class="btn btn-line btn-sm" disabled>上一页</button>
+        <span class="rng">offset 0 · 第 1–6 条，共 9 条</span>
+        <button class="btn btn-line btn-sm" id="next-page">下一页</button>
+        <span class="help">翻页会重新向服务端要那一页的真实记录；前端不缓存整份列表，也不用假数据凑页码。</span>
+      </div>
+    </div>
+    <footer class="shell-foot">报告中心 · 台账为占位样例，未接入后端</footer>
+  </div>
+</section>
+<!-- 屏 ⑥：报告阅读页 = 本方案的主角。DOM 是一个 article + 编号小节 + Endnotes + 引用与口径块 -->
+<section class="screen is-active" id="screen-report" aria-label="报告阅读">
+  <div class="reader">
+
+    <!-- 页内左侧：章节目录锚点（不是功能导航，只服务这份文档的阅读位置感） -->
+    <aside class="toc" aria-label="报告目录">
+      <p class="cap">目录 · Contents</p>
+      <p class="doc">2026 年 Q3 国货美妆线上渠道增长归因分析</p>
+      <p class="idn">R-2026-10-16/01<br>wf_9f3c1a7b · 6 节 · 2 图 1 表</p>
+      <ol id="toc-list">
+        <li><a href="#sec-01" class="is-on"><span class="n">01</span><span>执行摘要与关键发现</span></a></li>
+        <li><a href="#sec-02"><span class="n">02</span><span>研究问题与统计口径</span></a></li>
+        <li><a href="#sec-03"><span class="n">03</span><span>总体增长结构</span></a></li>
+        <li class="sub"><a href="#sec-03-1"><span class="n">3.1</span><span>量与价的拆解</span></a></li>
+        <li class="sub"><a href="#sec-03-2"><span class="n">3.2</span><span>子品类贡献排序</span></a></li>
+        <li><a href="#sec-04"><span class="n">04</span><span>折扣依赖度与边际关系</span></a></li>
+        <li><a href="#sec-05"><span class="n">05</span><span>局限与数据质量说明</span></a></li>
+        <li><a href="#sec-06"><span class="n">06</span><span>Endnotes</span></a></li>
+        <li><a href="#sec-cites"><span class="n">07</span><span>引用与口径块</span></a></li>
+      </ol>
+      <div class="toc-foot">
+        滚动时目录同步高亮。<br>正文数字后的 <span class="mono" style="color:var(--accent)">[T#]</span> 是工具调用编号，点击落到本节末尾的证据表。
+      </div>
+    </aside>
+
+    <main class="article">
+      <article class="doc-body" id="doc-body">
+
+        <header class="doc-titlebar">
+          <p class="eyebrow">Market Intelligence Report · 商业洞察报告</p>
+          <h1>2026 年 Q3 国货美妆<br>线上渠道增长归因分析</h1>
+          <p class="byline">
+            委托提问：「哪些子品类在 Q3 真实驱动了线上增长，而不是靠折扣？请给出渠道口径的拆解。」<br>
+            编制：AI Market Intelligence Studio 多智能体流水线（画像 → 规划 → 执行 → 图表 → 报告 → 校验）<br>
+            数据集：<span class="mono">sales_q3_2026.xlsx</span>（<span class="num">18,642</span> 行 × <span class="num">14</span> 列）　|　
+            成稿：<span class="num">2026-10-16 14:22</span>　|　
+            终态：<span class="tag st-ok" title="SUCCESS">已完成</span>　|　
+            校验：核对 <span class="num">17</span> 处，一致 <span class="num">17</span> 处
+          </p>
+        </header>
+
+        <section class="doc-sec" id="sec-01">
+          <h2 class="sec-h2"><span class="no">01</span>执行摘要与关键发现</h2>
+          <p class="lead">
+            本季度线上销售额同比增长 <b class="num">34.7%</b><a class="cite" href="#en-T1" id="c1">[T1]</a>，
+            但增长分布不均：两个子品类贡献了 <b class="num">43.0%</b> 的增量<a class="cite" href="#en-T4">[T4]</a>，
+            同期平均折扣率上升 <b class="num">6.8</b> 个百分点<a class="cite" href="#en-T3" title="neutralize_discount_effect">[T3]</a>。
+            按中性口径还原后，增速回落到 <b class="num">19.2%</b><a class="cite" href="#en-T3">[T3]</a>，约为账面增速的一半。
+          </p>
+
+          <div class="findings">
+            <p class="lbl">Key Findings · 关键发现</p>
+            <ul>
+              <li><b>增长是真实的，但结构不健康。</b>剔除折扣加深的影响后，中性口径增速为
+                <b class="num">19.2%</b><a class="cite" href="#en-T3">[T3]</a>，其中精华类与护肤礼盒两项贡献了主要增量。</li>
+              <li><b>折扣依赖度在升高。</b>护肤礼盒的折扣弹性为 <b class="num">-1.42</b><a class="cite" href="#en-T5">[T5]</a>：
+                折扣每加深 5 个点，销量约增 <b class="num">7.1%</b>，毛利率约降 <b class="num">3.4</b> 个点。</li>
+              <li><b>价格弹性已进入收益递减段。</b>折扣深度超过 <b class="num">8%</b> 后，每加深 1 个点带来的增量订单减少约
+                <b class="num">31%</b><a class="cite" href="#en-T5">[T5]</a>。</li>
+              <li><b>需要读者注意的口径前提：</b>本报告的「同比」以 2025 年 Q3 同口径订单为基期，
+                不含退款冲销；详见第 02 节与注 1、注 2。</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="doc-sec" id="sec-02">
+          <h2 class="sec-h2"><span class="no">02</span>研究问题与统计口径</h2>
+          <p>
+            委托方需要区分「真实需求增长」与「折扣驱动的短期放量」。分析窗口为 <span class="num">2026-07-01</span> 至
+            <span class="num">2026-09-30</span> 的线上全渠道订单，共 <b class="num">18,642</b> 条记录<a class="cite" href="#en-T1">[T1]</a>，
+            未做行级剔除，重复行检出 <span class="num">0</span> 条<a class="cite" href="#en-T6">[T6]</a>。
+          </p>
+          <div class="method">
+            <h4>方法说明 · 三个口径先说清</h4>
+            <div class="prow"><span>账面同比</span><span>本期销售额 / 去年同期销售额 − 1；去年同期口径未随退款政策变更而重述。</span></div>
+            <div class="prow"><span>中性口径</span><span>把折扣率还原到基期水平后的同比增速，由价格弹性模型反推，见注 3。</span></div>
+            <div class="prow"><span>折扣深度</span><span>（标价 − 实付）/ 标价，按成交笔数加权，非按 SKU 算术平均。</span></div>
+            <p class="help" style="margin-top:9px">
+              三处口径都写在报告里而不是口头交代，因为咨询交付物最常见的失效方式，是读者把「账面」当成「真实」。
+            </p>
+          </div>
+        </section>
+
+        <section class="doc-sec" id="sec-03">
+          <h2 class="sec-h2"><span class="no">03</span>总体增长结构</h2>
+          <p>
+            本季度线上销售额 <b class="num">1.42</b> 亿元，同比增量 <b class="num">141.2</b> 百万元<a class="cite" href="#en-T1">[T1]</a>。
+            增量按子品类拆解后呈明显的头部集中：前两项合计 <b class="num">78.2%</b> 的增量来自 <b class="num">22.4%</b> 的销售占比<a class="cite" href="#en-T4">[T4]</a>。
+          </p>
+
+          <!-- 图卡：固定四行（中性名词标题 / 口径或结论 / 单位 / 来源+数据截至） -->
+          <figure class="fig" id="fig-1">
+            <span class="fig-l1"><span class="no">图 1</span>2026 年 Q3 线上销售额同比增量按子品类拆解</span>
+            <span class="fig-l2">增量集中在护肤礼盒与精华类两项，其余六个子品类合计贡献不足三成。</span>
+            <span class="fig-l3">单位：百万元（CNY，含税，未扣退款）</span>
+            <div class="fig-plot">
+              <svg class="chart" viewBox="0 0 640 290" role="img"
+                   aria-label="柱状图：护肤礼盒增量 62.1 百万元，精华类 48.6 百万元，其余六类合计 30.5 百万元，总计 141.2 百万元">
+                <g class="grid">
+                  <line x1="56" y1="40" x2="620" y2="40"></line>
+                  <line x1="56" y1="95" x2="620" y2="95"></line>
+                  <line x1="56" y1="150" x2="620" y2="150"></line>
+                  <line x1="56" y1="205" x2="620" y2="205"></line>
+                  <line x1="56" y1="250" x2="620" y2="250" class="axis"></line>
+                  <line x1="56" y1="40" x2="56" y2="250" class="axis"></line>
+                </g>
+                <g class="glabel num">
+                  <text x="48" y="44" text-anchor="end">80</text>
+                  <text x="48" y="99" text-anchor="end">60</text>
+                  <text x="48" y="154" text-anchor="end">40</text>
+                  <text x="48" y="209" text-anchor="end">20</text>
+                  <text x="48" y="254" text-anchor="end">0</text>
+                </g>
+                <rect class="bcol" x="88" y="83" width="76" height="167" fill="var(--c1)"></rect>
+                <rect class="bcol d2" x="222" y="121" width="76" height="129" fill="var(--c2)"></rect>
+                <rect class="bcol d3" x="356" y="168" width="76" height="82" fill="var(--c3)"></rect>
+                <rect class="bcol d4" x="490" y="72" width="76" height="178" fill="var(--c5)"></rect>
+                <g class="bval">
+                  <text x="126" y="75" text-anchor="middle">62.1</text>
+                  <text x="260" y="113" text-anchor="middle">48.6</text>
+                  <text x="394" y="160" text-anchor="middle">30.5</text>
+                  <text x="528" y="64" text-anchor="middle">141.2</text>
+                </g>
+                <g class="glabel">
+                  <text x="126" y="272" text-anchor="middle">护肤礼盒</text>
+                  <text x="260" y="272" text-anchor="middle">精华类</text>
+                  <text x="394" y="272" text-anchor="middle">其余六类合计</text>
+                  <text x="528" y="272" text-anchor="middle">全部增量</text>
+                </g>
+              </svg>
+            </div>
+            <span class="fig-l4">来源：<span class="mono">aggregate_sales_yoy</span> [T1] 与 <span class="mono">group_stats_by_category</span> [T4]；
+              图中数值取自报告表格原值，未二次计算。数据截至 <span class="num">2026-09-30</span>；纵轴自 0 起，未截断。</span>
+          </figure>
+
+          <h3 class="sec-h3" id="sec-03-1">3.1　量与价的拆解</h3>
+          <p>
+            把销售额增量拆成订单量与客单价两项：订单量同比 <b class="num">+21.6%</b>，客单价同比 <b class="num">+10.8%</b><a class="cite" href="#en-T2">[T2]</a>。
+            客单价抬升主要来自礼盒组合装的结构变化，而非单品提价——同一 SKU 的成交均价变动区间在
+            <span class="num">-2.1%</span> 至 <span class="num">+3.4%</span> 之间<a class="cite" href="#en-T2">[T2]</a>。
+          </p>
+
+          <h3 class="sec-h3" id="sec-03-2">3.2　子品类贡献排序</h3>
+          <p>下表按同比增量排序。「中性口径增速」为还原折扣后的可比值，与账面增速的差额即为折扣贡献。</p>
+
+          <figure class="fig" id="tab-1">
+            <span class="fig-l1"><span class="no">表 1</span>子品类同比增量、折扣率与中性口径增速</span>
+            <span class="fig-l2">两个高增量子品类的折扣率同时最高，中性口径增速与账面增速的差额也最大。</span>
+            <span class="fig-l3">单位：增量为百万元，其余为百分比（%）</span>
+            <div class="fig-plot">
+              <table class="tbl">
+                <thead>
+                  <tr><th scope="col">子品类</th><th scope="col" class="rt">同比增量</th><th scope="col" class="rt">账面增速</th>
+                      <th scope="col" class="rt">平均折扣率</th><th scope="col" class="rt">中性口径增速</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>护肤礼盒</td><td class="rt num">62.1</td><td class="rt num">41.2%</td>
+                      <td class="rt num">25.0%</td><td class="rt num">22.4%</td></tr>
+                  <tr><td>精华类</td><td class="rt num">48.6</td><td class="rt num">38.7%</td>
+                      <td class="rt num">23.8%</td><td class="rt num">24.1%</td></tr>
+                  <tr><td>面膜</td><td class="rt num">8.9</td><td class="rt num">12.6%</td>
+                      <td class="rt num">19.4%</td><td class="rt num">11.8%</td></tr>
+                  <tr><td>防晒</td><td class="rt num">7.4</td><td class="rt num">14.1%</td>
+                      <td class="rt num">17.2%</td><td class="rt num">13.5%</td></tr>
+                  <tr><td>其余四类合计</td><td class="rt num">14.2</td><td class="rt num">10.3%</td>
+                      <td class="rt num">18.6%</td><td class="rt num">9.7%</td></tr>
+                  <tr class="hl"><td>全渠道合计</td><td class="rt num">141.2</td><td class="rt num">34.7%</td>
+                      <td class="rt num">22.4%</td><td class="rt num">19.2%</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <span class="fig-l4">来源：<span class="mono">group_stats_by_category</span> [T4]；中性口径由
+              <span class="mono">neutralize_discount_effect</span> [T3] 还原，方法见注 3。
+              合计行为原值汇总，非分项四舍五入后相加（见注 5）。数据截至 <span class="num">2026-09-30</span>。</span>
+          </figure>
+        </section>
+        <section class="doc-sec" id="sec-04">
+          <h2 class="sec-h2"><span class="no">04</span>折扣依赖度与边际关系</h2>
+          <p>
+            以旗舰护肤礼盒为样本，把成交订单按折扣深度分为五档，分别计算销量指数与毛利率指数（以无折扣档为 <span class="num">100</span>）。
+            在 <b class="num">8%</b> 以内，销量增益大于毛利损失；跨过该点后两者关系反转<a class="cite" href="#en-T5">[T5]</a>。
+          </p>
+
+          <figure class="fig" id="fig-2">
+            <span class="fig-l1"><span class="no">图 2</span>护肤礼盒折扣深度与销量指数、毛利率指数的关系</span>
+            <span class="fig-l2">折扣加深至 15% 时销量指数升至 168，毛利率指数降至 71；两条线的交点在 8% 档右侧。</span>
+            <span class="fig-l3">单位：指数（无折扣档 = 100），横轴为折扣深度 %</span>
+            <div class="fig-plot">
+              <svg class="chart" viewBox="0 0 640 290" role="img"
+                   aria-label="折线图：折扣深度由 0% 增至 15% 时，销量指数从 100 升至 168，毛利率指数从 100 降至 71；8% 处为建议阈值">
+                <g class="grid">
+                  <line x1="56" y1="40" x2="620" y2="40"></line>
+                  <line x1="56" y1="95" x2="620" y2="95"></line>
+                  <line x1="56" y1="150" x2="620" y2="150"></line>
+                  <line x1="56" y1="205" x2="620" y2="205"></line>
+                  <line x1="56" y1="250" x2="620" y2="250" class="axis"></line>
+                  <line x1="56" y1="40" x2="56" y2="250" class="axis"></line>
+                </g>
+                <g class="glabel num">
+                  <text x="48" y="44" text-anchor="end">180</text>
+                  <text x="48" y="99" text-anchor="end">145</text>
+                  <text x="48" y="154" text-anchor="end">110</text>
+                  <text x="48" y="209" text-anchor="end">75</text>
+                  <text x="48" y="254" text-anchor="end">40</text>
+                </g>
+                <text class="series-lab" x="120" y="70">销量指数</text>
+                <text class="series-lab" x="452" y="232">毛利率指数</text>
+                <polyline class="line-a" points="80,150 200,127 320,105 440,83 560,55"></polyline>
+                <polyline class="line-b" points="80,150 200,161 320,177 440,193 560,214"></polyline>
+                <line class="thr" x1="320" y1="40" x2="320" y2="250"></line>
+                <text class="thr-lab" x="326" y="52">建议阈值 8%</text>
+                <g class="glabel num">
+                  <text x="80" y="272" text-anchor="middle">0%</text>
+                  <text x="200" y="272" text-anchor="middle">4%</text>
+                  <text x="320" y="272" text-anchor="middle">8%</text>
+                  <text x="440" y="272" text-anchor="middle">12%</text>
+                  <text x="560" y="272" text-anchor="middle">15%</text>
+                </g>
+              </svg>
+            </div>
+            <span class="fig-l4">来源：<span class="mono">fit_discount_elasticity</span> [T5]，样本为该 SKU 的 <span class="num">3,214</span> 笔成交订单；
+              纵轴起点为 40 而非 0，两条线的落差因此被放大，判读以数值为准。数据截至 <span class="num">2026-09-30</span>。</span>
+          </figure>
+
+          <p>
+            按此关系外推，Q4 若把礼盒折扣深度控制在 <b class="num">8%</b> 以内，并把释放出的预算转入内容渠道，
+            可在毛利率少降约 <span class="num">2.1</span> 个点的条件下保住约 <b class="num">86%</b> 的增量销量<a class="cite" href="#en-T5">[T5]</a>。
+            该外推依赖注 3 的弹性假设，样本期未覆盖双十一与年货节，属于本报告的已知局限（第 05 节）。
+          </p>
+        </section>
+
+        <section class="doc-sec" id="sec-05">
+          <h2 class="sec-h2"><span class="no">05</span>局限与数据质量说明</h2>
+          <p>以下限制会改变结论的可用范围，引用本报告时请一并转述。</p>
+          <ol class="limits">
+            <li>样本期只有<strong>一个季度</strong>，未覆盖双十一与年货节两个极端促销期，弹性测算在这两个时段可能偏高。</li>
+            <li>缺少<strong>竞品价格数据</strong>，折扣效应与竞争力变化无法分离；本报告的「中性口径」只剔除了自家折扣，未剔除竞品降价。</li>
+            <li><strong>中性口径是模型还原值</strong>，依赖注 3 的弹性假设，对低客单品类误差可能扩大。</li>
+            <li><strong>渠道字段只有线上三级来源</strong>，未含线下专柜；「全渠道合计」实为线上全渠道。</li>
+          </ol>
+          <div class="method">
+            <h4>校验结果 · 报告发布前自动核对</h4>
+            <div class="prow"><span><span class="tag st-ok" title="error">阻断</span> 数字与工具结果不一致</span><span class="num">0 处</span></div>
+            <div class="prow"><span><span class="tag st-warn" title="warning">提醒</span> 口径假设未在正文交代</span><span class="num">1 处（已补入注 3）</span></div>
+            <div class="prow"><span><span class="tag" title="info">说明</span> 呈现提示</span><span class="num">1 处（图 2 纵轴未从 0 起）</span></div>
+            <p class="help" style="margin-top:9px">校验只保证「正文数字 = 工具返回值」，不保证问题问得对。这两件事在报告里分开陈述。</p>
+          </div>
+        </section>
+
+        <section class="doc-sec" id="sec-06">
+          <h2 class="sec-h2"><span class="no">06</span>Endnotes　脚注</h2>
+          <div class="endnotes">
+            <ol>
+              <li id="note-1">同比基期为 2025-07-01 至 2025-09-30 的线上订单，口径与本期一致；去年同期退款政策在 8 月变更，未做重述，因此账面增速可能被高估约 1.2 个百分点。</li>
+              <li id="note-2">金额均为含税口径，未扣退款冲销；如需不含税，请将所有金额除以 1.13 后重新解读，增速比值不变。</li>
+              <li id="note-3">中性口径：以 <span class="mono">fit_discount_elasticity</span> 估计的折扣弹性（点估计 -1.42，95% 区间 -1.71 至 -1.13），把本期折扣率线性还原至基期水平后重新聚合；该还原假设弹性在区间内不变，是本报告最主要的模型风险。</li>
+              <li id="note-4">指数化：以各口径中的「无折扣档」为 100，其余档按销量与毛利率的相对水平折算，用于比较趋势而非绝对值。</li>
+              <li id="note-5">数字格式：金额千分位、增速保留 1 位小数；分项按各自原值四舍五入展示，因此分项相加可能与合计行相差 0.1–0.3。</li>
+            </ol>
+          </div>
+        </section>
+
+        <section class="doc-sec" id="sec-cites">
+          <h2 class="sec-h2"><span class="no">07</span>引用与口径块</h2>
+          <p>
+            正文每个 <a class="cite" href="#en-T1">[T1]</a> 形角标对应一次真实工具调用（<span class="mono">task_id</span>）。
+            本表由报告接口的 <span class="mono">citations</span> 字段渲染，不是手写清单；未被正文引用的调用也会列出，并标注用途。
+          </p>
+          <table class="tbl" id="ev-table">
+            <thead>
+              <tr><th scope="col" style="width:64px">角标</th><th scope="col" style="width:150px">工具调用</th>
+                  <th scope="col">产出</th><th scope="col" style="width:120px">取数口径</th><th scope="col" style="width:96px">正文引用</th></tr>
+            </thead>
+            <tbody>
+              <tr id="en-T1"><td><span class="mono" style="color:var(--accent);font-weight:700">T1</span></td>
+                <td class="filecell">aggregate_sales_yoy</td>
+                <td>18,642 行订单 → 本期与基期销售额、总额与增量 <span class="num">141.2</span> 百万元</td>
+                <td>含税、未扣退款</td><td class="num">4 处</td></tr>
+              <tr id="en-T2"><td><span class="mono" style="color:var(--accent);font-weight:700">T2</span></td>
+                <td class="filecell">decompose_volume_price</td>
+                <td>订单量 <span class="num">+21.6%</span>、客单价 <span class="num">+10.8%</span>；同 SKU 均价变动区间</td>
+                <td>按笔数计，不按件数</td><td class="num">2 处</td></tr>
+              <tr id="en-T3"><td><span class="mono" style="color:var(--accent);font-weight:700">T3</span></td>
+                <td class="filecell">neutralize_discount_effect</td>
+                <td>还原折扣后的中性增速 <span class="num">19.2%</span> 与分品类还原值</td>
+                <td>弹性模型反推，见注 3</td><td class="num">3 处</td></tr>
+              <tr id="en-T4"><td><span class="mono" style="color:var(--accent);font-weight:700">T4</span></td>
+                <td class="filecell">group_stats_by_category</td>
+                <td>8 个子品类的增量、增速、折扣率（表 1 全部单元格）</td>
+                <td>成交折扣按笔数加权</td><td class="num">3 处</td></tr>
+              <tr id="en-T5"><td><span class="mono" style="color:var(--accent);font-weight:700">T5</span></td>
+                <td class="filecell">fit_discount_elasticity</td>
+                <td>弹性点估计 <span class="num">-1.42</span> 与五档销量/毛利率指数（图 2 数据）</td>
+                <td>单 SKU 样本 <span class="num">3,214</span> 笔</td><td class="num">4 处</td></tr>
+              <tr id="en-T6"><td><span class="mono" style="color:var(--ink-3);font-weight:700">T6</span></td>
+                <td class="filecell">data_quality_scan</td>
+                <td>重复行 <span class="num">0</span>、缺失率清单、日期格式异常 3 条</td>
+                <td>画像阶段产出</td><td class="num">1 处</td></tr>
+              <tr id="en-T7"><td><span class="mono" style="color:var(--ink-3);font-weight:700">T7</span></td>
+                <td class="filecell">channel_funnel_split</td>
+                <td>渠道来源三级拆分（结果未进入正文，仅用于交叉检查总额）</td>
+                <td>—</td><td class="num">0 处</td></tr>
+            </tbody>
+          </table>
+          <p class="help" style="margin-top:12px">
+            接口：<span class="mono">GET /api/workflows/wf_9f3c1a7b/report</span> 的 <span class="mono">citations</span> 与
+            每段 <span class="mono">sections[].cites</span>；运行阶梯与图表文件来自同一次运行，图表为 PNG，由
+            <span class="mono">/charts/{filename}</span> 取回。本页图形为按同一数据重绘的示意。
+          </p>
+
+          <div class="endnotes" style="margin-top:20px">
+            <h3>引用本报告时的三句话</h3>
+            <ol>
+              <li>说清是账面口径还是中性口径——两者相差 <span class="num">15.5</span> 个百分点，足以改变决策。</li>
+              <li>带上数据截至日 <span class="num">2026-09-30</span>；本报告不随数据更新自动重算。</li>
+              <li>转述第 05 节的四条局限，尤其是竞品价格缺失。</li>
+            </ol>
+          </div>
+        </section>
+
+        <p class="doc-footline">
+          <span>R-2026-10-16/01 · 2026 年 Q3 国货美妆线上渠道增长归因分析</span>
+          <span>视觉方案示意 · 数据为占位样例 · 未接入后端</span>
+        </p>
+      </article>
+    </main>
+
+    <!-- 右侧：交付物的一部分（图录、口径速查、运行信息），不是操作面板 -->
+    <aside class="reader-side" aria-label="报告附录">
+      <div class="side-block">
+        <h4>图与表 <span class="mono" style="font-size:10px;color:var(--ink-4)">List of figures</span></h4>
+        <ul class="linklist">
+          <li><a href="#fig-1"><span>图 1　增量按子品类拆解</span><span class="num">p.3</span></a></li>
+          <li><a href="#tab-1"><span>表 1　折扣率与中性增速</span><span class="num">p.4</span></a></li>
+          <li><a href="#fig-2"><span>图 2　折扣深度与两条指数线</span><span class="num">p.6</span></a></li>
+        </ul>
+        <p class="foot">页码为示意；本产品的报告在页内滚动，不分页。</p>
+      </div>
+      <div class="side-block">
+        <h4>数据质量说明 <span class="tag st-ok" style="font-size:10px">2 条</span></h4>
+        <ul>
+          <li>日期列 <span class="mono">order_date</span> 有 3 个非标准格式值，已按 ISO 解析并计入原始行数。</li>
+          <li><span class="mono">coupon_id</span> 缺失 <span class="num">8.4%</span>；缺失视为「未使用优惠券」，可能低估折扣深度。</li>
+        </ul>
+        <p class="foot">来源：<span class="mono">data_quality_notes</span>，直接抄自数据集画像，不由模型编写。</p>
+      </div>
+      <div class="side-block">
+        <h4>这份报告怎么来的</h4>
+        <ul>
+          <li>运行编号 <span class="num">wf_9f3c1a7b</span></li>
+          <li>阶段 <span class="num">6 / 6</span> 已完成</li>
+          <li>工具调用 <span class="num">8</span> 次，正文引用 <span class="num">17</span> 处</li>
+          <li>模型参与撰写：<b>是</b>（<span class="mono">llm_used = true</span>）</li>
+          <li>成稿 <span class="num">2026-10-16 14:22</span></li>
+        </ul>
+        <p class="foot"><button class="btn btn-line btn-sm" data-go="run">回到那次运行的阶梯 →</button></p>
+      </div>
+    </aside>
+  </div>
+</section>
+<!-- 屏 ⑦：空态 / 加载态 / 错误态。空态区分三种成因，不共用一句话 -->
+<section class="screen" id="screen-states" aria-label="空态、加载态与错误态">
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">States · 异常与空档</p>
+        <h1>没有内容时，界面说什么</h1>
+        <p>空态要区分成因：还没有数据、筛选没命中、读取失败——三者的下一步动作完全不同，不能共用一句「暂无数据」。</p>
+      </div>
+      <div class="head-facts">
+        <div class="fact"><span class="k">空态成因</span><span class="v num">3</span></div>
+        <div class="fact"><span class="k">加载</span><span class="v" style="font-size:14px">轮询中</span></div>
+        <div class="fact"><span class="k">错误分级</span><span class="v num">3</span></div>
+      </div>
+    </div>
+
+    <section class="block">
+      <div class="block-head"><h2><span class="no">01</span>加载态</h2>
+        <span class="aside-note">报告尚未生成时不显示占位数字，只显示结构与骨架</span></div>
+      <div class="stategrid">
+        <div class="side-block">
+          <h4>报告取回中 · 骨架</h4>
+          <div class="skel" style="padding:14px">
+            <i class="t"></i><i></i><i></i><i></i><i style="width:64%"></i>
+          </div>
+          <p class="foot">骨架的宽度对应报告的「标题 / 摘要 / 小节」三层，读者能预期即将出现什么。
+            动效只是一次 180ms 淡入与骨架的慢闪，业务作用是表明「内容在取，不是没有」。</p>
+        </div>
+        <div class="side-block">
+          <h4>运行中 · 已完成 1 / 6，正在制定计划</h4>
+          <div style="padding:14px">
+            <div class="rung done" style="padding:8px 0"><span class="i">01</span><span class="g">✓</span>
+              <span><b>数据画像</b><em>14 列 · 2 条告警</em></span></div>
+            <div class="rung now" style="padding:8px 0"><span class="i">02</span><span class="g">●</span>
+              <span><b>制定计划</b><em>正在拆分子问题</em></span></div>
+            <div class="rung" style="padding:8px 0"><span class="i">03</span><span class="g">·</span>
+              <span><b>计算执行</b><em>等待上游</em></span></div>
+          </div>
+          <p class="foot">下一次状态查询在 <span class="mono">1s</span> 内发出；界面不做假进度条，也不猜剩余时间。</p>
+        </div>
+        <div class="side-block">
+          <h4>数据集列表 · 取回中</h4>
+          <div class="skel" style="padding:14px">
+            <i style="width:40%"></i><i style="width:70%"></i><i style="width:55%"></i>
+          </div>
+          <p class="foot">列表骨架行数不固定为 6 行「示例数据」，避免读者把骨架读成内容。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head"><h2><span class="no">02</span>空态三种成因</h2>
+        <span class="aside-note">同一块版式，三套文案与三个出口</span></div>
+      <div class="stategrid">
+        <div class="empty">
+          <h4><span class="tag st-wait">还没有数据</span>暂无数据集</h4>
+          <p>这台实例里还没有上传过任何文件。上传一份 CSV 或 Excel 之后，画像会立刻出现，然后就能提问。</p>
+          <button class="btn btn-primary btn-sm" data-go="workbench">上传数据集，开始第一次分析</button>
+          <p class="why">成因：GET /api/datasets 返回空数组</p>
+        </div>
+        <div class="empty">
+          <h4><span class="tag">筛选无结果</span>没有叫「reprt」的文件</h4>
+          <p>搜索按文件名子串匹配，当前关键词 <span class="mono">q = reprt</span> 没有命中。检查一下拼写，或清空关键词看全部 3 个。</p>
+          <button class="btn btn-line btn-sm" data-go="workbench">清空关键词</button>
+          <p class="why">成因：q 参数命中 0 条，服务端数据本身不为空</p>
+        </div>
+        <div class="empty">
+          <h4><span class="tag st-err">读取失败</span>没能取到数据集列表</h4>
+          <p>请求 <span class="mono">GET /api/datasets</span> 失败（服务未就绪或上传目录不可写）。已保留你当前填写的提问，重试即可。</p>
+          <div class="runacts">
+            <button class="btn btn-primary btn-sm" data-go="states">重试</button>
+            <button class="btn btn-line btn-sm" data-go="run">查看服务健康</button>
+          </div>
+          <p class="why">成因：HTTP 500 / 网络失败，区别于「确实没有数据」</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head"><h2><span class="no">03</span>错误态</h2>
+        <span class="aside-note">错误页也是交付物的一部分：说清发生了什么、还能做什么</span></div>
+      <div class="split">
+        <div class="errbox" style="margin-top:0">
+          <h3>这条分析失败了 · FAILED</h3>
+          <p>流水线停在第 2 / 6 个阶段：规划阶段找不到提问涉及的字段。没有报告，也没有图表。</p>
+          <p class="raw">error.code = PLANNING_NO_MATCHING_COLUMN</p>
+          <div class="runacts">
+            <button class="btn btn-primary btn-sm" data-go="analysis">回到提问改口径</button>
+            <button class="btn btn-line btn-sm" data-go="workbench">回工作台</button>
+          </div>
+        </div>
+        <div class="col-side">
+          <div class="notice warn" style="display:block">
+            <b>429 · 请求过多</b><br>
+            登录尝试过于频繁，账户临时锁定。<span class="mono">Retry-After: 900</span>，即 15 分钟后再试；
+            这不是凭据错误，所以界面不写「密码不正确」。
+          </div>
+          <div class="notice err" style="display:block">
+            <b>401 · 凭据不符</b><br>
+            用户名或密码不正确，请重新输入。后端统一文案，不透露是哪一个字段错了。
+          </div>
+          <div class="notice err" style="display:block">
+            <b>503 · 服务不可用</b><br>
+            服务正在维护，暂时无法登录。已保留你输入的用户名，恢复后可直接重试。
+          </div>
+        </div>
+      </div>
+    </section>
+    <footer class="shell-foot">异常态 · 文案与成因均为设计约定，未接入后端</footer>
+  </div>
+</section>
+
+<!-- 屏 ⑧：账户与安全。后端已有接口、前端还没做，因此这里给出设计而不做成假入口 -->
+<section class="screen" id="screen-account" aria-label="账户与安全">
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Account · 账户与安全</p>
+        <h1>一个分析师，两台设备</h1>
+        <p>会话与改密接口早已存在（<span class="mono">/api/auth/sessions</span>、<span class="mono">POST /api/auth/password</span>），
+          但界面一直没做。本方案把它们放在这里，而不是塞进顶栏下拉。</p>
+      </div>
+      <div class="head-facts">
+        <div class="fact"><span class="k">活跃会话</span><span class="v num">2</span></div>
+        <div class="fact"><span class="k">会话有效期</span><span class="v num">8h</span></div>
+      </div>
+    </div>
+
+    <div class="block acct" style="padding-top:26px">
+      <div class="ask">
+        <div class="ask-h"><span><span class="no">A</span>　修改密码</span><span class="help">需登录态</span></div>
+        <form class="form" id="pw-form" novalidate>
+          <div class="field"><label for="pw-old">当前密码</label>
+            <input class="ctl" id="pw-old" type="password" autocomplete="current-password"></div>
+          <div class="field"><label for="pw-new">新密码</label>
+            <input class="ctl" id="pw-new" type="password" autocomplete="new-password" placeholder="至少 8 位">
+            <p class="help">长度不足会由后端拒绝，界面不做二次规则猜测。</p></div>
+          <div class="field"><label for="pw-new2">确认新密码</label>
+            <input class="ctl" id="pw-new2" type="password" autocomplete="new-password"></div>
+          <p class="notice" id="pw-notice" role="status" aria-live="polite" hidden></p>
+          <div class="runacts">
+            <button class="btn btn-primary" type="submit">提交修改</button>
+            <span class="help">修改成功后当前会话继续有效，其它设备需重新登录。</span>
+          </div>
+        </form>
+      </div>
+
+      <div>
+        <div class="block-head">
+          <h2><span class="no">B</span>活跃会话</h2>
+          <span class="aside-note"><span class="mono">GET /api/auth/sessions</span> · 只返回元信息，不含 token</span>
+        </div>
+        <table class="tbl kv">
+          <thead><tr><th scope="col">设备</th><th scope="col">来源</th><th scope="col">登录时间</th><th scope="col">状态</th></tr></thead>
+          <tbody>
+            <tr class="hl"><td data-k="设备">这台设备 · Windows 浏览器</td><td data-k="来源" class="filecell">10.12.4.31</td>
+              <td data-k="登录时间" class="num">2026-10-16 14:58</td>
+              <td data-k="状态"><span class="tag st-run">当前会话</span></td></tr>
+            <tr><td data-k="设备">iPad · 会议室</td><td data-k="来源" class="filecell">10.12.4.77</td>
+              <td data-k="登录时间" class="num">2026-10-16 10:12</td>
+              <td data-k="状态"><span class="tag st-ok" title="active">仍在使用</span></td></tr>
+            <tr><td data-k="设备">macOS 浏览器</td><td data-k="来源" class="filecell">10.12.9.14</td>
+              <td data-k="登录时间" class="num">2026-10-15 18:03</td>
+              <td data-k="状态"><span class="tag st-warn" title="expired">已过期</span></td></tr>
+          </tbody>
+        </table>
+        <p class="help" style="margin-top:12px">
+          后端接口只提供会话元信息，没有撤销单个会话的端点，因此这里不放「注销此设备」按钮——宁缺不假。
+        </p>
+      </div>
+    </div>
+    <footer class="shell-foot">账户与安全 · 会话与凭据均为占位样例，未接入后端</footer>
+  </div>
+</section>
+<footer class="shell-foot" style="border-top:1px solid var(--rule)">
+  AI Market Intelligence Studio · 方案 03 国际咨询公司商业分析平台 · 本文件为界面设计示意，
+  页面内全部报告、数字与图表均为<b>占位样例</b>，未接入后端
+</footer>
+<script>
+(function(){
+  "use strict";
+  var $  = function(s,r){ return (r||document).querySelector(s); };
+  var $$ = function(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
+
+  /* ---------- 路由：视图即产品页面，hash 可前进后退 ---------- */
+  var VIEWS = ["login","workbench","analysis","run","reports","report","states","account"];
+  var screens = {};
+  VIEWS.forEach(function(v){ screens[v] = $("#screen-" + v); });
+  var topbar = $("#app-topbar");
+  var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function go(name, push){
+    if(VIEWS.indexOf(name) < 0) name = "report";
+    VIEWS.forEach(function(v){ screens[v].classList.toggle("is-active", v === name); });
+    /* 登录页没有应用顶栏：登录后才出现横向主导航 */
+    topbar.hidden = (name === "login");
+    $$(".proto-tabs button").forEach(function(b){
+      b.setAttribute("aria-selected", b.dataset.go === name ? "true" : "false");
+    });
+    $$(".tb-link").forEach(function(b){
+      b.classList.toggle("is-on", b.dataset.go === name || (name === "report" && b.dataset.go === "reports"));
+    });
+    if(push !== false && location.hash !== "#/" + name) location.hash = "#/" + name;
+    window.scrollTo(0, 0);
+    if(name === "report") syncToc();
+  }
+
+  document.addEventListener("click", function(e){
+    var t = e.target.closest("[data-go]");
+    if(t) go(t.dataset.go);
+  });
+  window.addEventListener("hashchange", function(){
+    var n = (location.hash || "").replace(/^#\//, "");
+    if(VIEWS.indexOf(n) >= 0 && !screens[n].classList.contains("is-active")) go(n, false);
+  });
+
+  /* ---------- 登录：needs_bootstrap 模式 + 四种真实响应 ---------- */
+  var lform = $("#login-form"), lnotice = $("#login-notice"), lsubmit = $("#login-submit"),
+      lreset = $("#login-reset"), ltitle = $("#login-title"), lsub = $("#login-sub"),
+      confirmField = $("#lg-confirm-field"), bootFlag = $("#boot-flag"),
+      healthDot = $("#health-dot"), healthText = $("#health-text");
+  var mode = "signin", fails = 0;
+
+  function notice(kind, html){
+    lnotice.className = "notice " + kind;
+    lnotice.innerHTML = html;
+    lnotice.hidden = false;
+  }
+
+  $$(".seg [data-mode]").forEach(function(b){
+    b.addEventListener("click", function(){
+      mode = b.dataset.mode;
+      $$(".seg [data-mode]").forEach(function(x){
+        var on = x === b;
+        x.setAttribute("aria-selected", on ? "true" : "false");
+        x.className = on ? "is-on" : "";
+      });
+      var setup = (mode === "setup");
+      confirmField.hidden = !setup;
+      bootFlag.hidden = !setup;
+      ltitle.textContent = setup ? "建立第一个管理员" : "登录";
+      lsub.textContent = setup ? "账户库为空，需要先创建管理员账户。" : "使用您的工作账户继续。";
+      lsubmit.textContent = setup ? "创建账户并进入工作台" : "登录工作台";
+      lnotice.hidden = true;
+    });
+  });
+
+  lform.addEventListener("submit", function(e){
+    e.preventDefault();
+    var user = $("#lg-user").value.trim(), pass = $("#lg-pass").value, again = $("#lg-confirm").value;
+    $("#lg-user").setAttribute("aria-invalid", user ? "false" : "true");
+    $("#lg-pass").setAttribute("aria-invalid", pass ? "false" : "true");
+
+    if(!user || !pass){ notice("err", "请填写用户名与密码后再继续。"); return; }
+    if(mode === "setup"){
+      if(pass !== again){ notice("err", "两次输入的密码不一致。后端只回一句统一文案，界面不去猜哪个字段错了。"); return; }
+      notice("ok", "管理员账户已登记（演示）。会话由服务端下发 <span class=\"mono\">mis_session</span>，正在进入工作台 …");
+      setTimeout(function(){ go("workbench"); }, 380);
+      return;
+    }
+    if(user === "maintenance"){
+      notice("err", "服务正在维护，暂时无法登录（503）。请稍后重试，或联系平台管理员。");
+      healthDot.classList.add("bad");
+      healthText.innerHTML = "服务健康 <span class=\"mono\">/api/health</span> · 上传目录未就绪";
+      lsubmit.disabled = true; lreset.hidden = false; return;
+    }
+    if(user === "analyst" && fails >= 3){
+      notice("warn", "尝试次数过多，服务端已限流（429 · <span class=\"mono\">Retry-After: 900</span>）。15 分钟后再试。");
+      lsubmit.disabled = true; lreset.hidden = false; return;
+    }
+    if(!(user === "analyst" && pass === "analyst")){
+      if(user === "analyst") fails++;
+      notice("err", "用户名或密码不正确，请重新输入。" + (fails === 3 ? "再失败一次将触发限流。" : ""));
+      return;
+    }
+    fails = 0;
+    notice("ok", "凭据校验通过（200），正在进入工作台 …");
+    setTimeout(function(){ go("workbench"); }, 380);
+  });
+
+  lreset.addEventListener("click", function(){
+    lform.reset(); fails = 0;
+    lsubmit.disabled = false; lreset.hidden = true; lnotice.hidden = true;
+    healthDot.classList.remove("bad");
+    healthText.innerHTML = "服务健康 <span class=\"mono\">/api/health</span> · 正常";
+    $("#lg-user").removeAttribute("aria-invalid");
+    $("#lg-pass").removeAttribute("aria-invalid");
+  });
+  /* ---------- 市场分析：入参校验按后端契约（question 2–500 字、max_steps 1–8） ---------- */
+  var q = $("#ask-q"), steps = $("#ask-steps"), askNotice = $("#ask-notice"), receipt = $("#ask-receipt");
+
+  function refreshAsk(){
+    var n = q.value.trim().length;
+    $("#q-count").textContent = n;
+    $("#q-count").className = (n > 0 && (n < 2 || n > 500)) ? "num bad" : "num";
+    $("#head-count").textContent = n;
+    $("#head-steps").textContent = steps.value;
+    var sel = $("#ds-pick input:checked");
+    $("#head-ds").textContent = sel ? sel.closest(".dsradio").querySelector(".nm").textContent.split(".")[0] : "—";
+  }
+  q.addEventListener("input", refreshAsk);
+  steps.addEventListener("change", refreshAsk);
+  $$("#ds-pick input").forEach(function(r){
+    r.addEventListener("change", function(){
+      $$("#ds-pick .dsradio").forEach(function(l){ l.classList.toggle("is-sel", l.contains(r) && r.checked); });
+      refreshAsk();
+    });
+  });
+  refreshAsk();
+
+  $("#ask-submit").addEventListener("click", function(){
+    var n = q.value.trim().length;
+    receipt.hidden = true; askNotice.hidden = false;
+    if(n < 2){ askNotice.className = "notice err";
+      askNotice.innerHTML = "提问太短：后端要求 2–500 字。太宽的问题会让规划阶段拆出一堆无用的子任务。"; return; }
+    if(n > 500){ askNotice.className = "notice err";
+      askNotice.innerHTML = "提问超出 500 字上限（当前 <span class=\"num\">" + n + "</span>）。请拆成两次分析。"; return; }
+    askNotice.className = "notice ok";
+    askNotice.innerHTML = "已受理（<span class=\"mono\">202</span>）：流水线已排队，报告要等 <span class=\"mono\">REPORTING</span> 阶段之后才取得到。";
+    $("#rc-ds").textContent = $("#ds-pick .dsradio.is-sel .nm").textContent;
+    $("#rc-steps").textContent = steps.value + "（max_steps）";
+    receipt.hidden = false;
+    receipt.scrollIntoView({ block:"nearest", behavior: reduced ? "auto" : "smooth" });
+  });
+
+  /* ---------- 工作台：文件名搜索与三种排序，都是真实接口参数 ---------- */
+  var sortKey = "uploaded_at", rows = $$("#ds-table tbody tr");
+  function applyList(){
+    var kw = ($("#ds-q").value || "").trim().toLowerCase(), shown = 0;
+    rows.forEach(function(tr){
+      tr.hidden = !!kw && tr.dataset.name.toLowerCase().indexOf(kw) < 0;
+      if(!tr.hidden) shown++;
+    });
+    rows.sort(function(a, b){
+      var av = sortKey === "rows" ? +a.dataset.rows : (sortKey === "filename" ? a.dataset.name : a.dataset.at);
+      var bv = sortKey === "rows" ? +b.dataset.rows : (sortKey === "filename" ? b.dataset.name : b.dataset.at);
+      return av > bv ? 1 : (av < bv ? -1 : 0);
+    }).forEach(function(tr){ $("#ds-table tbody").appendChild(tr); });
+    $("#ds-count").innerHTML = shown
+      ? "共 <b>" + shown + "</b> 个数据集 · 第 1 页（limit 50）"
+      : (kw ? "没有匹配「" + kw + "」的文件 · 服务端数据本身不为空" : "暂无数据集");
+  }
+  $("#ds-q").addEventListener("input", applyList);
+  $$(".sortbtns [data-sort]").forEach(function(b){
+    b.addEventListener("click", function(){
+      sortKey = b.dataset.sort;
+      $$(".sortbtns [data-sort]").forEach(function(x){
+        x.setAttribute("aria-pressed", x === b ? "true" : "false");
+      });
+      applyList();
+    });
+  });
+  $("#file-pick").addEventListener("change", function(e){
+    var f = e.target.files && e.target.files[0];
+    $("#file-name").textContent = f ? (f.name + " · 本机演示不发送数据") : "未选择文件 · 本机演示不发送数据";
+  });
+
+  /* ---------- Agent 运行：手动推进一次轮询，不用计时器伪造进度 ---------- */
+  var NAMES = ["数据画像","制定计划","计算执行","生成图表","撰写报告","校验数字"];
+  var RAW   = ["PROFILING","PLANNING","EXECUTING","CHARTING","REPORTING","VALIDATING"];
+  var done = 2, total = 6, finished = false;
+
+  function paint(){
+    $$("#ladder .rung").forEach(function(r){
+      var i = +r.dataset.g, isDone = i <= done, isNow = (i === done + 1) && !finished;
+      r.classList.toggle("done", isDone);
+      r.classList.toggle("now", isNow);
+      r.querySelector(".g").textContent = isDone ? "✓" : (isNow ? "●" : "·");
+      var tag = r.querySelector(".tag");
+      tag.className = "tag " + (isDone ? "st-ok" : (isNow ? "st-run" : "st-wait"));
+      tag.title = RAW[i-1];
+      tag.textContent = isDone ? "已完成" : (isNow ? "进行中" : "等待中");
+    });
+    $("#frac-a").textContent = done;
+    $("#run-idx").textContent = done;
+    var st = $("#run-status");
+    st.textContent = finished ? "已完成" : NAMES[done] || "等待中";
+    st.title = finished ? "SUCCESS" : (RAW[done] || "PENDING");
+  }
+  $("#poll-once").addEventListener("click", function(){
+    if(finished) return;
+    done = Math.min(done + 1, total);
+    if(done === total){
+      finished = true;
+      this.disabled = true;
+      this.textContent = "已到达终态 · SUCCESS";
+      var a = document.createElement("button");
+      a.className = "btn btn-primary btn-sm";
+      a.setAttribute("data-go", "report");
+      a.textContent = "阅读成稿报告 →";
+      this.parentNode.insertBefore(a, this.nextSibling);
+    }
+    paint();
+  });
+  paint();
+
+  /* ---------- 报告阅读页：目录随滚动高亮（长文档的位置感） ---------- */
+  var secs = $$("#doc-body .doc-sec"), tocLinks = $$("#toc-list a"), spyOn = false;
+  function syncToc(){
+    if(!screens.report.classList.contains("is-active") || !secs.length) return;
+    var cur = secs[0];
+    secs.forEach(function(s){ if(s.getBoundingClientRect().top <= 150) cur = s; });
+    tocLinks.forEach(function(a){ a.classList.toggle("is-on", a.getAttribute("href") === "#" + cur.id); });
+  }
+  window.addEventListener("scroll", function(){
+    if(spyOn) return;
+    window.requestAnimationFrame(syncToc);
+  }, { passive:true });
+
+  function jumpTo(id){
+    var t = document.getElementById(id);
+    if(!t) return false;
+    spyOn = true;
+    var sec = t.closest(".doc-sec");
+    tocLinks.forEach(function(a){
+      a.classList.toggle("is-on", !!sec && a.getAttribute("href") === "#" + sec.id);
+    });
+    window.scrollTo({ top: window.scrollY + t.getBoundingClientRect().top - 104, behavior: reduced ? "auto" : "smooth" });
+    setTimeout(function(){ spyOn = false; }, reduced ? 60 : 700);
+    return true;
+  }
+
+  /* 文档内部锚点全部是真跳转：目录、图录、[T#] 角标共用一条逻辑 */
+  document.addEventListener("click", function(e){
+    var a = e.target.closest('a[href^="#"]');
+    if(!a) return;
+    var id = a.getAttribute("href").slice(1);
+    if(!id || !document.getElementById(id)) return;
+    e.preventDefault();
+    var wasReport = screens.report.classList.contains("is-active");
+    if(!wasReport) go("report", true);
+    setTimeout(function(){
+      if(!jumpTo(id)) return;
+      if(a.classList.contains("cite")){
+        $$("#ev-table tr").forEach(function(r){ r.classList.remove("hl"); });
+        $$("#doc-body a.cite").forEach(function(x){ x.classList.remove("on"); });
+        var row = document.getElementById(id);
+        row.classList.add("hl");
+        a.classList.add("on");
+        row.scrollIntoView({ block:"center", behavior: reduced ? "auto" : "smooth" });
+      }
+    }, wasReport ? 0 : 260);
+  });
+
+  /* ---------- 账户：改密校验（真实接口 POST /api/auth/password） ---------- */
+  $("#pw-form").addEventListener("submit", function(e){
+    e.preventDefault();
+    var n = $("#pw-notice"); n.hidden = false;
+    var o = $("#pw-old").value, p1 = $("#pw-new").value, p2 = $("#pw-new2").value;
+    if(!o || !p1 || !p2){ n.className = "notice err"; n.innerHTML = "三项都必填：当前密码、新密码、确认新密码。"; return; }
+    if(p1.length < 8){ n.className = "notice err"; n.innerHTML = "新密码至少 8 位（以服务端校验为准，界面只是提前提醒）。"; return; }
+    if(p1 !== p2){ n.className = "notice err"; n.innerHTML = "两次输入的新密码不一致。"; return; }
+    n.className = "notice ok";
+    n.innerHTML = "密码已更新（演示）。当前会话继续有效，其它设备下次登录需用新密码。";
+    this.reset();
+  });
+
+  /* ---------- 初始视图：默认落在报告阅读页（本方案的首屏主角） ---------- */
+  var init = (location.hash || "").replace(/^#\//, "");
+  go(VIEWS.indexOf(init) >= 0 ? init : "report", false);
+})();
+</script>
+</body>
+</html>

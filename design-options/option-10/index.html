@@ -1,0 +1,1850 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>市场情报评论 · 第 R-2026-10-16/01 期 · 方案 10 样张</title>
+<style>
+/* ---------------------------------------------------------------------
+ * 设计底座（方案 10 · 商业情报杂志 + 数据分析平台）
+ * 立场：分析成果值得被「出版」，编号即品牌。
+ * 编辑感只有四个来源：编号系统、栅格规线、跨栏关系、留白节奏——
+ * 因此本版面零图片、零徽标插画、零衬线中文（本机实测无思源宋体）。
+ * 字族恰好两族：印刷无衬线（正文）+ 等宽（一切编号、口径、来源、数据截至）。
+ * 层级只用 字号 × 字重 × 墨深 三重编码；品红印色只做编辑标记（期号、编号、
+ * 跳转），永远不做图表系列色；图表用实测色板里的深蓝单系列，永远不做装饰。
+ * 三级进入：封面层（允许主张式大标题，参照 IBM IBV 只在封面用口号）
+ *   → 目录层 → 内文层；图卡固定四行（中性名词标题 / 一句话口径或结论 /
+ *   单位 / 来源 + 数据截至），参照 OWID 图卡；内页标题一律保持中性。
+ * ------------------------------------------------------------------- */
+:root {
+  --sans: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --paper: #FFFFFF;
+  --paper-2: #F1F2F3;
+  --paper-3: #E7E9EB;
+  --ink-900: #14171B;
+  --ink-800: #23272E;
+  --ink-600: #4A525B;
+  --ink-500: #5A626B;
+  --ink-400: #6A727A;
+  --rule-200: #D9DCE1;
+  --rule-300: #C2C7CD;
+
+  --spot: #6B1F5E;
+  --spot-deep: #4C0F42;
+  --spot-wash: #F3E9F1;
+
+  --st-wait: #5A626B;
+  --st-run: #7A5300;
+  --st-ok: #1E5B3A;
+  --st-warn: #8C4A00;
+  --st-fail: #8E2121;
+
+  /* 图表色取自实测色板（design-research §13.3 / 英国政府分析职能配色规则）；
+     永远不与上方状态色互换使用，也永远不使用 --spot 印色。 */
+  --data-1: #12436D;
+  --data-2: #28A197;
+  --data-3: #801650;
+  --data-4: #F46A25;
+  --data-ink: #F2F2F2;
+
+  --sp-1: 6px;
+  --sp-2: 12px;
+  --sp-3: 18px;
+  --sp-4: 28px;
+  --sp-5: 44px;
+  --sp-6: 72px;
+
+  --page: 1360px;
+  --gutter: 24px;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink-800);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+/* 数字一律 tabular-nums：表格里纵向可比是口径问题，不是美观问题 */
+.num, table, .mono { font-variant-numeric: tabular-nums; }
+
+.mono { font-family: var(--mono); }
+
+a { color: var(--spot-deep); text-decoration: none; border-bottom: 1px solid var(--rule-300); }
+a:hover { border-bottom-color: var(--spot); }
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: var(--paper);
+  border: 1px solid var(--rule-300);
+  border-radius: 2px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--ink-500); }
+button[data-primary] {
+  background: var(--ink-900);
+  color: var(--paper);
+  border-color: var(--ink-900);
+  font-weight: 600;
+}
+button[data-primary]:hover { background: var(--spot-deep); border-color: var(--spot-deep); }
+button:disabled { color: var(--ink-500); border-color: var(--rule-300); background: var(--paper-2); cursor: not-allowed; }
+
+:is(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--spot);
+  outline-offset: 2px;
+}
+
+[hidden] { display: none !important; }
+
+/* ===== 版记条：占位声明 + 三级进入的坐标，属于刊面而非贴纸 ===== */
+.sheet-head {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink-900);
+}
+.sheet-head__in {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 8px var(--sp-4);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: baseline;
+  justify-content: space-between;
+}
+.colophon-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--ink-500);
+  margin: 0;
+}
+.trail {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink-500);
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.trail b { color: var(--spot-deep); font-weight: 600; }
+.trail-sep { color: var(--rule-300); }
+
+/* ===== 刊头（纯排字，无徽标无插画） ===== */
+.masthead {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: var(--sp-5) var(--sp-4) var(--sp-3);
+  border-bottom: 3px double var(--ink-900);
+}
+.masthead__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-4);
+  align-items: end;
+}
+.masthead__title {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  line-height: 1.1;
+  margin: 0;
+  color: var(--ink-900);
+}
+.masthead__sub {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--ink-500);
+  margin: var(--sp-1) 0 0;
+}
+.issue-stamp { text-align: right; }
+.issue-stamp__no {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--spot-deep);
+  margin: 0;
+  line-height: 1.2;
+}
+.issue-stamp__derived {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-400);
+  margin: 4px 0 0;
+  line-height: 1.6;
+}
+
+/* ===== 视图容器 ===== */
+.view { max-width: var(--page); margin: 0 auto; padding: var(--sp-5) var(--sp-4) var(--sp-6); }
+.view--full { padding: 0; }
+.view--paper { background: var(--paper-2); }
+
+/* ===== 12 栏栅格：杂志的骨架，跨栏关系即编辑立场 ===== */
+.grid12 {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-4) var(--gutter);
+}
+.c1 { grid-column: span 1; } .c3 { grid-column: span 3; }
+.c4 { grid-column: span 4; } .c5 { grid-column: span 5; }
+.c6 { grid-column: span 6; } .c7 { grid-column: span 7; }
+.c8 { grid-column: span 8; } .c9 { grid-column: span 9; }
+.c12 { grid-column: 1 / -1; }
+
+/* ===== 编号条：所有层级的父子关系由编号声明，不靠容器嵌套 ===== */
+.run-head {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  border-top: 1px solid var(--ink-900);
+  padding-top: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+}
+.tag-no {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: var(--spot-deep);
+  white-space: nowrap;
+}
+.tag-kicker {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--ink-500);
+  text-transform: uppercase;
+}
+h2.sec-title { font-size: 26px; font-weight: 700; color: var(--ink-900); margin: 0; line-height: 1.3; }
+
+.kicker-band {
+  background: var(--ink-900);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  padding: 5px 10px;
+  display: inline-block;
+}
+
+/* ===== 封面层 ===== */
+.cover { padding: var(--sp-4) var(--sp-4) var(--sp-6); }
+.cover-lede { border-left: 3px solid var(--spot); padding-left: var(--sp-3); }
+.cover-claim {
+  font-size: 56px;
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -0.01em;
+  color: var(--ink-900);
+  margin: 0 0 var(--sp-3);
+}
+.cover-claim--sub { font-size: 26px; font-weight: 400; color: var(--ink-600); line-height: 1.4; }
+.cover-feature { font-size: 19px; color: var(--ink-800); margin: 0 0 var(--sp-2); }
+.feature-title {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--ink-900);
+  margin: var(--sp-2) 0 var(--sp-3);
+}
+.deck { font-size: 16px; color: var(--ink-600); margin: 0 0 var(--sp-3); }
+
+/* WHO 事实表式的顶部要点块 */
+.keyfacts { margin: 0; padding: 0; border-top: 1px solid var(--rule-300); }
+.keyfacts__title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--spot-deep);
+  margin: var(--sp-2) 0 var(--sp-1);
+}
+.keyfacts ul { margin: 0; padding: 0; list-style: none; }
+.keyfacts li {
+  border-bottom: 1px solid var(--rule-200);
+  padding: 10px 0 10px 30px;
+  position: relative;
+  font-size: 14px;
+  color: var(--ink-800);
+}
+.keyfacts li::before {
+  content: counter(kf, decimal-leading-zero);
+  counter-increment: kf;
+  position: absolute;
+  left: 0;
+  top: 11px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-400);
+}
+.keyfacts { counter-reset: kf; }
+
+/* 封面行动条：编号化入口，真实路径。门是栏位而不是卡片——用 auto-fit 让 1440 三列、768 单列自然落位 */
+.doors {
+  border-top: 1px solid var(--ink-900);
+  border-bottom: 1px solid var(--rule-300);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 var(--gutter);
+}
+.door {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--rule-200);
+}
+.door > div { min-width: 0; }
+.door a { font-weight: 600; color: var(--ink-900); border-bottom: 1px solid transparent; }
+.door a:hover { border-bottom-color: var(--spot); }
+.door p { margin: 0; font-size: 12px; color: var(--ink-500); }
+
+/* ===== 图卡：固定四行（中性名词标题 / 一句话口径或结论 / 单位 / 来源 + 数据截至） ===== */
+.fig {
+  margin: 0;
+  background: var(--paper);
+  border: 1px solid var(--rule-300);
+  border-top: 2px solid var(--ink-900);
+  padding: var(--sp-3);
+}
+.fig__no {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: var(--spot-deep);
+  margin: 0 0 var(--sp-1);
+}
+.fig__title { font-size: 15px; font-weight: 700; color: var(--ink-900); margin: 0 0 4px; line-height: 1.4; }
+.fig__note { font-size: 13px; color: var(--ink-600); margin: 0 0 var(--sp-2); line-height: 1.6; }
+.fig__unit {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-500);
+  margin: 0 0 var(--sp-2);
+  letter-spacing: 0.04em;
+}
+.fig__chart { display: block; width: 100%; height: auto; }
+.fig__src {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ink-500);
+  margin: var(--sp-2) 0 0;
+  border-top: 1px solid var(--rule-200);
+  padding-top: var(--sp-1);
+}
+.fig--mini { padding: var(--sp-2); }
+.fig--mini .fig__title { font-size: 14px; }
+
+/* ===== 目录层 ===== */
+.toc { list-style: none; margin: 0; padding: 0; counter-reset: none; }
+.toc li { border-bottom: 1px solid var(--rule-200); }
+.toc a, .toc .toc-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 0;
+  text-decoration: none;
+}
+.toc__no { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--spot-deep); }
+.toc__label { color: var(--ink-900); font-weight: 600; font-size: 15px; }
+.toc__label small { display: block; font-weight: 400; font-size: 12px; color: var(--ink-500); }
+.toc__mark { font-family: var(--mono); font-size: 11px; color: var(--ink-500); white-space: nowrap; }
+.toc a:hover .toc__label { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ===== 内文层：正文跨栏 + 右侧边注栏（规线） ===== */
+.body-text { font-size: 16px; line-height: 1.85; color: var(--ink-800); margin: 0 0 var(--sp-3); }
+.body-text--span { grid-column: 1 / span 9; }
+.side-note {
+  border-left: 1px solid var(--rule-300);
+  padding-left: var(--sp-3);
+  font-size: 13px;
+  color: var(--ink-600);
+}
+.side-note .mono { font-size: 11px; color: var(--ink-500); }
+
+/* 角标：cites 的可点击证据标记 */
+.cite {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: super;
+  line-height: 0;
+  color: var(--spot-deep);
+  border-bottom: 0;
+  padding: 0 1px;
+}
+.cite:hover { background: var(--spot-wash); }
+.cite--table::before { content: "表"; font-weight: 400; }
+.cite--fig::before { content: "图"; font-weight: 400; }
+
+/* 跳转落点提示：只在用户主动跳转时出现，200ms 位移不做装饰 */
+.target {
+  outline: 2px solid var(--spot);
+  outline-offset: 3px;
+  transition: outline-color 200ms linear;
+}
+
+/* ===== 表格 ===== */
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+caption {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--spot-deep);
+  padding-bottom: var(--sp-1);
+}
+th, td { border-bottom: 1px solid var(--rule-200); padding: 9px 10px; text-align: left; vertical-align: top; }
+thead th { border-bottom: 1px solid var(--ink-900); font-size: 12px; color: var(--ink-900); font-weight: 700; }
+tbody tr:hover { background: var(--paper-2); }
+td.num, th.num { text-align: right; font-family: var(--mono); }
+.t-id { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--spot-deep); white-space: nowrap; }
+
+/* ===== 状态：色 + 形 + 字 三重编码，枚举原值保留可查证 ===== */
+.st { display: inline-flex; gap: 6px; align-items: baseline; font-size: 12px; font-weight: 600; }
+.st::before { font-family: var(--mono); font-weight: 400; }
+.st--wait { color: var(--st-wait); } .st--wait::before { content: "○"; }
+.st--run { color: var(--st-run); } .st--run::before { content: "◐"; }
+.st--ok { color: var(--st-ok); } .st--ok::before { content: "●"; }
+.st--warn { color: var(--st-warn); } .st--warn::before { content: "◆"; }
+.st--fail { color: var(--st-fail); } .st--fail::before { content: "✕"; }
+.st code { font-family: var(--mono); font-size: 11px; color: var(--ink-400); font-weight: 400; }
+
+/* ===== 阶梯（只用 step_index / total_steps，绝不按时间画进度） ===== */
+.ladder { list-style: none; margin: 0; padding: 0; }
+.ladder li {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule-200);
+}
+.ladder .rung-no { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--ink-400); }
+.ladder li[data-done="1"] .rung-no { color: var(--st-ok); }
+.ladder li[data-now="1"] { background: var(--paper-2); }
+.ladder li[data-now="1"] .rung-no { color: var(--st-run); }
+.ladder li[data-fail="1"] .rung-no { color: var(--st-fail); }
+.rung-name { font-size: 14px; font-weight: 600; color: var(--ink-900); }
+.rung-name small { display: block; font-weight: 400; font-size: 12px; color: var(--ink-500); }
+.rung-state { font-family: var(--mono); font-size: 11px; color: var(--ink-500); }
+
+/* ===== 表单 ===== */
+label { display: block; font-size: 13px; font-weight: 600; color: var(--ink-900); margin: 0 0 6px; }
+input[type="text"], input[type="password"], input[type="search"], textarea, select {
+  width: 100%;
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--ink-800);
+  background: var(--paper);
+  border: 1px solid var(--rule-300);
+  border-bottom: 2px solid var(--ink-600);
+  border-radius: 2px;
+  padding: 10px 12px;
+}
+textarea { min-height: 104px; resize: vertical; line-height: 1.7; }
+input:hover, textarea:hover { border-color: var(--ink-500); }
+.field { margin: 0 0 var(--sp-3); }
+.hint { font-size: 12px; color: var(--ink-500); margin: 6px 0 0; }
+.counter { font-family: var(--mono); font-size: 11px; color: var(--ink-500); }
+.counter[data-over="1"] { color: var(--st-fail); }
+
+.steps { display: flex; flex-wrap: wrap; gap: 6px; }
+.steps label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 400;
+  border: 1px solid var(--rule-300);
+  border-radius: 2px;
+  padding: 7px 11px;
+  cursor: pointer;
+  color: var(--ink-600);
+}
+.steps input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.steps input:checked + span { color: var(--spot-deep); font-weight: 700; }
+.steps label:has(input:checked) { border-color: var(--spot); background: var(--spot-wash); }
+.steps label:focus-within { outline: 2px solid var(--spot); outline-offset: 2px; }
+
+/* 数据集单选卡（列表即目录，编号化） */
+.pick { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--ink-900); }
+.pick li { border-bottom: 1px solid var(--rule-200); }
+.pick label {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: baseline;
+  margin: 0;
+  padding: var(--sp-2) 0;
+  font-weight: 400;
+  cursor: pointer;
+}
+.pick input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.pick label:has(input:checked) { background: var(--spot-wash); }
+.pick label:focus-within { outline: 2px solid var(--spot); outline-offset: 2px; }
+.pick__name { font-size: 14px; font-weight: 600; color: var(--ink-900); }
+.pick__meta { font-family: var(--mono); font-size: 11px; color: var(--ink-500); }
+
+/* ===== 提示块 ===== */
+.box { border: 1px solid var(--rule-300); border-left: 3px solid var(--ink-600); padding: var(--sp-3); background: var(--paper); }
+.box--ok { border-left-color: var(--st-ok); }
+.box--warn { border-left-color: var(--st-warn); }
+.box--fail { border-left-color: var(--st-fail); }
+.box--note { border-left-color: var(--spot); background: var(--spot-wash); }
+.box h3 { font-size: 15px; margin: 0 0 var(--sp-1); color: var(--ink-900); }
+.box p { margin: 0 0 var(--sp-1); font-size: 13px; color: var(--ink-600); }
+.box p:last-child { margin-bottom: 0; }
+.box code { font-family: var(--mono); font-size: 12px; }
+.code-line {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-200);
+  padding: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink-600);
+}
+
+/* Endnotes / 引用 / 复用 */
+.notes { margin: 0; padding: 0; list-style: none; }
+.notes li {
+  border-bottom: 1px solid var(--rule-200);
+  padding: 10px 0 10px 42px;
+  position: relative;
+  font-size: 13px;
+  color: var(--ink-600);
+}
+.notes li::before {
+  content: "[" counter(en) "]";
+  counter-increment: en;
+  position: absolute;
+  left: 0;
+  top: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--spot-deep);
+}
+.notes { counter-reset: en; }
+
+/* 空 / 加载 / 错误 三态的示意条 */
+.state-strip { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0 0 var(--sp-4); }
+.skel { background: var(--paper-3); height: 12px; margin: 0 0 10px; }
+.skel--t { height: 22px; width: 46%; }
+.skel--c { height: 148px; }
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+.skel { animation: breathe 1.6s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+/* 登录：内文式两栏，左页边是主张句（仅封面层与登录层允许口号） */
+.login-wrap { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: var(--sp-5); }
+.login-panel { border: 1px solid var(--rule-300); border-top: 3px solid var(--ink-900); padding: var(--sp-4); background: var(--paper); }
+.err-list { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ===== 页脚：样张架（原型专用视图索引，不是产品导航） ===== */
+.sheet-foot {
+  border-top: 1px solid var(--ink-900);
+  background: var(--paper-2);
+}
+.sheet-foot__in {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: var(--sp-3) var(--sp-4);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: start;
+}
+.samples { display: flex; flex-wrap: wrap; gap: 4px 10px; list-style: none; margin: 0; padding: 0; }
+.samples a {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-600);
+  border-bottom: 1px solid transparent;
+  padding: 2px 0;
+}
+.samples a[aria-current="page"] { color: var(--spot-deep); font-weight: 700; border-bottom-color: var(--spot); }
+.samples a:hover { border-bottom-color: var(--rule-300); }
+
+/* 结论句在杂志里靠版式而非颜色加权重：上下规线 + 放大字号 */
+.pull {
+  font-size: 22px;
+  line-height: 1.5;
+  color: var(--ink-900);
+  border-top: 1px solid var(--ink-900);
+  border-bottom: 1px solid var(--rule-300);
+  padding: var(--sp-2) 0;
+  margin: 0 0 var(--sp-3);
+}
+
+/* 期号戳：同一派生规则在每一层重复出现，编号即品牌的可核查版本 */
+.issue-line {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-500);
+  margin: 0 0 var(--sp-2);
+}
+.issue-line b { color: var(--spot-deep); font-weight: 700; letter-spacing: 0.04em; }
+
+/* 轮询说明行：把「不做闪烁动画」写成界面上的承诺，而不是实现细节 */
+.poll-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-500);
+  border: 1px dashed var(--rule-300);
+  padding: 6px 10px;
+  margin: 0 0 var(--sp-3);
+}
+
+/* ===== 断点：1440 / 768 ===== */
+@media (max-width: 1100px) {
+  .cover-claim { font-size: 40px; }
+  .feature-title { font-size: 30px; }
+  .masthead__title { font-size: 30px; letter-spacing: 0.14em; }
+  .body-text--span { grid-column: 1 / -1; }
+}
+
+@media (max-width: 768px) {
+  .view { padding: var(--sp-4) var(--sp-3) var(--sp-5); }
+  .cover { padding: var(--sp-3) var(--sp-3) var(--sp-5); }
+  .grid12 { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--sp-3) var(--sp-2); }
+  .c1, .c3, .c4, .c5, .c6, .c7, .c8, .c9, .c12 { grid-column: 1 / -1; }
+  .masthead__row { grid-template-columns: minmax(0, 1fr); }
+  .issue-stamp { text-align: left; }
+  .cover-claim { font-size: 30px; }
+  .feature-title { font-size: 24px; }
+  .pull { font-size: 18px; }
+  .login-wrap { grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+  .side-note { border-left: 0; border-top: 1px solid var(--rule-300); padding-left: 0; }
+  .sheet-foot__in { grid-template-columns: minmax(0, 1fr); }
+
+  /* 窄屏表格转「标签—值」堆叠，禁止整页横向滚动 */
+  table { font-size: 14px; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  tbody tr { border-bottom: 1px solid var(--ink-900); display: block; padding: 6px 0; }
+  tbody td { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: var(--sp-2); border: 0; padding: 3px 0; }
+  tbody td::before { content: attr(data-label); font-family: var(--mono); font-size: 11px; color: var(--ink-500); }
+  td.num { text-align: left; }
+}
+</style>
+</head>
+<body data-view="cover">
+
+<div class="sheet-head">
+  <div class="sheet-head__in">
+    <p class="colophon-note">版记｜视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+    <p class="trail" id="trail" aria-live="polite">
+      <span>出版层级</span>
+      <span class="trail-sep">·</span>
+      <span id="trail-level-1">封面层</span>
+      <span class="trail-sep">›</span>
+      <span id="trail-level-2">目录层</span>
+      <span class="trail-sep">›</span>
+      <span id="trail-level-3">内文层</span>
+    </p>
+  </div>
+</div>
+
+<!-- ============================ 登录层 ============================ -->
+<section class="view" id="view-login" data-view-panel="login" hidden>
+  <div class="masthead" style="padding:var(--sp-4) 0">
+    <div class="masthead__row">
+      <div>
+        <h1 class="masthead__title">市场情报评论</h1>
+        <p class="masthead__sub">AI Market Intelligence Studio · 多智能体分析平台</p>
+      </div>
+      <p class="issue-stamp__no mono" id="login-issue">R-2026-10-16/01</p>
+    </div>
+  </div>
+
+  <div class="grid12">
+    <div class="c7">
+      <div class="cover-lede">
+        <p class="cover-claim">知识即权力。<br>让每一个数字可追溯。</p>
+        <p class="deck">登录后从本期封面进入。口号只出现在封面层与登录页；进入内页，标题一律回到中性名词——这是出版纪律，不是装饰偏好。</p>
+      </div>
+      <div class="box box--note" style="margin-top:var(--sp-4)">
+        <h3>这一页只声明真实存在的能力</h3>
+        <p>六阶段服务端流水线（画像 → 规划 → 执行 → 图表 → 报告 → 校验）、本地 SQLite 存储、HttpOnly 会话 Cookie（<code>mis_session</code>，默认 8 小时）。</p>
+        <p>尚无「忘记密码」「自助注册」接口，因此这里不提供对应入口；首次部署请走下方「初始化管理员」。会话失效（401）与限流（429）的文案互不相同。</p>
+      </div>
+      <div class="doors" style="margin-top:var(--sp-4)">
+        <div class="door">
+          <span class="tag-no">原型</span>
+          <div>
+            <p>下方按钮切换登录层的三种失败成因与初始化模式，便于比对文案与禁用态。</p>
+            <div class="err-list" style="margin-top:8px">
+              <button type="button" id="login-mode-normal">常规登录</button>
+              <button type="button" id="login-mode-bootstrap">needs_bootstrap</button>
+              <button type="button" id="login-err-401">401</button>
+              <button type="button" id="login-err-429">429</button>
+              <button type="button" id="login-err-500">5xx</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="c5">
+      <form class="login-panel" id="login-form" method="post" autocomplete="on">
+        <p class="tag-kicker" id="login-kicker">凭证 · 会话</p>
+        <h2 class="sec-title" id="login-title" style="font-size:19px;margin-bottom:var(--sp-3)">登录本期</h2>
+
+        <div class="field">
+          <label for="login-user">用户名</label>
+          <input type="text" id="login-user" name="username" autocomplete="username" placeholder="分析师账号">
+        </div>
+        <div class="field">
+          <label for="login-pass">密码</label>
+          <input type="password" id="login-pass" name="password" autocomplete="current-password" placeholder="至少 10 位">
+        </div>
+        <div class="field" id="login-confirm-field" hidden>
+          <label for="login-confirm">确认密码</label>
+          <input type="password" id="login-confirm" name="password_confirm" autocomplete="new-password" placeholder="再输入一次">
+          <p class="hint mono" id="login-strength">弱密码提示：长度不足 10 位或缺少大小写与数字混合。</p>
+        </div>
+
+        <p class="st st--fail" id="login-error" role="alert" hidden><span id="login-error-text"></span></p>
+        <p class="hint mono" id="login-retry" hidden></p>
+
+        <div style="margin-top:var(--sp-3)">
+          <button type="submit" data-primary id="login-submit">登录</button>
+          <a href="#/cover" style="margin-left:var(--sp-2)">进入本期封面</a>
+        </div>
+        <p class="hint">表单提交在本样张内不发出请求；真实调用 <code class="mono">POST /auth/login</code>、首次部署 <code class="mono">POST /auth/bootstrap</code>。429 期间提交按钮禁用并读取 <code class="mono">Retry-After</code>。</p>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 封面层 ============================ -->
+<section class="view view--full" id="view-cover" data-view-panel="cover">
+  <div class="masthead">
+    <div class="masthead__row">
+      <div>
+        <h1 class="masthead__title">市场情报评论</h1>
+        <p class="masthead__sub">第 1 版样张 · 栏目：市场结构 · 出版方：AI Market Intelligence Studio</p>
+      </div>
+      <div class="issue-stamp">
+        <p class="issue-stamp__no" id="cover-issue">R-2026-10-16/01</p>
+        <p class="issue-stamp__derived" id="cover-derived"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="cover">
+    <div class="grid12">
+      <div class="c8">
+        <p class="kicker-band">本期主张 · 封面层</p>
+        <p class="cover-claim" style="margin-top:var(--sp-3)">把市场数据<br>变成可追溯的<br>决策依据。</p>
+        <p class="cover-feature">本期选题</p>
+        <h2 class="feature-title">三区域渠道结构的同期对比<br><span class="cover-claim cover-claim--sub">暨一次完整的六阶段服务端分析记录</span></h2>
+        <p class="deck">结论写进描述句，标题保持中性：本期的判断是「华东份额领先主要由单一大客户渠道贡献，剔除后三区差距收敛到 3 个百分点以内」。全部数字可回到具体工具调用结果（见内文第 02 节表 T-1）。</p>
+
+        <div class="keyfacts">
+          <p class="keyfacts__title">本期要点 · KEY FACTS</p>
+          <ul>
+            <li>三区合计销售额 <span class="num mono">1 842.6 万元</span>，同比 <span class="num mono">+11.4%</span><a class="cite cite--table" href="#t1-row-1" data-target="t1-row-1" aria-label="跳到表 T-1 第 1 行">[T1]</a></li>
+            <li>华东份额 <span class="num mono">38.1%</span>；剔除单一大客户后 <span class="num mono">33.9%</span><a class="cite cite--table" href="#t1-row-2" data-target="t1-row-2" aria-label="跳到表 T-1 第 2 行">[T1]</a></li>
+            <li>报告校验：<span class="num mono">0</span> 项 error、<span class="num mono">2</span> 项 warning（样本期不一致、缺失率 <span class="num mono">6.2%</span>）<a class="cite" href="#s-04" data-target="s-04" aria-label="跳到第 04 节校验明细">[§04]</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="c4">
+        <figure class="fig fig--mini">
+          <p class="fig__no">图 G-1 · 封面缩印（全图见内文第 03 节）</p>
+          <p class="fig__title">三区域销售额占比</p>
+          <p class="fig__note">华东领先幅度集中在最近两个季度</p>
+          <p class="fig__unit">单位：万元 · 占比 %</p>
+          <svg class="fig__chart" viewBox="0 0 300 148" role="img" aria-label="柱状图：华东 701、华南 592、华北 549 万元">
+            <line x1="26" y1="122" x2="296" y2="122" stroke="#C2C7CD"/>
+            <rect x="46" y="34" width="52" height="88" fill="#12436D"/>
+            <rect x="130" y="48" width="52" height="74" fill="#12436D" opacity="0.75"/>
+            <rect x="214" y="55" width="52" height="67" fill="#12436D" opacity="0.55"/>
+            <g font-family="ui-monospace, monospace" font-size="10" fill="#4A525B">
+              <text x="58" y="26">701</text><text x="142" y="26">592</text><text x="226" y="26">549</text>
+              <text x="52" y="138">华东</text><text x="136" y="138">华南</text><text x="220" y="138">华北</text>
+            </g>
+          </svg>
+          <p class="fig__src">来源：数据集 区域销售_2026Q1-Q3.csv · 工具调用 step 3<br>数据截至：2026-09-30</p>
+        </figure>
+
+        <p class="tag-kicker" style="margin-top:var(--sp-3)">本期目录预览</p>
+        <ol class="toc" id="cover-toc-preview"></ol>
+      </div>
+
+      <div class="c12 doors" style="margin-top:var(--sp-5)">
+        <div class="door">
+          <span class="tag-no">D-1</span>
+          <div>
+            <a href="#/contents">进入本期目录</a>
+            <p>目录层：编号条目、图目录、表目录、注、往期</p>
+          </div>
+        </div>
+        <div class="door">
+          <span class="tag-no">D-2</span>
+          <div>
+            <a href="#/article">阅读本期全文</a>
+            <p>内文层：编号小节 01—04 · cites 角标 · Endnotes</p>
+          </div>
+        </div>
+        <div class="door">
+          <span class="tag-no">D-3</span>
+          <div>
+            <a href="#/analysis">发起一次新分析</a>
+            <p>选数据集 → 提问 → <span class="mono">max_steps</span> → 202 已受理</p>
+          </div>
+        </div>
+        <div class="door">
+          <span class="tag-no">D-4</span>
+          <div>
+            <a href="#/run">查看运行中的分析</a>
+            <p>阶梯 <span class="mono">step_index/total_steps</span> + 整条任务真实总耗时</p>
+          </div>
+        </div>
+        <div class="door">
+          <span class="tag-no">D-5</span>
+          <div>
+            <a href="#/states">版式缺页处理</a>
+            <p>空态三种成因 / 加载态 / 错误态</p>
+          </div>
+        </div>
+        <div class="door">
+          <span class="tag-no">D-6</span>
+          <div>
+            <a href="#/login">登录层（含 needs_bootstrap）</a>
+            <p><span class="mono">POST /auth/login</span> · <span class="mono">/auth/bootstrap</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============================ 目录层 ============================ -->
+<section class="view" id="view-contents" data-view-panel="contents" hidden>
+  <div class="run-head">
+    <span class="tag-no">目录层 · CONTENTS</span>
+    <h2 class="sec-title">本期条目</h2>
+    <p class="issue-line" id="contents-issue-line" style="margin:0 0 0 auto"></p>
+  </div>
+
+  <div class="grid12">
+    <div class="c8">
+      <p class="tag-kicker">条目（按阅读顺序 · 章节编号 01—04）</p>
+      <ol class="toc" id="contents-toc"></ol>
+
+      <p class="tag-kicker" style="margin-top:var(--sp-4)">往期（真实来源：<span class="mono">GET /api/workflows/history</span>）</p>
+      <table id="history-table">
+        <caption>表 H-1 · 归档记录（接口返回顺序，新→旧）</caption>
+        <thead>
+          <tr>
+            <th scope="col">期号 / 状态</th>
+            <th scope="col">提问</th>
+            <th scope="col">数据截至</th>
+            <th scope="col" class="num">报告</th>
+          </tr>
+        </thead>
+        <tbody id="history-body"></tbody>
+      </table>
+      <p class="hint" id="history-scope"></p>
+      <p class="hint">口径说明：后端的历史接口<strong>只有</strong> <span class="mono">limit</span>(1–100) 与 <span class="mono">offset</span>，<strong>没有</strong>关键词筛选、状态筛选与排序参数。因此本页不提供「搜往期」，也不提供「按年月分组」—— 只按接口原序展示，翻页同样只走 <span class="mono">offset</span>。</p>
+      <p class="hint">期号只能从报告字段派生：<span class="mono">has_report=false</span> 的记录没有 <span class="mono">report_id</span>，因此<strong>不出期号</strong>，如实显示「未出版」。</p>
+    </div>
+
+    <div class="c4">
+      <p class="tag-kicker">图目录</p>
+      <ul class="toc" id="figure-index"></ul>
+      <p class="tag-kicker" style="margin-top:var(--sp-3)">表目录</p>
+      <ul class="toc" id="table-index"></ul>
+      <p class="tag-kicker" style="margin-top:var(--sp-3)">注</p>
+      <ul class="toc" id="note-index"></ul>
+
+      <div class="box" style="margin-top:var(--sp-3)">
+        <h3>本期出版信息</h3>
+        <p class="mono" style="font-size:11px;line-height:1.9;margin:0" id="pub-meta"></p>
+      </div>
+
+      <div class="box box--note" style="margin-top:var(--sp-2)">
+        <h3>编号系统</h3>
+        <p>章节 <span class="mono">01 / 02 / 03 / 04</span> · 图 <span class="mono">G-n</span> · 表 <span class="mono">T-n</span> · 归档表 <span class="mono">H-1</span> · 注 <span class="mono">[1] [2] …</span> · 期号 <span class="mono">R-YYYY-MM-DD/NN</span>。全部用等宽字体渲染，因为它们是**可核对的标识符**，不是装饰。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 内文层（报告本体） ============================ -->
+<section class="view" id="view-article" data-view-panel="article" hidden>
+  <div class="run-head">
+    <span class="tag-no">内文层 · 本期全文</span>
+    <h2 class="sec-title">三区域渠道结构的同期对比</h2>
+    <p class="issue-line" id="article-issue-line" style="margin:0 0 0 auto"></p>
+  </div>
+
+  <div class="grid12">
+    <p class="body-text body-text--span" id="article-summary" style="font-size:17px"></p>
+    <div class="c3 side-note">
+      <p class="mono" style="margin:0 0 6px">R-2026-10-16/01</p>
+      <p style="margin:0">口径：本报告全部数字来自服务端工具调用结果，角标 <span class="mono">[T1]</span> 指向生成该数字的那一次调用；未带角标的句子是解释性文字，不含新数字。</p>
+    </div>
+  </div>
+
+  <!-- 01 方法与数据（WHO 事实表结构：顶部要点 → 分节 → References） -->
+  <div class="grid12" style="margin-top:var(--sp-4)">
+    <div class="c12 run-head"><span class="tag-no">01</span><h3 class="sec-title" id="s-01" style="font-size:22px">方法与数据</h3></div>
+    <p class="body-text body-text--span">本期使用数据集 <span class="mono">区域销售_2026Q1-Q3.csv</span>（<span class="mono">row_count 1 343</span> · <span class="mono">column_count 12</span> · 上传于 <span class="mono">2026-10-14</span>），先由画像 Agent 产出列级画像，再由规划 Agent 拆为 5 个任务，<span class="mono">max_steps</span> 设为 <span class="mono">6</span>。缺失单元格 <span class="mono">6.2%</span>，集中在「渠道」列；重复行 <span class="mono">7</span> 行已在画像告警中列出<a class="cite cite--table" href="#t1-row-5" data-target="t1-row-5" aria-label="跳到表 T-1 告警行">[T1]</a>。</p>
+    <div class="c3 side-note">
+      <p style="margin:0 0 6px"><b>为什么这一节不放结论</b></p>
+      <p style="margin:0 0 8px">结论的说服力来自它可回查。方法先立住，后面的每一个数字才有落点。</p>
+      <p class="mono" style="margin:0">依据：IBM IBV 只在封面层用主张式标题，内页回到中性叙述。</p>
+    </div>
+    <div class="c12 keyfacts">
+      <p class="keyfacts__title">本期要点 · KEY FACTS（与封面同源，逐条可回查）</p>
+      <ul id="article-keyfacts"></ul>
+    </div>
+  </div>
+
+  <!-- 02 主对比 -->
+  <div class="grid12" style="margin-top:var(--sp-4)">
+    <div class="c12 run-head"><span class="tag-no">02</span><h3 class="sec-title" id="s-02" style="font-size:22px">三区域销售额的同期对比</h3></div>
+    <p class="body-text body-text--span">三季度合计销售额 <span class="num mono">1 842.6 万元</span>，同比 <span class="num mono">+11.4%</span><a class="cite cite--table" href="#t1-row-1" data-target="t1-row-1" aria-label="跳到表 T-1 合计行">[T1]</a>。华东以 <span class="num mono">38.1%</span> 份额领先<a class="cite cite--fig" href="#g-2" data-target="g-2" aria-label="跳到图 G-2">[G2]</a>，但领先幅度在三个季度间逐季扩大，且扩张主要由单一渠道贡献<a class="cite cite--table" href="#t1-row-2" data-target="t1-row-2" aria-label="跳到表 T-1 华东行">[T1]</a>。</p>
+    <div class="c8">
+      <figure class="fig" id="g-2">
+        <p class="fig__no">图 G-2 · 内文第 02 节</p>
+        <p class="fig__title">三区域分季度销售额</p>
+        <p class="fig__note">华东与华南的差距由 Q1 的 46.1 万元扩大到 Q3 的 92.4 万元</p>
+        <p class="fig__unit">单位：万元 · 三条折线，线端直接标注</p>
+        <svg class="fig__chart" viewBox="0 0 640 220" role="img" aria-label="折线图：华东 Q1 214、Q2 232、Q3 255 万元；华南 Q1 168、Q2 187、Q3 237 万元；华北 Q1 155、Q2 172、Q3 222 万元">
+          <g stroke="#D9DCE1"><line x1="48" y1="40" x2="48" y2="178"/><line x1="48" y1="178" x2="600" y2="178"/></g>
+          <g stroke="#C2C7CD" stroke-dasharray="3 4"><line x1="48" y1="120" x2="600" y2="120"/><line x1="48" y1="80" x2="600" y2="80"/></g>
+          <g font-family="ui-monospace, monospace" font-size="11" fill="#5A626B">
+            <text x="14" y="182">0</text><text x="14" y="124">150</text><text x="14" y="84">250</text>
+            <text x="120" y="198">Q1</text><text x="300" y="198">Q2</text><text x="470" y="198">Q3</text>
+          </g>
+          <g fill="none" stroke-width="2">
+            <polyline stroke="#12436D" points="132,113 312,101 492,85"/>
+            <polyline stroke="#28A197" points="132,145 312,131 492,98"/>
+            <polyline stroke="#801650" points="132,154 312,141 492,108"/>
+          </g>
+          <g font-family="ui-monospace, monospace" font-size="11">
+            <circle cx="492" cy="85" r="3" fill="#12436D"/><text x="502" y="89" fill="#23272E">华东 255</text>
+            <circle cx="492" cy="98" r="3" fill="#28A197"/><text x="502" y="102" fill="#23272E">华南 237</text>
+            <circle cx="492" cy="108" r="3" fill="#801650"/><text x="502" y="120" fill="#23272E">华北 222</text>
+          </g>
+        </svg>
+        <p class="fig__src">来源：数据集 区域销售_2026Q1-Q3.csv · 工具调用 <span class="mono">T2</span>（groupby 区域 × 季度）<br>真实接口：<span class="mono">GET /api/workflows/{id}/charts/G-2.png</span>（服务端渲染 PNG，四类图型 bar/line/pie/scatter）· 本样张用内联 SVG 同构示意<br>数据截至：2026-09-30</p>
+      </figure>
+    </div>
+    <div class="c4">
+      <p class="pull">三区差距 <span class="num mono">15.4</span> 个百分点，其中 <span class="num mono">11.9</span> 个来自一个客户的渠道。</p>
+      <p class="body-text" style="font-size:14px">把最大客户渠道单独列出后，华东与华南的份额只差 <span class="num mono">0.6</span> 个百分点<a class="cite cite--table" href="#t1-row-4" data-target="t1-row-4" aria-label="跳到表 T-1 剔除口径行">[T1]</a>。这就是本期把它放在封面做主张句的理由：结论值得出版，但结论必须带边界。</p>
+    </div>
+
+    <div class="c12">
+      <table id="t-1">
+        <caption>表 T-1 · 三区域销售额、份额与剔除口径（数字与工具输出逐行一致）</caption>
+        <thead>
+          <tr>
+            <th scope="col">行号</th>
+            <th scope="col">区域</th>
+            <th scope="col" class="num">销售额（万元）</th>
+            <th scope="col" class="num">份额 %</th>
+            <th scope="col" class="num">剔除大客户后 %</th>
+            <th scope="col">出处的任务</th>
+          </tr>
+        </thead>
+        <tbody id="t1-body"></tbody>
+      </table>
+      <p class="hint">表格规则：后端把 <span class="mono">ToolResult.data["rows"]</span> 的前 20 行原样复制进报告，前端不做二次计算——所以这里的每个数字都能与工具输出逐位对上。</p>
+    </div>
+  </div>
+
+  <!-- 03 剔除口径 -->
+  <div class="grid12" style="margin-top:var(--sp-4)">
+    <div class="c12 run-head"><span class="tag-no">03</span><h3 class="sec-title" id="s-03" style="font-size:22px">剔除单一大客户后的结构</h3></div>
+    <p class="body-text body-text--span">把该客户渠道（<span class="mono">channel_type = KA_DIRECT</span>）剔除后重新聚合，三区份额收敛为 <span class="num mono">33.9% / 33.3% / 32.8%</span>，同比增速从 <span class="num mono">+11.4%</span> 降到 <span class="num mono">+4.1%</span><a class="cite cite--fig" href="#g-3" data-target="g-3" aria-label="跳到图 G-3">[G3]</a>。本期把这一步叫做「把结论的重量称出来」：不是推翻第 02 节，而是给出它在什么口径下成立。</p>
+    <div class="c6">
+      <figure class="fig" id="g-3">
+        <p class="fig__no">图 G-3 · 内文第 03 节</p>
+        <p class="fig__title">含大客户与剔除大客户的份额对比</p>
+        <p class="fig__note">剔除后三区份额差收窄至 1.1 个百分点</p>
+        <p class="fig__unit">单位：%（占比，四舍五入到 0.1）</p>
+        <svg class="fig__chart" viewBox="0 0 380 190" role="img" aria-label="条形图：华东含大客户 38.1、剔除后 33.9；华南 32.1、33.3；华北 29.8、32.8，单位百分比">
+          <g font-family="ui-monospace, monospace" font-size="11" fill="#5A626B">
+            <text x="8" y="34">华东</text><text x="8" y="94">华南</text><text x="8" y="154">华北</text>
+          </g>
+          <g>
+            <rect x="58" y="22" width="243" height="16" fill="#12436D"/>
+            <rect x="58" y="44" width="216" height="16" fill="#12436D" opacity="0.55"/>
+            <rect x="58" y="82" width="205" height="16" fill="#12436D"/>
+            <rect x="58" y="104" width="212" height="16" fill="#12436D" opacity="0.55"/>
+            <rect x="58" y="142" width="190" height="16" fill="#12436D"/>
+            <rect x="58" y="164" width="209" height="16" fill="#12436D" opacity="0.55"/>
+          </g>
+          <g font-family="ui-monospace, monospace" font-size="11" fill="#4A525B">
+            <text x="305" y="35">38.1</text><text x="278" y="57">33.9</text>
+            <text x="267" y="95">32.1</text><text x="274" y="117">33.3</text>
+            <text x="252" y="155">29.8</text><text x="271" y="177">32.8</text>
+          </g>
+          <text x="58" y="16" font-family="ui-monospace, monospace" font-size="10" fill="#5A626B">■ 含大客户渠道　■ 剔除大客户渠道</text>
+        </svg>
+        <p class="fig__src">来源：数据集 区域销售_2026Q1-Q3.csv · 工具调用 <span class="mono">T4</span>（filter channel_type）<br>数据截至：2026-09-30</p>
+      </figure>
+    </div>
+    <div class="c6">
+      <table id="t-2">
+        <caption>表 T-2 · 客户渠道集中度（剔除口径的依据）</caption>
+        <thead>
+          <tr>
+            <th scope="col">渠道类型</th>
+            <th scope="col" class="num">销售额（万元）</th>
+            <th scope="col" class="num">占三区比 %</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td data-label="渠道类型"><span class="mono">KA_DIRECT</span></td><td class="num" data-label="销售额">219.4</td><td class="num" data-label="占比">11.9</td></tr>
+          <tr><td data-label="渠道类型">经销</td><td class="num" data-label="销售额">741.2</td><td class="num" data-label="占比">40.2</td></tr>
+          <tr><td data-label="渠道类型">直营门店</td><td class="num" data-label="销售额">502.7</td><td class="num" data-label="占比">27.3</td></tr>
+          <tr><td data-label="渠道类型">线上</td><td class="num" data-label="销售额">379.3</td><td class="num" data-label="占比">20.6</td></tr>
+        </tbody>
+      </table>
+      <p class="hint">原始任务 <span class="mono">T4</span> 返回 4 行，此处全量展示，未截断；坐标与数值未做任何再计算。</p>
+    </div>
+  </div>
+
+  <!-- 04 边界与数据质量 -->
+  <div class="grid12" style="margin-top:var(--sp-4)">
+    <div class="c12 run-head"><span class="tag-no">04</span><h3 class="sec-title" id="s-04" style="font-size:22px">结论的边界与数据质量</h3></div>
+    <p class="body-text body-text--span">本期两条告警随报告一起出版，不做淡化：样本期不一致（华南 Q1 数据自 <span class="mono">2026-01-12</span> 起，前 11 天缺档）与「渠道」列 <span class="mono">6.2%</span> 缺失<a class="cite cite--table" href="#t1-row-5" data-target="t1-row-5" aria-label="跳到表 T-1 告警行">[T1]</a>。校验 Agent 检查 <span class="num mono">126</span> 个数字，<span class="mono">0</span> 项 <span class="mono">error</span>、<span class="mono">2</span> 项 <span class="mono">warning</span>、<span class="mono">1</span> 项 <span class="mono">info</span>，因此工作流状态为 <span class="st st--warn">带警告完成<code>SUCCESS_WITH_WARNINGS</code></span>。</p>
+    <div class="c6">
+      <div class="box box--warn">
+        <h3>校验明细（severity 原值保留）</h3>
+        <p><span class="mono">warning · MISSING_CHART_FILE</span>：图 G-4 的对象已生成但 PNG 文件不在磁盘，本期以内联示意替代，未采信其数字。</p>
+        <p><span class="mono">warning · EMPTY_RESULT</span>：任务 <span class="mono">T5</span> 返回 0 行（该门店在同期的对比窗口内无记录），对应任务状态 <span class="st st--wait">已跳过<code>SKIPPED</code></span>。</p>
+        <p><span class="mono">info · SHORT_REPORT</span>：第 03 节正文短于建议长度，属提示级，不影响 <span class="mono">passed=true</span>。</p>
+      </div>
+    </div>
+    <div class="c6">
+      <p class="tag-kicker">注 · ENDNOTES（编号可回查）</p>
+      <ol class="notes" id="endnotes"></ol>
+      <p class="tag-kicker" style="margin-top:var(--sp-3)">本期编号与引用口径</p>
+      <p class="code-line" id="cite-line"></p>
+      <p class="hint">后端没有导出、下载、分享与评论接口，因此这一层不提供任何对应入口：引用以「期号 + 图/表编号 + 注号」为准，人读即可复原全部口径。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 市场分析 ============================ -->
+<section class="view" id="view-analysis" data-view-panel="analysis" hidden>
+  <div class="run-head">
+    <span class="tag-no">内文层 · 工具页</span>
+    <h2 class="sec-title">发起一次新分析</h2>
+    <p class="issue-line" id="analysis-issue-line" style="margin:0 0 0 auto"></p>
+  </div>
+
+  <div class="grid12">
+    <div class="c8">
+      <p class="tag-kicker">第 1 步 · 选数据集（列表即目录，按 <span class="mono">uploaded_at</span> 降序）</p>
+      <ul class="pick" id="dataset-pick"></ul>
+      <p class="hint">真实接口 <span class="mono">GET /api/datasets?limit=50&amp;offset=0&amp;sort=uploaded_at&amp;order=desc</span>；文件名搜索框是后端真实能力（<span class="mono">q</span> 参数，≤200 字符），本样张不重复实现。</p>
+
+      <p class="tag-kicker" style="margin-top:var(--sp-4)">第 2 步 · 提出需求（<span class="mono">question</span> 2–500 字）</p>
+      <div class="field">
+        <label for="q-input">本期想问什么</label>
+        <textarea id="q-input" maxlength="500" placeholder="例：按区域对比 2026 年三个季度的销售额结构，并把最大客户渠道单独剔除后重算份额。"></textarea>
+        <p class="counter" id="q-counter" aria-live="polite">0 / 500 · 至少 2 字</p>
+      </div>
+
+      <p class="tag-kicker" style="margin-top:var(--sp-2)">第 3 步 · 允许的执行步数（<span class="mono">max_steps</span> 1–8）</p>
+      <div class="steps" role="radiogroup" aria-label="最大执行步数">
+        <label><input type="radio" name="max_steps" value="1"><span>1</span></label>
+        <label><input type="radio" name="max_steps" value="2"><span>2</span></label>
+        <label><input type="radio" name="max_steps" value="3"><span>3</span></label>
+        <label><input type="radio" name="max_steps" value="4"><span>4</span></label>
+        <label><input type="radio" name="max_steps" value="5"><span>5</span></label>
+        <label><input type="radio" name="max_steps" value="6" checked><span>6</span></label>
+        <label><input type="radio" name="max_steps" value="7"><span>7</span></label>
+        <label><input type="radio" name="max_steps" value="8"><span>8</span></label>
+      </div>
+      <p class="hint">步数是「最多允许几步工具执行」，不是进度百分比；它与 <span class="mono">total_steps</span> 一起决定阶梯的总格数。</p>
+
+      <div style="margin-top:var(--sp-4)">
+        <button type="button" data-primary id="ask-submit">发起分析</button>
+        <p class="hint" id="ask-block-reason" style="margin-top:8px"></p>
+      </div>
+
+      <div class="box" id="receipt" style="margin-top:var(--sp-3)" hidden>
+        <h3>已受理 · <span class="mono">202 Accepted</span></h3>
+        <p>后端已把工作流放进后台线程，此刻还没有报告。页面每 <span class="mono">1000ms</span> 轮询 <span class="mono">GET /api/workflows/{id}</span>；这一步不做闪烁动画，只有阶梯的位移在推进。</p>
+        <p class="code-line" id="receipt-body"></p>
+        <p style="margin-top:var(--sp-2)"><a href="#/run">进入本次运行（Agent 运行层）</a></p>
+      </div>
+    </div>
+
+    <div class="c4">
+      <div class="box box--note">
+        <h3>这一页只承诺真实存在的东西</h3>
+        <p>入参只有三个：<span class="mono">dataset_id</span>、<span class="mono">question</span>(2–500)、<span class="mono">max_steps</span>(1–8)。</p>
+        <p>没有模型选择器、没有 Token 用量、没有保存视图——后端不暴露这些，所以这里一个都不放。</p>
+      </div>
+      <div class="box" style="margin-top:var(--sp-2)">
+        <h3>选中数据集的画像</h3>
+        <p class="mono" style="font-size:11px;line-height:1.9;margin:0" id="ds-profile"></p>
+        <p>真实接口 <span class="mono">GET /api/datasets/{id}/profile</span>：列数、行数、语义类型、缺失率、唯一值、分位数、top_values、重复行、告警。</p>
+      </div>
+      <div class="box box--fail" style="margin-top:var(--sp-2)">
+        <h3>校验失败会怎么显示</h3>
+        <p><span class="mono">error</span> 级问题（例如 <span class="mono">UNSUPPORTED_NUMBER</span>：报告里出现了工具结果中找不到的数字）会让 <span class="mono">passed=false</span>，报告照常出版但顶部挂红条——出版不等于背书。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ Agent 运行 ============================ -->
+<section class="view" id="view-run" data-view-panel="run" hidden>
+  <div class="run-head">
+    <span class="tag-no">内文层 · 运行</span>
+    <h2 class="sec-title">本期是怎么跑出来的</h2>
+    <p class="issue-line" id="run-issue-line" style="margin:0 0 0 auto"></p>
+  </div>
+
+  <div class="state-strip" role="group" aria-label="运行状态演示切换（原型）">
+    <button type="button" id="run-mode-run">运行中</button>
+    <button type="button" id="run-mode-success">已完成</button>
+    <button type="button" id="run-mode-warn">带警告完成</button>
+    <button type="button" id="run-mode-fail">失败</button>
+    <button type="button" id="run-poll-advance">模拟下一次轮询</button>
+  </div>
+
+  <p class="poll-note">轮询：<span class="mono">GET /api/workflows/{id}</span> 每 1000ms 一次 · 只回状态 / <span class="mono">step_index</span> / <span class="mono">total_steps</span> / 任务简报，<strong>不回报告</strong>（报告走 <span class="mono">/{id}/report</span>）。</p>
+
+  <div class="grid12">
+    <div class="c5">
+      <p class="tag-kicker">阶梯（已完成阶段数 = <span class="mono">step_index</span>，共 <span class="mono">total_steps</span> 格）</p>
+      <ul class="ladder" id="run-ladder"></ul>
+      <p class="hint" id="run-step-line"></p>
+      <div class="box" style="margin-top:var(--sp-2)">
+        <h3>整条任务的真实耗时</h3>
+        <p class="mono" style="font-size:12px;margin:0" id="run-elapsed"></p>
+        <p><span class="mono">created_at → finished_at</span> 是轮询接口唯二的时间字段。阶段级耗时、阶段时间戳、按时间的进度百分比后端不提供，因此这个界面上一个都不画。</p>
+      </div>
+    </div>
+
+    <div class="c7">
+      <p class="tag-kicker">任务简报（<span class="mono">task_id / description / status / error</span>）</p>
+      <table id="run-tasks">
+        <caption>表 R-1 · 规划 Agent 拆出的任务与实际结果</caption>
+        <thead>
+          <tr>
+            <th scope="col">任务</th>
+            <th scope="col">说明</th>
+            <th scope="col">状态</th>
+            <th scope="col">错误</th>
+          </tr>
+        </thead>
+        <tbody id="run-task-body"></tbody>
+      </table>
+
+      <p class="hint">任务状态共 6 个枚举，原值一并保留：<span class="mono">PENDING 等待中 · RUNNING 执行中 · SUCCESS 成功 · RETRYING 重试中 · FAILED 失败 · SKIPPED 已跳过</span>。轮询接口只回任务简报，不回报告与结果。</p>
+
+      <p class="tag-kicker" style="margin-top:var(--sp-4)">工作流状态映射（10 个枚举，原值同时保留）</p>
+      <ul class="toc" id="status-map"></ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 空 / 加载 / 错误 三态 ============================ -->
+<section class="view" id="view-states" data-view-panel="states" hidden>
+  <div class="run-head">
+    <span class="tag-no">版式状态</span>
+    <h2 class="sec-title">缺页怎么排</h2>
+    <p class="issue-line" id="states-issue-line" style="margin:0 0 0 auto"></p>
+  </div>
+
+  <div class="state-strip" role="group" aria-label="状态演示切换（原型）">
+    <button type="button" id="st-empty-none">空态 · 还没有数据</button>
+    <button type="button" id="st-empty-filter">空态 · 筛选无结果</button>
+    <button type="button" id="st-empty-fail">空态 · 读取失败</button>
+    <button type="button" id="st-loading">加载态</button>
+    <button type="button" id="st-error">错误态</button>
+  </div>
+
+  <div class="grid12">
+    <div class="c8">
+      <div id="panel-empty-none">
+        <div class="box box--note">
+          <h3>暂无数据集</h3>
+          <p>这是「一次都没有」的空，不是「没查到」。所以这里只给一个动作：上传，然后第一次分析。</p>
+          <p style="margin-top:var(--sp-2)"><a href="#/analysis">上传数据集，开始第一次分析</a></p>
+        </div>
+      </div>
+      <div id="panel-empty-filter" hidden>
+        <div class="box">
+          <h3>当前条件下没有匹配的数据集</h3>
+          <p>后端支持文件名子串匹配（<span class="mono">q</span>，≤200 字符）。条件是你设的，所以按钮是「清除条件」，不是「重新加载」。</p>
+          <p><span class="mono">q = 2027</span> · 命中 <span class="num">0</span> 条 · <span class="mono">total = 24</span></p>
+          <p style="margin-top:var(--sp-2)"><a href="#/analysis">清除文件名条件</a></p>
+        </div>
+      </div>
+      <div id="panel-empty-fail" hidden>
+        <div class="box box--fail" role="alert">
+          <h3>数据集清单读取失败</h3>
+          <p>成因与上一张不同：请求发出去了但没拿到数据。文案必须能区分这两种空，否则用户会以为自己的数据消失了。</p>
+          <p class="code-line">GET /api/datasets → 500 · 服务暂时不可用</p>
+          <p style="margin-top:var(--sp-2)"><button type="button" id="retry-datasets">重试</button></p>
+        </div>
+      </div>
+      <div id="panel-loading" hidden>
+        <p class="tag-kicker">骨架不预测内容形状，只占住行高</p>
+        <div class="box">
+          <div class="skel skel--t"></div>
+          <div class="skel" style="width:88%"></div>
+          <div class="skel" style="width:74%"></div>
+          <div class="skel skel--c" style="margin-top:var(--sp-3)"></div>
+          <div class="skel" style="width:46%"></div>
+        </div>
+        <p class="hint">轮询返回新状态时<strong>不</strong>整屏重绘、不闪烁；只有阶梯的格子按真实 <span class="mono">step_index</span> 位移。</p>
+      </div>
+      <div id="panel-error" hidden>
+        <div class="box box--fail" role="alert">
+          <h3>本期还没有报告</h3>
+          <p><span class="mono">GET /api/workflows/{id}/report</span> 返回 <span class="mono">400</span>：工作流尚未走到 <span class="mono">REPORTING</span>。这不是网络错误，也不是空数据，文案不能用同一句。</p>
+          <p class="code-line">status = EXECUTING · step_index 2 / total_steps 6 · 报告接口尚未可用</p>
+          <p style="margin-top:var(--sp-2)"><a href="#/run">回到运行层继续等</a></p>
+        </div>
+        <div class="box box--warn" style="margin-top:var(--sp-2)">
+          <h3>归档关闭时的往期</h3>
+          <p><span class="mono">GET /api/workflows/history</span> 在归档未启用时返回 <span class="mono">HTTP 200</span> + <span class="mono">enabled=false</span> + 空列表：用户关掉了一个功能，不是他请求错了。往期区显示「归档未启用」，不显示错误。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="c4 side-note">
+      <p style="margin:0 0 6px"><b>三种空，三种写法</b></p>
+      <p>① 还没有数据 → 给第一个动作；② 筛选无结果 → 给清除条件；③ 读取失败 → 给重试与原始状态码。混用同一句「暂无数据」，等于把系统故障说成用户无产出。</p>
+      <p class="mono" style="margin:0">本层同时保留原始枚举可查证：状态 <span class="mono">SUCCESS_WITH_WARNINGS</span>、severity <span class="mono">error/warning/info</span>。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 样张架（原型视图索引，不是产品导航） ============================ -->
+<footer class="sheet-foot">
+  <div class="sheet-foot__in">
+    <div>
+      <p class="tag-kicker" style="margin-bottom:6px">样张架 · 本文件的视图索引（原型导航，非产品功能）</p>
+      <ul class="samples" id="sample-rack">
+        <li><a href="#/login">登录</a></li>
+        <li><a href="#/cover">封面层</a></li>
+        <li><a href="#/contents">目录层</a></li>
+        <li><a href="#/article">内文层 · 报告</a></li>
+        <li><a href="#/analysis">市场分析</a></li>
+        <li><a href="#/run">Agent 运行</a></li>
+        <li><a href="#/states">空 / 加载 / 错误</a></li>
+      </ul>
+    </div>
+    <p class="colophon-note" id="foot-issue">视觉方案示意 · 数据为占位样例 · 未接入后端</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var PLACEHOLDER = {
+    workflow_id: "3f9c1a7e2b4d5a68c0e1f2a3b4c5d6e7",
+    report_id: "7f3ac2b1",
+    generated_at: "2026-10-16T09:41:22+00:00",
+    created_at: "2026-10-16T09:31:04+00:00",
+    finished_at: "2026-10-16T09:41:22+00:00",
+    seq_of_day: 1,
+    llm_used: true,
+    status: "SUCCESS_WITH_WARNINGS",
+    step_index: 5,
+    total_steps: 6
+  };
+
+  // 派生规则：日期段取 generated_at 的 UTC 日历日，NN 取当日第几份出报（由 history 分页算出），
+  // report_id 只作校验位随附显示。规则本身必须印在界面上，期号才可被复核而不是被相信。
+  function deriveIssueNo(generatedAtUtc, seqOfDay) {
+    var d = generatedAtUtc.slice(0, 10);
+    var nn = seqOfDay < 10 ? "0" + seqOfDay : String(seqOfDay);
+    return "R-" + d + "/" + nn;
+  }
+  function derivedNote() {
+    return "期号派生：R-〈generated_at 的 UTC 日期〉/〈当日出报序号〉\n"
+      + "本期 generated_at = " + PLACEHOLDER.generated_at + " → 2026-10-16\n"
+      + "当日序号 = " + PLACEHOLDER.seq_of_day
+      + "（由 GET /api/workflows/history 的 limit/offset 翻页统计当日 has_report=true 的条数得出）\n"
+      + "校验位 report_id = " + PLACEHOLDER.report_id;
+  }
+
+  var SECTIONS = [
+    { no: "01", anchor: "s-01", label: "方法与数据", sub: "画像口径 · 样本范围 · max_steps = 6" },
+    { no: "02", anchor: "s-02", label: "三区域销售额的同期对比", sub: "图 G-2 · 表 T-1" },
+    { no: "03", anchor: "s-03", label: "剔除单一大客户后的结构", sub: "图 G-3 · 表 T-2" },
+    { no: "04", anchor: "s-04", label: "结论的边界与数据质量", sub: "校验明细 · 注 [1]–[4]" }
+  ];
+  var FIGURES = [
+    { no: "G-1", label: "三区域销售额占比", where: "封面缩印" },
+    { no: "G-2", label: "三区域分季度销售额", where: "内文 02" },
+    { no: "G-3", label: "含大客户与剔除大客户的份额对比", where: "内文 03" },
+    { no: "G-4", label: "门店客流的周分布", where: "PNG 缺失 · 未采信" }
+  ];
+  var TABLES = [
+    { no: "T-1", label: "三区域销售额、份额与剔除口径", where: "内文 02" },
+    { no: "T-2", label: "客户渠道集中度", where: "内文 03" }
+  ];
+  var NOTES = [
+    "数据来源：GET /api/datasets/{id}/profile · 画像列数 12、行数 1 343、缺失率 6.2%、重复行 7。",
+    "季度口径：自然季度（Q1 = 2026-01-01 起），非财务季度；华南 Q1 自 2026-01-12 起有记录。",
+    "份额与同比均由工具调用结果原样给出，前端未做任何再计算（cites = T2 / T4）。",
+    "图 G-4 的校验问题 code = MISSING_CHART_FILE，本期不引用其任何数字。"
+  ];
+  var KEY_FACTS = [
+    { html: '三区合计销售额 <span class="num mono">1 842.6 万元</span>，同比 <span class="num mono">+11.4%</span>', cite: "t1-row-1" },
+    { html: '华东份额 <span class="num mono">38.1%</span>；剔除单一大客户后 <span class="num mono">33.9%</span>', cite: "t1-row-2" },
+    { html: '报告校验：<span class="num mono">0</span> 项 error、<span class="num mono">2</span> 项 warning（样本期不一致、缺失率 <span class="num mono">6.2%</span>）', cite: "s-04", kind: "" }
+  ];
+  var T1_ROWS = [
+    { no: "1", region: "三区合计", amount: "1 842.6", share: "100.0", clean: "100.0", task: "T2" },
+    { no: "2", region: "华东", amount: "701.4", share: "38.1", clean: "33.9", task: "T2" },
+    { no: "3", region: "华南", amount: "592.3", share: "32.1", clean: "33.3", task: "T2" },
+    { no: "4", region: "华北", amount: "548.9", share: "29.8", clean: "32.8", task: "T4" },
+    { no: "5", region: "画像告警（样本期 / 缺失）", amount: "—", share: "—", clean: "6.2 % 缺失", task: "T0" }
+  ];
+  var DATASETS = [
+    { dataset_id: "d1a2b3c4d5e6f708192a3b4c5d6e7f80", original_filename: "区域销售_2026Q1-Q3.csv", row_count: 1343, column_count: 12, created_at: "2026-10-14T02:11:07+00:00", has_profile: true },
+    { dataset_id: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", original_filename: "渠道费用_2026H1.xlsx", row_count: 412, column_count: 9, created_at: "2026-10-11T06:44:19+00:00", has_profile: true },
+    { dataset_id: "aaaa1111bbbb2222cccc3333dddd4444", original_filename: "门店客流_原始导出.csv", row_count: 8820, column_count: 15, created_at: "2026-10-09T01:20:55+00:00", has_profile: false }
+  ];
+  var HISTORY_ITEMS = [
+    { workflow_id: "3f9c1a7e2b4d5a68c0e1f2a3b4c5d6e7", question: "按区域对比三个季度销售额结构，并剔除最大客户渠道重算份额", status: "success", created_at: "2026-10-16T09:31:04+00:00", finished_at: "2026-10-16T09:41:22+00:00", has_report: true, llm_used: true, report_generated_at: "2026-10-16T09:41:22+00:00", report_id: "7f3ac2b1", seq_of_day: 1 },
+    { workflow_id: "77aa22bb33cc44dd55ee66ff0011aabb", question: "品类毛利结构与前后变化", status: "success", created_at: "2026-10-15T02:02:10+00:00", finished_at: "2026-10-15T02:11:48+00:00", has_report: true, llm_used: true, report_generated_at: "2026-10-15T02:11:44+00:00", report_id: "c4e19b07", seq_of_day: 2 },
+    { workflow_id: "9f8e7d6c5b4a3021123456789abcdef0", question: "大促前后转化变化（试运行）", status: "failed", created_at: "2026-10-15T01:12:03+00:00", finished_at: "2026-10-15T01:14:20+00:00", has_report: false, llm_used: true, report_generated_at: null, report_id: null, seq_of_day: null },
+    { workflow_id: "1234567890abcdef1234567890abcdef", question: "门店客流的周内节律", status: "success_with_warnings", created_at: "2026-10-13T08:40:00+00:00", finished_at: "2026-10-13T08:52:31+00:00", has_report: true, llm_used: false, report_generated_at: "2026-10-13T08:52:29+00:00", report_id: "5d07aa31", seq_of_day: 1 },
+    { workflow_id: "deadbeefcafebabe0123456789abcdef", question: "渠道费用与销售额的相关性（步数被限制）", status: "success", created_at: "2026-10-12T11:05:44+00:00", finished_at: null, has_report: false, llm_used: true, report_generated_at: null, report_id: null, seq_of_day: null }
+  ];
+  var TASKS = [
+    { id: "T0", desc: "数据集画像（列语义 / 缺失 / 重复）", status: "success", error: "" },
+    { id: "T1", desc: "按区域 × 季度聚合销售额", status: "success", error: "" },
+    { id: "T2", desc: "份额与同比计算", status: "success", error: "" },
+    { id: "T3", desc: "生成图 G-2 / G-3（bar · line）", status: "success", error: "" },
+    { id: "T4", desc: "剔除 channel_type=KA_DIRECT 后重聚合", status: "success", error: "" },
+    { id: "T5", desc: "对比窗口内门店客流关联", status: "skipped", error: "返回 0 行（EMPTY_RESULT）" }
+  ];
+  var STATUS_MAP = [
+    ["PENDING", "等待中", "st--wait"],
+    ["PROFILING", "画像中", "st--run"],
+    ["PLANNING", "规划中", "st--run"],
+    ["EXECUTING", "执行中", "st--run"],
+    ["CHARTING", "绘图中", "st--run"],
+    ["REPORTING", "成文中", "st--run"],
+    ["VALIDATING", "校验中", "st--run"],
+    ["SUCCESS", "已完成", "st--ok"],
+    ["SUCCESS_WITH_WARNINGS", "带警告完成", "st--warn"],
+    ["FAILED", "失败", "st--fail"]
+  ];
+  var LADDER = [
+    ["PROFILING", "数据画像"],
+    ["PLANNING", "分析规划"],
+    ["EXECUTING", "工具执行"],
+    ["CHARTING", "图表生成"],
+    ["REPORTING", "报告成文"],
+    ["VALIDATING", "数字校验"]
+  ];
+
+  var LEVELS = {
+    login: 0, cover: 1, contents: 2, article: 3, analysis: 3, run: 3, states: 3
+  };
+  var VIEWS = ["login", "cover", "contents", "article", "analysis", "run", "states"];
+  var runState = "run";
+  var runCursor = 2;
+
+  function el(id) { return document.getElementById(id); }
+  function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+  function make(tag, cls, html) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (html !== undefined) { n.innerHTML = html; }
+    return n;
+  }
+  function stChip(cls, zh, raw) {
+    return '<span class="st ' + cls + '">' + zh + "<code>" + raw + "</code></span>";
+  }
+  function hhmmss(totalSeconds) {
+    var h = Math.floor(totalSeconds / 3600);
+    var m = Math.floor((totalSeconds % 3600) / 60);
+    var s = Math.floor(totalSeconds % 60);
+    return (h > 0 ? h + " 小时 " : "") + m + " 分 " + s + " 秒";
+  }
+  function isoToMs(text) { return Date.parse(text); }
+
+  function issueLine(target, extra) {
+    var node = el(target);
+    if (!node) { return; }
+    node.innerHTML = "期号 <b>" + deriveIssueNo(PLACEHOLDER.generated_at, PLACEHOLDER.seq_of_day) + "</b>"
+      + " · report_id " + PLACEHOLDER.report_id + (extra ? " · " + extra : "");
+  }
+
+  function tocRow(no, labelHtml, subHtml, markHtml, href) {
+    var li = make("li");
+    var a = make(href ? "a" : "div", href ? "" : "toc-row");
+    if (href) { a.setAttribute("href", href); }
+    a.appendChild(make("span", "toc__no", no));
+    a.appendChild(make("span", "toc__label", labelHtml + (subHtml ? "<small>" + subHtml + "</small>" : "")));
+    a.appendChild(make("span", "toc__mark", markHtml || ""));
+    li.appendChild(a);
+    return li;
+  }
+
+  function renderIssueDerived() {
+    var note = el("cover-derived");
+    if (note) { note.textContent = "派生自 generated_at + 当日出报序号 · report_id " + PLACEHOLDER.report_id; }
+    ["contents-issue-line", "article-issue-line", "analysis-issue-line", "run-issue-line", "states-issue-line"].forEach(function (id) {
+      issueLine(id);
+    });
+    var cite = el("cite-line");
+    if (cite) {
+      cite.textContent = derivedNote() + "\n引用写法：《市场情报评论》" + deriveIssueNo(PLACEHOLDER.generated_at, PLACEHOLDER.seq_of_day)
+        + " · 图 G-2 · 注 [2] · 数据截至 2026-09-30";
+    }
+  }
+
+  function renderTocPreviews() {
+    var preview = el("cover-toc-preview");
+    var full = el("contents-toc");
+    if (preview) { clear(preview); }
+    if (full) { clear(full); }
+    SECTIONS.forEach(function (s) {
+      if (preview) { preview.appendChild(tocRow(s.no, s.label, null, null, "#/article")); }
+      if (full) { full.appendChild(tocRow(s.no, s.label, s.sub, "读内文", "#/article")); }
+    });
+    var fi = el("figure-index");
+    var ti = el("table-index");
+    var ni = el("note-index");
+    if (fi) {
+      clear(fi);
+      FIGURES.forEach(function (f) { fi.appendChild(tocRow(f.no, f.label, null, f.where, "#/article")); });
+    }
+    if (ti) {
+      clear(ti);
+      TABLES.forEach(function (t) { ti.appendChild(tocRow(t.no, t.label, null, t.where, "#/article")); });
+    }
+    if (ni) {
+      clear(ni);
+      NOTES.forEach(function (n, i) { ni.appendChild(tocRow("[" + (i + 1) + "]", n.split("·")[0].trim(), null, "见注", "#/article")); });
+    }
+    var en = el("endnotes");
+    if (en) {
+      clear(en);
+      NOTES.forEach(function (n) { en.appendChild(make("li", "", n)); });
+    }
+    var pub = el("pub-meta");
+    if (pub) {
+      pub.innerHTML = "workflow_id " + PLACEHOLDER.workflow_id
+        + "<br>report_id " + PLACEHOLDER.report_id
+        + "<br>generated_at " + PLACEHOLDER.generated_at + "（UTC）"
+        + "<br>llm_used " + String(PLACEHOLDER.llm_used)
+        + "<br>status " + PLACEHOLDER.status
+        + "<br>校验 checked_numbers 126 · passed true";
+    }
+  }
+
+  function renderT1() {
+    var body = el("t1-body");
+    if (!body) { return; }
+    clear(body);
+    T1_ROWS.forEach(function (r, i) {
+      var tr = document.createElement("tr");
+      tr.id = "t1-row-" + r.no;
+      tr.innerHTML = '<td data-label="行号"><span class="t-id">' + r.no + "</span></td>"
+        + '<td data-label="区域">' + r.region + "</td>"
+        + '<td class="num" data-label="销售额">' + r.amount + "</td>"
+        + '<td class="num" data-label="份额">' + r.share + "</td>"
+        + '<td class="num" data-label="剔除后">' + r.clean + "</td>"
+        + '<td data-label="任务"><span class="mono">' + r.task + "</span></td>";
+      body.appendChild(tr);
+    });
+    var kf = el("article-keyfacts");
+    if (kf) {
+      clear(kf);
+      KEY_FACTS.forEach(function (k) {
+        var isSection = k.cite === "s-04";
+        var cls = isSection ? "cite" : "cite cite--table";
+        var label = isSection ? "[§04]" : "[T1]";
+        kf.appendChild(make("li", "", k.html + '<a class="' + cls + '" href="#' + k.cite + '" data-target="' + k.cite + '" aria-label="跳到 ' + k.cite + '">' + label + "</a>"));
+      });
+    }
+  }
+
+  function renderHistory() {
+    var body = el("history-body");
+    if (!body) { return; }
+    clear(body);
+    HISTORY_ITEMS.forEach(function (h) {
+      var no = h.has_report && h.report_generated_at
+        ? '<span class="mono" style="color:var(--spot-deep);font-weight:700">' + deriveIssueNo(h.report_generated_at, h.seq_of_day) + "</span>"
+        : '<span class="mono">—（未出版，无 report_id）</span>';
+      var chip = h.status === "success" ? stChip("st--ok", "已完成", "SUCCESS")
+        : h.status === "failed" ? stChip("st--fail", "失败", "FAILED")
+        : stChip("st--warn", "带警告完成", "SUCCESS_WITH_WARNINGS");
+      var tr = document.createElement("tr");
+      tr.innerHTML = '<td data-label="期号 / 状态">' + no + "<br>" + chip + "</td>"
+        + '<td data-label="提问">' + h.question + "</td>"
+        + '<td data-label="数据截至"><span class="mono">' + (h.finished_at ? h.finished_at.slice(0, 10) : "—") + "</span>"
+        + (h.llm_used ? "" : '<br><span class="mono">llm_used=false 规则模式</span>') + "</td>"
+        + '<td class="num" data-label="报告">' + (h.has_report ? '<a href="#/article">有</a>' : "<span class=\"mono\">null</span>") + "</td>";
+      body.appendChild(tr);
+    });
+    var scope = el("history-scope");
+    if (scope) {
+      scope.innerHTML = "样本口径：本页展示 <span class=\"mono\">GET /api/workflows/history?limit=20&amp;offset=0</span> 返回的前 5 条（接口共 <span class=\"mono\">total = 24</span> 条，<span class=\"mono\">enabled = true</span>）。<strong>占位样例，非真实归档。</strong>";
+    }
+  }
+
+  function renderDatasets() {
+    var pick = el("dataset-pick");
+    if (!pick) { return; }
+    clear(pick);
+    DATASETS.forEach(function (d, i) {
+      var li = document.createElement("li");
+      var label = document.createElement("label");
+      var input = document.createElement("input");
+      input.type = "radio";
+      input.name = "dataset_id";
+      input.value = d.dataset_id;
+      if (i === 0) { input.checked = true; }
+      input.addEventListener("change", function () { showProfile(d); });
+      label.appendChild(input);
+      label.appendChild(make("span", "pick__name", '<span class="mono" style="color:var(--spot-deep);font-weight:700">D-' + (i + 1) + "</span> " + d.original_filename
+        + (d.has_profile ? "" : ' <span class="mono">尚无画像</span>')));
+      label.appendChild(make("span", "pick__meta", "行 " + d.row_count + " · 列 " + d.column_count + " · " + d.created_at.slice(0, 10)));
+      li.appendChild(label);
+      pick.appendChild(li);
+    });
+    showProfile(DATASETS[0]);
+  }
+
+  function showProfile(d) {
+    var node = el("ds-profile");
+    if (!node) { return; }
+    node.innerHTML = "dataset_id " + d.dataset_id.slice(0, 12) + "…<br>"
+      + "filename " + d.original_filename + "<br>"
+      + "row_count " + d.row_count + " · column_count " + d.column_count + "<br>"
+      + "uploaded_at " + d.created_at + "（UTC）<br>"
+      + "has_profile " + String(d.has_profile)
+      + (d.has_profile ? "<br>缺失率 6.2 % · 重复行 7 · 告警 2" : "<br>画像将在工作流的 PROFILING 阶段生成");
+  }
+
+  function renderLadder() {
+    var list = el("run-ladder");
+    var stepLine = el("run-step-line");
+    var elapsed = el("run-elapsed");
+    if (!list) { return; }
+
+    var stepIndex, statusChip, activeIndex = -1, failIndex = -1;
+    if (runState === "run") {
+      stepIndex = runCursor; activeIndex = runCursor; statusChip = stChip("st--run", LADDER[runCursor][1] + "中", LADDER[runCursor][0]);
+    } else if (runState === "success") {
+      stepIndex = 6; statusChip = stChip("st--ok", "已完成", "SUCCESS");
+    } else if (runState === "warn") {
+      stepIndex = 6; statusChip = stChip("st--warn", "带警告完成", "SUCCESS_WITH_WARNINGS");
+    } else {
+      stepIndex = 2; failIndex = 2; statusChip = stChip("st--fail", "失败", "FAILED");
+    }
+
+    clear(list);
+    LADDER.forEach(function (row, i) {
+      var li = document.createElement("li");
+      var mark = "尚未进入";
+      if (i === failIndex) { li.setAttribute("data-fail", "1"); mark = "此处失败"; }
+      else if (i === activeIndex) { li.setAttribute("data-now", "1"); mark = "正在进行"; }
+      else if (i < stepIndex) { li.setAttribute("data-done", "1"); mark = "已完成"; }
+      li.innerHTML = '<span class="rung-no">' + (i < 9 ? "0" : "") + (i + 1) + "</span>"
+        + '<span class="rung-name">' + row[1] + "<small>" + row[0] + "</small></span>"
+        + '<span class="rung-state">' + mark + "</span>";
+      list.appendChild(li);
+    });
+
+    if (stepLine) {
+      stepLine.innerHTML = "当前状态 " + statusChip + " · <span class=\"mono\">step_index = "
+        + stepIndex + "</span> / <span class=\"mono\">total_steps = 6</span>（已完成阶段数 / 总阶段数，不是时间百分比）。";
+    }
+    if (elapsed) {
+      var end = runState === "run"
+        ? isoToMs(PLACEHOLDER.created_at) + (runCursor * 165 + 96) * 1000
+        : isoToMs(PLACEHOLDER.finished_at);
+      elapsed.textContent = "整条任务 " + hhmmss((end - isoToMs(PLACEHOLDER.created_at)) / 1000)
+        + "（created_at " + PLACEHOLDER.created_at.slice(11, 19) + " → "
+        + (runState === "run" ? "尚未结束，用当前时刻减 created_at" : PLACEHOLDER.finished_at.slice(11, 19)) + "）";
+    }
+  }
+
+  function renderTasks() {
+    var body = el("run-task-body");
+    if (!body) { return; }
+    clear(body);
+    var visible = runState === "run" ? TASKS.slice(0, Math.min(TASKS.length, runCursor + 1)) : TASKS;
+    visible.forEach(function (t) {
+      var tr = document.createElement("tr");
+      var chip = t.status === "success" ? stChip("st--ok", "成功", "SUCCESS")
+        : t.status === "skipped" ? stChip("st--wait", "已跳过", "SKIPPED")
+        : stChip("st--run", "进行中", "RUNNING");
+      if (runState === "fail" && t.id === "T4") { chip = stChip("st--fail", "失败", "FAILED"); }
+      tr.innerHTML = '<td data-label="任务"><span class="t-id">' + t.id + "</span></td>"
+        + '<td data-label="说明">' + t.desc + "</td>"
+        + '<td data-label="状态">' + chip + "</td>"
+        + '<td data-label="错误"><span class="mono">' + (t.error || "—") + "</span></td>";
+      body.appendChild(tr);
+    });
+  }
+
+  function renderStatusMap() {
+    var list = el("status-map");
+    if (!list) { return; }
+    clear(list);
+    STATUS_MAP.forEach(function (row, i) {
+      var no = i < 9 ? "0" + (i + 1) : String(i + 1);
+      list.appendChild(tocRow(no, stChip(row[2], row[1], row[0]), null, "枚举原值"));
+    });
+  }
+
+  function renderStatePanel(name) {
+    var ids = ["panel-empty-none", "panel-empty-filter", "panel-empty-fail", "panel-loading", "panel-error"];
+    ids.forEach(function (id) { el(id).hidden = true; });
+    el(name).hidden = false;
+  }
+
+  var ROUTE_PANEL = {
+    "#/login": "view-login",
+    "#/cover": "view-cover",
+    "#/contents": "view-contents",
+    "#/article": "view-article",
+    "#/analysis": "view-analysis",
+    "#/run": "view-run",
+    "#/states": "view-states"
+  };
+
+  function route(hash) {
+    var panel = ROUTE_PANEL[hash] ? hash : "#/cover";
+    VIEWS.forEach(function (v) {
+      var node = el("view-" + v);
+      node.hidden = node.id !== ROUTE_PANEL[panel];
+    });
+    document.body.setAttribute("data-view", panel.slice(2));
+    var level = LEVELS[panel.slice(2)];
+    [1, 2, 3].forEach(function (n) {
+      var span = el("trail-level-" + n);
+      span.removeAttribute("aria-current");
+      span.style.color = "var(--ink-400)";
+      if (n === level) {
+        span.style.color = "var(--spot-deep)";
+        span.setAttribute("aria-current", "step");
+      }
+    });
+    var links = document.querySelectorAll("#sample-rack a");
+    Array.prototype.forEach.call(links, function (a) {
+      if (a.getAttribute("href") === panel) { a.setAttribute("aria-current", "page"); }
+      else { a.removeAttribute("aria-current"); }
+    });
+    window.scrollTo(0, 0);
+  }
+
+  function jumpTo(targetId) {
+    var node = el(targetId);
+    if (!node) { return; }
+    if (el("view-article").hidden) {
+      location.hash = "#/article";
+      window.setTimeout(function () { land(node); }, 60);
+    } else {
+      land(node);
+    }
+  }
+  function land(node) {
+    node.scrollIntoView({ block: "center" });
+    node.classList.add("target");
+    window.setTimeout(function () { node.classList.remove("target"); }, 900);
+  }
+
+  function wireQuestions() {
+    var box = el("q-input");
+    var counter = el("q-counter");
+    var submit = el("ask-submit");
+    var reason = el("ask-block-reason");
+    function validate() {
+      var len = box.value.trim().length;
+      counter.textContent = len + " / 500 · 至少 2 字";
+      counter.setAttribute("data-over", len > 500 || (len > 0 && len < 2) ? "1" : "0");
+      var ok = len >= 2 && len <= 500;
+      submit.disabled = !ok;
+      reason.textContent = ok ? "可发起：POST /api/analysis（202 已受理）"
+        : "「发起分析」不可用：" + (len === 0 ? "问题为空" : len < 2 ? "问题不足 2 字" : "问题超过 500 字") + "。禁用原因写在按钮旁边，不只靠悬浮提示。";
+    }
+    box.addEventListener("input", validate);
+    validate();
+
+    submit.addEventListener("click", function () {
+      var picked = document.querySelector('input[name="dataset_id"]:checked');
+      var steps = document.querySelector('input[name="max_steps"]:checked');
+      var receipt = el("receipt");
+      receipt.hidden = false;
+      el("receipt-body").textContent =
+        "POST /api/analysis\n"
+        + JSON.stringify({ dataset_id: picked ? picked.value : "", question: box.value.trim(), max_steps: Number(steps.value) }, null, 2)
+        + "\n\n→ 202 Accepted\n"
+        + JSON.stringify({ ok: true, data: { workflow_id: PLACEHOLDER.workflow_id, status: "PENDING", step_index: 0, total_steps: Number(steps.value) > 6 ? 6 : Number(steps.value) }, error: null }, null, 2);
+      runState = "run";
+      renderLadder();
+      renderTasks();
+    });
+  }
+
+  function wireLogin() {
+    var form = el("login-form");
+    var err = el("login-error");
+    var errText = el("login-error-text");
+    var retry = el("login-retry");
+    var confirmField = el("login-confirm-field");
+    var title = el("login-title");
+    var kicker = el("login-kicker");
+    var submit = el("login-submit");
+
+    function setMode(mode) {
+      err.hidden = true;
+      retry.hidden = true;
+      submit.disabled = false;
+      confirmField.hidden = mode !== "bootstrap";
+      if (mode === "bootstrap") {
+        kicker.textContent = "首次部署 · 初始化";
+        title.textContent = "创建管理员并进入";
+        submit.textContent = "创建管理员并进入";
+        submit.setAttribute("data-primary", "");
+      } else {
+        kicker.textContent = "凭证 · 会话";
+        title.textContent = "登录本期";
+        submit.textContent = "登录";
+      }
+      if (mode === "401") {
+        err.hidden = false;
+        errText.textContent = "用户名或密码不正确";
+        retry.hidden = false;
+        retry.textContent = "会话 8 小时后过期；POST /auth/login 的失败文案不区分账号是否存在（防枚举）。";
+      }
+      if (mode === "429") {
+        err.hidden = false;
+        errText.textContent = "尝试次数过多，请 30 秒后再试";
+        retry.hidden = false;
+        submit.disabled = true;
+        var left = 30;
+        retry.textContent = "Retry-After: 30 · 倒计时期间提交按钮禁用";
+        var timer = window.setInterval(function () {
+          left -= 1;
+          retry.textContent = "Retry-After: " + left + " · 倒计时期间提交按钮禁用";
+          if (left <= 0) { window.clearInterval(timer); submit.disabled = false; errText.textContent = "可以再试一次了"; }
+        }, 1000);
+      }
+      if (mode === "500") {
+        err.hidden = false;
+        errText.textContent = "服务暂时不可用";
+        retry.hidden = false;
+        retry.textContent = "5xx 与 401 的文案必须互不相同：一个是「你输错了」，一个是「我们这里出问题了」。";
+      }
+      if (mode === "normal") {
+        retry.hidden = true;
+      }
+    }
+
+    el("login-mode-normal").addEventListener("click", function () { setMode("normal"); });
+    el("login-mode-bootstrap").addEventListener("click", function () { setMode("bootstrap"); });
+    el("login-err-401").addEventListener("click", function () { setMode("401"); });
+    el("login-err-429").addEventListener("click", function () { setMode("429"); });
+    el("login-err-500").addEventListener("click", function () { setMode("500"); });
+    form.addEventListener("submit", function (e) { e.preventDefault(); setMode("normal"); });
+    setMode("normal");
+  }
+
+  function wireRunModes() {
+    function set(mode) {
+      runState = mode;
+      if (mode === "run") { runCursor = 2; }
+      renderLadder();
+      renderTasks();
+    }
+    el("run-mode-run").addEventListener("click", function () { set("run"); });
+    el("run-mode-success").addEventListener("click", function () { set("success"); });
+    el("run-mode-warn").addEventListener("click", function () { set("warn"); });
+    el("run-mode-fail").addEventListener("click", function () { set("fail"); });
+    el("run-poll-advance").addEventListener("click", function () {
+      if (runState !== "run") { runCursor = 0; }
+      runState = "run";
+      runCursor += 1;
+      if (runCursor >= LADDER.length) { runState = "warn"; runCursor = LADDER.length; }
+      renderLadder();
+      renderTasks();
+    });
+  }
+
+  function wireStates() {
+    el("st-empty-none").addEventListener("click", function () { renderStatePanel("panel-empty-none"); });
+    el("st-empty-filter").addEventListener("click", function () { renderStatePanel("panel-empty-filter"); });
+    el("st-empty-fail").addEventListener("click", function () { renderStatePanel("panel-empty-fail"); });
+    el("st-loading").addEventListener("click", function () { renderStatePanel("panel-loading"); });
+    el("st-error").addEventListener("click", function () { renderStatePanel("panel-error"); });
+    el("retry-datasets").addEventListener("click", function () { renderStatePanel("panel-empty-fail"); });
+    renderStatePanel("panel-empty-none");
+  }
+
+  function wireCites() {
+    document.addEventListener("click", function (e) {
+      var a = e.target.closest ? e.target.closest('a[data-target]') : null;
+      if (!a) { return; }
+      e.preventDefault();
+      jumpTo(a.getAttribute("data-target"));
+    });
+  }
+
+  renderIssueDerived();
+  renderTocPreviews();
+  renderT1();
+  renderHistory();
+  renderDatasets();
+  renderLadder();
+  renderTasks();
+  renderStatusMap();
+  wireQuestions();
+  wireLogin();
+  wireRunModes();
+  wireStates();
+  wireCites();
+
+  window.addEventListener("hashchange", function () { route(location.hash); });
+  if (!location.hash) { location.hash = "#/cover"; }
+  route(location.hash);
+})();
+</script>
+</body>
+</html>
+

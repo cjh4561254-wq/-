@@ -63,7 +63,7 @@ TWO_TASK_QUESTION = "检查数据集中的缺失值，并分析不同地区的�
 # 模板报告 summary 的首段，**逐字写死在测试里**（不从实现里 import 常量）。
 # 理由见 test_report_first_paragraph_states_no_model_was_used 的 docstring：
 # 拿常量和它自己比是永远为真的断言，抓不住"有人改了这个措辞"。
-TEMPLATE_NOTICE = "本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总"
+TEMPLATE_NOTICE = "本次未使用大模型，以下结论为工具结果的直接汇总"
 
 
 @pytest.fixture(scope="module")

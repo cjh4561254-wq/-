@@ -74,6 +74,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_ID = "0123456789abcdef0123456789abcdef"
 FAKE_KEY = "sk-acceptance-test-DO-NOT-STORE"
 
+#: 归档库的读接口（`count` / `list_recent` / `get_for_user`）在 task-11 多用户改造后
+#: **必须显式带归属**，本文件统一用这个 id。写记录时也带上同一个 —— 不带的话记录会以
+#: `owner_user_id = NULL` 入库，按归属一查全空（`NULL = 1` 在 SQL 里是 NULL，不是 TRUE）。
+ACCEPT_OWNER_ID = 1
+
 # 子进程必须看到的最小干净环境：清掉所有 LLM 变量，防止机器级真 key 漏进去。
 _LLM_ENV_CLEAR = ("DEEPSEEK_API_KEY", "LLM_API_KEY",
                   "DEEPSEEK_BASE_URL", "LLM_BASE_URL",
@@ -132,6 +137,8 @@ def _make_state(status=WorkflowStatus.SUCCESS, *, question="验收探针", with_
                               WorkflowStatus.SUCCESS_WITH_WARNINGS,
                               WorkflowStatus.FAILED) else None),
         report=report,
+        owner_user_id=ACCEPT_OWNER_ID,
+        owner_username="acceptance",
     )
 
 
@@ -148,6 +155,8 @@ def _record(workflow_id=WORKFLOW_ID, **kw) -> HistoryRecord:
         report_text='{"probe": true}',
         error_code=None,
         archived_at=now,
+        owner_user_id=ACCEPT_OWNER_ID,
+        owner_username="acceptance",
     )
     base.update(kw)
     return HistoryRecord(**base)
@@ -175,12 +184,13 @@ rec = HistoryRecord(
     created_at=now - timedelta(seconds=30), finished_at=now,
     has_report=True, llm_used=True,
     report_text='{{"probe": "cross-process"}}', error_code=None, archived_at=now,
+    owner_user_id={owner!r}, owner_username="acceptance",
 )
 store.archive(rec)
 print("CHILD1_PID=" + str(os.getpid()))
-print("CHILD1_COUNT=" + str(store.count()))
+print("CHILD1_COUNT=" + str(store.count(owner_user_id={owner!r})))
 print("CHILD1_ROW=" + json.dumps(
-    {{f.name: str(getattr(store.get({wid!r}), f.name)) for f in dataclasses.fields(rec)}},
+    {{f.name: str(getattr(store.get_for_user({wid!r}, {owner!r}), f.name)) for f in dataclasses.fields(rec)}},
     ensure_ascii=False, sort_keys=True))
 '''
 
@@ -193,7 +203,7 @@ os.environ["DB_PATH"] = {db!r}
 from app.data.history import get_history_store, reset_history_store_cache
 reset_history_store_cache()
 store = get_history_store()
-rec = store.get({wid!r})
+rec = store.get_for_user({wid!r}, {owner!r})
 print("CHILD2_PID=" + str(os.getpid()))
 if rec is None:
     print("CHILD2_ROW=None")
@@ -201,8 +211,8 @@ else:
     print("CHILD2_ROW=" + json.dumps(
         {{f.name: str(getattr(rec, f.name)) for f in dataclasses.fields(rec)}},
         ensure_ascii=False, sort_keys=True))
-print("CHILD2_COUNT=" + str(store.count()))
-print("CHILD2_LIST=" + str(len(store.list_recent(limit=10))))
+print("CHILD2_COUNT=" + str(store.count(owner_user_id={owner!r})))
+print("CHILD2_LIST=" + str(len(store.list_recent(limit=10, owner_user_id={owner!r}))))
 '''
 
 
@@ -225,7 +235,7 @@ def test_a1_a_record_survives_a_real_process_restart(tmp_path):
     db = tmp_path / "db" / "app.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     fmt = dict(root=str(PROJECT_ROOT), clear=list(_LLM_ENV_CLEAR), db=str(db),
-               wid=WORKFLOW_ID, q="A1 跨进程存活探针")
+               wid=WORKFLOW_ID, q="A1 跨进程存活探针", owner=ACCEPT_OWNER_ID)
 
     first = _run_child(tmp_path, _CHILD_ARCHIVE.format(**fmt))
     assert first.returncode == 0, "归档子进程失败：\n%s\n%s" % (first.stdout, first.stderr)
@@ -246,7 +256,9 @@ def test_a1_a_record_survives_a_real_process_restart(tmp_path):
     row1 = json.loads(_val(first.stdout, "CHILD1_ROW"))
     row2 = json.loads(_val(second.stdout, "CHILD2_ROW"))
     assert row2 != {"": "None"}, second.stdout
-    assert len(row1) == 10, "HistoryRecord 字段数变了：%d" % len(row1)
+    # 12 = HistoryRecord 现在的字段数（task-11 加了 owner_user_id / owner_username）。
+    # 这个数字写死是故意的：字段数变了要有人来看一眼"新增的字段跨进程存不存得住"。
+    assert len(row1) == 12, "HistoryRecord 字段数变了：%d" % len(row1)
     for field in row1:
         assert row1[field] == row2[field], (
             "字段 %s 跨进程不一致：进程1=%r 进程2=%r" % (field, row1[field], row2[field]))
@@ -270,7 +282,7 @@ def test_a1_schema_is_recreated_by_a_fresh_process(tmp_path):
     # 第二个"进程"（这里用新对象模拟重开）再来一次不应抛
     store = HistoryStore(db)
     store.ensure_schema()
-    assert store.count() == 0
+    assert store.count(owner_user_id=ACCEPT_OWNER_ID) == 0
 
 
 # ==========================================================================
@@ -304,7 +316,7 @@ def test_a2_non_terminal_states_are_never_archived(tmp_path):
     for status in (WorkflowStatus.PENDING, WorkflowStatus.PROFILING,
                    WorkflowStatus.EXECUTING, WorkflowStatus.VALIDATING):
         assert archive.archive_if_terminal(_make_state(status)) is False, status
-        assert store.count() == 0 if store.path.exists() else True
+        assert store.count(owner_user_id=ACCEPT_OWNER_ID) == 0 if store.path.exists() else True
 
 
 def test_a2_terminal_state_is_archived_when_it_has_a_real_finished_at(tmp_path):
@@ -331,7 +343,7 @@ def test_a2_terminal_state_is_archived_when_it_has_a_real_finished_at(tmp_path):
 
         assert archive.archive_if_terminal(state) is True, status
 
-        rec = get_history_store().get(state.workflow_id)
+        rec = get_history_store().get_for_user(state.workflow_id, ACCEPT_OWNER_ID)
         assert rec is not None
         assert rec.finished_at == state.finished_at, "入库的时间必须是 state 上那个真时间"
         registry.clear()
@@ -517,7 +529,7 @@ def test_a6_archived_rows_are_listed_newest_first(client):
 
     # finished_at=None 经 build_record 会被兜底成 archived_at（变异 2 的语义），
     # 所以走归档路径的那条不会是 NULL；这里断言兜底确实发生了。
-    fb = get_history_store().get("2" * 32)
+    fb = get_history_store().get_for_user("2" * 32, ACCEPT_OWNER_ID)
     assert fb.finished_at is not None
 
     # 直接写库造一条 finished_at=NULL 的"未跑完"行
@@ -526,7 +538,9 @@ def test_a6_archived_rows_are_listed_newest_first(client):
         workflow_id="1" * 32, question="未跑完的那条", status="EXECUTING",
         created_at=base - timedelta(minutes=5), finished_at=None,
         has_report=False, llm_used=False, report_text=None, error_code=None,
-        archived_at=base))
+        archived_at=base,
+        # 归属要和上面那些归档出来的记录一致，否则这条会因为"不是我的"而不出现在列表里
+        owner_user_id=ACCEPT_OWNER_ID, owner_username="acceptance"))
 
     items = client.get("/api/workflows/history?limit=10").json()["data"]["items"]
     got = [i["workflow_id"] for i in items]
@@ -577,8 +591,8 @@ def test_a7_concurrent_writers_and_readers_never_hit_database_locked(tmp_path):
 
     def reader(n):
         try:
-            store.list_recent(limit=100)
-            store.count()
+            store.list_recent(limit=100, owner_user_id=ACCEPT_OWNER_ID)
+            store.count(owner_user_id=ACCEPT_OWNER_ID)
         except Exception as exc:  # noqa: BLE001
             with lock:
                 errors.append("R%d:%s: %s" % (n, type(exc).__name__, exc))
@@ -591,8 +605,8 @@ def test_a7_concurrent_writers_and_readers_never_hit_database_locked(tmp_path):
 
     assert errors == [], "并发出错：%s" % errors
     assert len(written) == 20
-    assert store.count() == 20, "写入丢失：count=%d" % store.count()
-    rows = store.list_recent(limit=100)
+    assert store.count(owner_user_id=ACCEPT_OWNER_ID) == 20, "写入丢失：count=%d" % store.count(owner_user_id=ACCEPT_OWNER_ID)
+    rows = store.list_recent(limit=100, owner_user_id=ACCEPT_OWNER_ID)
     assert len(rows) == 20
     assert len({r.workflow_id for r in rows}) == 20, "出现重复行，upsert 有问题"
     assert not any("locked" in e for e in errors)
@@ -604,8 +618,8 @@ def test_a7_upsert_is_idempotent_by_workflow_id(tmp_path):
     for i in range(5):
         store.archive(_record(question="第 %d 次" % i))
         store.ensure_schema()
-    assert store.count() == 1
-    assert store.get(WORKFLOW_ID).question == "第 4 次"
+    assert store.count(owner_user_id=ACCEPT_OWNER_ID) == 1
+    assert store.get_for_user(WORKFLOW_ID, ACCEPT_OWNER_ID).question == "第 4 次"
 
 
 # ==========================================================================
@@ -717,9 +731,9 @@ def test_negative_limit_and_offset_are_rejected(tmp_path):
     store = HistoryStore(tmp_path / "db" / "app.db")
     store.ensure_schema()
     with pytest.raises(ValueError):
-        store.list_recent(limit=-1)
+        store.list_recent(limit=-1, owner_user_id=ACCEPT_OWNER_ID)
     with pytest.raises(ValueError):
-        store.list_recent(offset=-1)
+        store.list_recent(offset=-1, owner_user_id=ACCEPT_OWNER_ID)
 
 
 def test_get_history_store_returns_none_when_db_path_is_empty(monkeypatch):
@@ -748,7 +762,7 @@ def test_a_timestamps_round_trip_as_utc(tmp_path):
     store = HistoryStore(tmp_path / "db" / "app.db")
     naive = datetime(2026, 3, 4, 5, 6, 7)
     store.archive(_record(created_at=naive, finished_at=naive, archived_at=naive))
-    rec = store.get(WORKFLOW_ID)
+    rec = store.get_for_user(WORKFLOW_ID, ACCEPT_OWNER_ID)
     assert rec.created_at.tzinfo is not None, "读回来是朴素时间"
     assert rec.created_at.utcoffset() == timedelta(0)
     assert rec.created_at.year == 2026 and rec.created_at.hour == 5

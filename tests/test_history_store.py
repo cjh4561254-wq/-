@@ -32,6 +32,10 @@ from app.data.history import (
     reset_history_store_cache,
 )
 
+#: 本文件所有"正常"记录的归属人。读接口（`count` / `list_recent` / `get_for_user`）
+#: 都要求显式传 `owner_user_id`，这些用例统一用这个 id，避免每条都写一个魔数。
+OWNER_ID = 1
+
 #: 表结构的**独立**副本：测试自己建一遍，用来验证"代码建出来的表"与这里的期望一致，
 #: 也用来手工造"版本不符的老库"。故意不 import history 里的私有 SQL 常量 ——
 #: 那样就变成"拿实现验证实现"了。
@@ -47,7 +51,9 @@ CREATE TABLE workflow_history (
     report_text    TEXT,
     error_code     TEXT,
     schema_version INTEGER NOT NULL,
-    archived_at    TEXT NOT NULL
+    archived_at    TEXT NOT NULL,
+    owner_user_id  INTEGER,
+    owner_username TEXT
 )
 """
 
@@ -69,9 +75,15 @@ def _isolate_db_path(monkeypatch: pytest.MonkeyPatch):
 
 
 def _record(workflow_id: str = "a" * 32, **overrides: object) -> HistoryRecord:
-    """一条"正常跑完、有报告"的记录；用 `overrides` 改任意字段。"""
+    """一条"正常跑完、有报告"的记录；用 `overrides` 改任意字段。
+
+    `owner_user_id` 默认给 `OWNER_ID`（不是 None）：归档库的读接口全部按归属过滤，
+    记录不写归属就变成"谁也看不见"的孤儿行，`count(owner_user_id=...)` 会是 0 ——
+    那种红法看起来像"写没进去"，其实是被隔离规则挡住了。
+    """
     base: dict[str, object] = {
         "workflow_id": workflow_id,
+        "owner_user_id": OWNER_ID,
         "question": "各地区的销售额汇总",
         "status": "success",
         "created_at": datetime(2026, 10, 14, 9, 0, 0, tzinfo=timezone.utc),
@@ -102,7 +114,7 @@ def test_a_fresh_store_round_trips_every_field(tmp_path: Path) -> None:
 
     store.archive(record)
 
-    got = store.get(record.workflow_id)
+    got = store.get_for_user(record.workflow_id, OWNER_ID)
     assert got is not None
     assert got == record
     for field in dataclasses.fields(HistoryRecord):
@@ -129,7 +141,7 @@ def test_aware_timestamps_land_in_utc_and_keep_the_same_instant(tmp_path: Path) 
 
     store.archive(record)
 
-    got = store.get(record.workflow_id)
+    got = store.get_for_user(record.workflow_id, OWNER_ID)
     assert got is not None
     assert got.created_at == record.created_at          # 同一时刻（datetime 比的是 instant）
     assert got.created_at.utcoffset() == timedelta(0)   # 但落在 UTC
@@ -146,7 +158,7 @@ def test_naive_timestamps_are_treated_as_utc(tmp_path: Path) -> None:
 
     store.archive(record)
 
-    got = store.get(record.workflow_id)
+    got = store.get_for_user(record.workflow_id, OWNER_ID)
     assert got is not None
     assert got.created_at == datetime(2026, 10, 14, 9, 0, 0, tzinfo=timezone.utc)
     assert got.created_at.tzinfo is not None
@@ -166,7 +178,7 @@ def test_nullable_fields_survive_the_round_trip(tmp_path: Path) -> None:
 
     store.archive(record)
 
-    got = store.get("f" * 32)
+    got = store.get_for_user("f" * 32, OWNER_ID)
     assert got is not None
     assert got.finished_at is None
     assert got.report_text is None
@@ -196,8 +208,8 @@ def test_archiving_the_same_workflow_twice_overwrites_one_row(tmp_path: Path) ->
         )
     )
 
-    assert store.count() == 1
-    got = store.get("a" * 32)
+    assert store.count(owner_user_id=OWNER_ID) == 1
+    got = store.get_for_user("a" * 32, OWNER_ID)
     assert got is not None
     assert got.status == "failed"
     assert got.error_code == "workflow_timeout"
@@ -210,9 +222,9 @@ def test_two_different_workflows_are_two_rows(tmp_path: Path) -> None:
     store.archive(_record(workflow_id="1" * 32, question="问题一"))
     store.archive(_record(workflow_id="2" * 32, question="问题二"))
 
-    assert store.count() == 2
-    assert store.get("1" * 32).question == "问题一"  # type: ignore[union-attr]
-    assert store.get("2" * 32).question == "问题二"  # type: ignore[union-attr]
+    assert store.count(owner_user_id=OWNER_ID) == 2
+    assert store.get_for_user("1" * 32, OWNER_ID).question == "问题一"  # type: ignore[union-attr]
+    assert store.get_for_user("2" * 32, OWNER_ID).question == "问题二"  # type: ignore[union-attr]
 
 
 # ---- ③ 排序与分页 ----------------------------------------------------------
@@ -228,7 +240,7 @@ def test_list_recent_sorts_by_finished_at_desc_with_none_last(tmp_path: Path) ->
     )
     store.archive(_record(workflow_id="3" * 32, question="没跑完", finished_at=None))
 
-    got = store.list_recent()
+    got = store.list_recent(owner_user_id=OWNER_ID)
 
     assert [r.question for r in got] == ["晚", "早", "没跑完"]
 
@@ -254,7 +266,7 @@ def test_list_recent_breaks_ties_with_created_at_desc(tmp_path: Path) -> None:
         )
     )
 
-    assert [r.question for r in store.list_recent()] == ["后创建", "先创建"]
+    assert [r.question for r in store.list_recent(owner_user_id=OWNER_ID)] == ["后创建", "先创建"]
 
 
 def test_list_recent_paginates(tmp_path: Path) -> None:
@@ -269,21 +281,21 @@ def test_list_recent_paginates(tmp_path: Path) -> None:
             )
         )
 
-    assert [r.question for r in store.list_recent(limit=2)] == ["问题4", "问题3"]
-    assert [r.question for r in store.list_recent(limit=2, offset=2)] == ["问题2", "问题1"]
-    assert [r.question for r in store.list_recent(limit=2, offset=4)] == ["问题0"]
-    assert store.list_recent(limit=2, offset=5) == []
-    assert store.list_recent(limit=0) == []
-    assert len(store.list_recent()) == 5
+    assert [r.question for r in store.list_recent(limit=2, owner_user_id=OWNER_ID)] == ["问题4", "问题3"]
+    assert [r.question for r in store.list_recent(limit=2, offset=2, owner_user_id=OWNER_ID)] == ["问题2", "问题1"]
+    assert [r.question for r in store.list_recent(limit=2, offset=4, owner_user_id=OWNER_ID)] == ["问题0"]
+    assert store.list_recent(limit=2, offset=5, owner_user_id=OWNER_ID) == []
+    assert store.list_recent(limit=0, owner_user_id=OWNER_ID) == []
+    assert len(store.list_recent(owner_user_id=OWNER_ID)) == 5
 
 
 def test_list_recent_rejects_negative_limit_or_offset(tmp_path: Path) -> None:
     """负数是编程错误：SQLite 会把 `LIMIT -1` 当"不限制"，静默返回全部更难查。"""
     store = HistoryStore(tmp_path / "app.db")
     with pytest.raises(ValueError):
-        store.list_recent(limit=-1)
+        store.list_recent(limit=-1, owner_user_id=OWNER_ID)
     with pytest.raises(ValueError):
-        store.list_recent(offset=-1)
+        store.list_recent(offset=-1, owner_user_id=OWNER_ID)
 
 
 # ---- ④ 幂等建表 / 父目录自动创建 / 读路径自动建表 --------------------------
@@ -297,7 +309,7 @@ def test_ensure_schema_is_idempotent(tmp_path: Path) -> None:
 
     store.archive(_record())
     store.ensure_schema()  # 已有数据之后再建一次：不能报错、也不能清空
-    assert store.count() == 1
+    assert store.count(owner_user_id=OWNER_ID) == 1
 
 
 def test_parent_directories_are_created_on_demand(tmp_path: Path) -> None:
@@ -315,14 +327,14 @@ def test_reads_work_without_calling_ensure_schema_first(tmp_path: Path) -> None:
     """调用方不该被迫记得先 `ensure_schema()`：四个操作内部都要自己确保表存在。"""
     store = HistoryStore(tmp_path / "app.db")
 
-    assert store.count() == 0
-    assert store.get("a" * 32) is None
-    assert store.list_recent() == []
+    assert store.count(owner_user_id=OWNER_ID) == 0
+    assert store.get_for_user("a" * 32, OWNER_ID) is None
+    assert store.list_recent(owner_user_id=OWNER_ID) == []
 
     store.archive(_record())
 
-    assert store.count() == 1
-    assert store.get("a" * 32) is not None
+    assert store.count(owner_user_id=OWNER_ID) == 1
+    assert store.get_for_user("a" * 32, OWNER_ID) is not None
 
 
 # ---- ⑤ 出错时抛 HistoryStoreError（不吞） ---------------------------------
@@ -372,7 +384,7 @@ def test_schema_version_mismatch_raises_and_keeps_the_data(tmp_path: Path) -> No
         store.ensure_schema()
     assert "版本不符" in str(excinfo.value)
     with pytest.raises(HistoryStoreError):
-        store.get("b" * 32)
+        store.get_for_user("b" * 32, OWNER_ID)
     with pytest.raises(HistoryStoreError):
         store.archive(_record(workflow_id="c" * 32))
 
@@ -418,7 +430,7 @@ def test_every_connection_sets_busy_timeout(tmp_path: Path, monkeypatch: pytest.
 
     store = HistoryStore(tmp_path / "app.db")
     store.archive(_record())
-    store.get("a" * 32)
+    store.get_for_user("a" * 32, OWNER_ID)
 
     assert any("busy_timeout = 5000" in sql for sql in seen)
     assert len(seen) >= 2  # 每条连接各设一次，不是只在第一条上设
@@ -464,8 +476,8 @@ def test_a_hundred_threads_archive_concurrently(tmp_path: Path) -> None:
 
     assert errors == []
     assert all(not thread.is_alive() for thread in threads)
-    assert store.count() == 100
-    assert store.get(f"{7:032x}").question == "问题 7"  # type: ignore[union-attr]
+    assert store.count(owner_user_id=OWNER_ID) == 100
+    assert store.get_for_user(f"{7:032x}", OWNER_ID).question == "问题 7"  # type: ignore[union-attr]
 
 
 # ---- ⑥ 空 db_path 关闭归档 + 配置接线 -------------------------------------

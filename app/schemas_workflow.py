@@ -233,9 +233,33 @@ class WorkflowState(BaseModel):
     dataset_id: str = Field(description="关联的数据集")
     question: str = Field(min_length=1, max_length=500, description="用户问题，1–500 字")
 
+    # 归属：发起这条工作流的用户。用途只有数据隔离（别人轮询不到、也拿不到报告）。
+    #
+    # 为什么默认 None（而不是必填）：`WorkflowState` 在测试、探针脚本、以及
+    # 本次改造之前的代码里被大量直接构造；设成必填会让"没有归属"这种状态
+    # **无法表示**，而它确实存在。None 的语义写死为"没有归属 → 谁也不给看"
+    # （`app/api/ownership.py:require_owned_workflow`），而不是"公共可见"。
+    #
+    # 为什么 username 也存一份：归档要落 `owner_username` 供前端展示，
+    # 而工作流跑在后台线程里，那时再去查账号库要多一条连接、还要处理"账号被删了"。
+    # 它是**展示用的快照**，判定归属一律用 owner_user_id（用户名可以改，id 不会）。
+    owner_user_id: int | None = Field(
+        default=None, description="发起者的用户 id；None 表示没有归属，谁都不给看"
+    )
+    owner_username: str | None = Field(
+        default=None, description="发起者的用户名（展示用快照，不参与归属判定）"
+    )
+
     status: WorkflowStatus = Field(default=WorkflowStatus.PENDING)
     step: WorkflowStep = Field(default="profiling", description="当前阶段名，前端查中文文案")
-    step_index: int = Field(default=0, ge=0, description="已完成的阶段数，前端进度条用")
+    # step_index 是"当前阶段在 6 步里的下标（0 起）"。阶段是**顺序进入**的：
+    # `orchestrator` 先 `_enter(EXECUTING, "execution")`，执行完才 `_enter(CHARTING,
+    # "charting")` —— 所以进入某个阶段时，它前面的阶段都已经走完，
+    # `step_index` 恰好等于"已完成阶段数"（`_enter` 里就是 `_STEPS.index(step)`）。
+    # 换句话说 `step_index / total_steps` 就是完成比例；前端画进度条时用它没问题。
+    # 唯一要避免的读法是"已经走完几步 = step_index + 1"（那会把**正在进行**的阶段
+    # 也算成完成的）。工具任务（T1/T2…）的完成情况看 `results`，与这里无关。
+    step_index: int = Field(default=0, ge=0, description="当前阶段下标（0 起），前端进度条用")
     total_steps: int = Field(default=6, ge=1)
 
     # 各阶段的产物。默认全是 None / 空列表 —— "还没到那一步"和"那一步失败了"

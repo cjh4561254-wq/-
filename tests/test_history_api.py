@@ -34,6 +34,11 @@ from app.schemas_workflow import (
 
 WORKFLOW_ID = "0123456789abcdef0123456789abcdef"
 
+#: 通过 HTTP 访问历史接口时的登录用户 id（`tests/auth_support.py` 建的 `test-admin`，
+#: 在测试账号库里就是 1 号）。归档的记录必须写同一个归属，否则接口按归属一过滤就 404 ——
+#: 那正是隔离生效的样子，不是接口坏了。
+CURRENT_USER_ID = 1
+
 
 @pytest.fixture(autouse=True)
 def _isolate_db(tmp_path, monkeypatch):
@@ -85,6 +90,9 @@ def _state(**overrides) -> WorkflowState:
         "dataset_id": "d" * 32,
         "question": "按地区看销售额",
         "created_at": datetime.now(timezone.utc),
+        # 归属 = 发 HTTP 请求的那个登录用户，否则"自己的历史"查不到（隔离生效的样子）
+        "owner_user_id": CURRENT_USER_ID,
+        "owner_username": "test-admin",
     }
     fields.update(overrides)
     return WorkflowState(**fields)

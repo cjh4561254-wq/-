@@ -472,7 +472,7 @@ POST /api/analysis -> 202（期望 202）
     T2  ok=True  tool=group_aggregate  rows=6     3ms  data 键=['columns', 'group_count', 'row_count', 'rows']  错误=None
 
   summary:
-    本次未使用大模型（llm_used=false），以下结论为工具结果的直接汇总
+    本次未使用大模型，以下结论为工具结果的直接汇总
 
 针对问题「各地区的销售额汇总，并看一下销售额和利润的关系」，系统一共规划了 2 个分析任务，成功 2 个。
 

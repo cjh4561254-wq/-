@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10 套设计方案对比 · AI Market Intelligence Studio 前端重构</title>
+<style>
+/* 设计底座（本页自身）：
+   1. 本页只做一件事——让 10 套方案能被横向比较，因此主角是"差异矩阵 + 卡片"，不是宣传。
+   2. 中性灰承担画面，单一墨蓝只标记"当前/可读/可选"；零阴影、零渐变、零玻璃拟态；圆角 2px。
+   3. 层级只靠字号差、字重差、对齐与 1px 分隔线建立；数字与编号用等宽 + tabular-nums。
+   4. 正文对比度 ≥4.5:1，焦点可见。 */
+:root{
+  --ink-900:#12181F; --ink-700:#333F4B; --ink-600:#4A5765; --ink-500:#5D6975;
+  --rule:#DCE1E6; --rule-soft:#EAEEF1; --paper:#FFFFFF; --bg:#F5F6F8; --sunk:#EEF1F4;
+  --navy:#194A7A; --navy-ink:#0E2F4F; --navy-soft:#E8EFF6;
+  --ok:#1C6440; --warn:#8A5B12; --err:#9E2B2B;
+  --ff:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  --fm:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px; --sp-7:48px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink-900);font-family:var(--ff);font-size:14px;line-height:1.7}
+a{color:var(--navy-ink)}
+.wrap{max-width:1280px;margin:0 auto;padding:0 var(--sp-5) var(--sp-7)}
+header.page{background:var(--paper);border-bottom:1px solid var(--rule);padding:var(--sp-5) 0 var(--sp-4)}
+.eyebrow{font:600 11px/1 var(--fm);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-600);margin:0 0 var(--sp-2)}
+h1{font-size:26px;line-height:1.25;font-weight:600;margin:0 0 var(--sp-2);letter-spacing:-.01em}
+.sub{margin:0;color:var(--ink-600);max-width:74ch}
+.notice{margin-top:var(--sp-4);border:1px solid var(--rule);background:var(--sunk);padding:var(--sp-3) var(--sp-4);font-size:13px;color:var(--ink-700);max-width:88ch}
+.notice b{font-weight:600}
+h2{font-size:16px;font-weight:600;margin:var(--sp-6) 0 var(--sp-3);padding-bottom:var(--sp-2);border-bottom:1px solid var(--rule)}
+h2 .no{font:600 12px/1 var(--fm);color:var(--ink-500);margin-right:var(--sp-2);letter-spacing:.06em}
+/* 快速决策 */
+.pick{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.pick>div{background:var(--paper);padding:var(--sp-4)}
+.pick h3{margin:0 0 var(--sp-2);font-size:13px;font-weight:600}
+.pick p{margin:0;font-size:13px;color:var(--ink-600)}
+.pick .to{display:block;margin-top:var(--sp-2);font:600 12px/1.6 var(--fm);color:var(--navy-ink)}
+/* 卡片网格 */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:var(--sp-4)}
+.card{background:var(--paper);border:1px solid var(--rule);display:flex;flex-direction:column}
+.card>.hd{display:flex;align-items:baseline;gap:var(--sp-3);padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--rule-soft);background:var(--sunk)}
+.card .idno{font:600 20px/1 var(--fm);color:var(--navy);letter-spacing:-.02em}
+.card .nm{font-size:15px;font-weight:600;letter-spacing:-.005em}
+.card .stance{margin:0;padding:var(--sp-3) var(--sp-4) 0;font-size:13px;color:var(--ink-700)}
+dl{margin:var(--sp-3) 0 0;padding:0 var(--sp-4);display:grid;grid-template-columns:78px 1fr;gap:2px var(--sp-3)}
+dt{font-size:12px;color:var(--ink-500);border-bottom:1px dotted var(--rule);padding-bottom:2px}
+dd{margin:0;font-size:13px;border-bottom:1px dotted var(--rule);padding-bottom:2px}
+dd .tag{font:11px/1.6 var(--fm);color:var(--ink-600);background:var(--sunk);border:1px solid var(--rule);padding:0 5px;margin-right:4px}
+.cost{margin:var(--sp-3) var(--sp-4) 0;font-size:12.5px;color:var(--ink-600);border-left:2px solid var(--warn);padding-left:var(--sp-3)}
+.cost b{color:var(--ink-900);font-weight:600}
+.card>.ft{margin-top:auto;display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-3) var(--sp-4);border-top:1px solid var(--rule-soft)}
+.stars{font:600 12px/1 var(--fm);color:var(--navy-ink);letter-spacing:.04em}
+.stars small{font-weight:400;color:var(--ink-500);margin-left:4px}
+.btns{margin-left:auto;display:flex;gap:var(--sp-2)}
+.btns a{font-size:13px;padding:5px 12px;border:1px solid var(--navy);text-decoration:none;color:var(--navy-ink);background:var(--paper)}
+.btns a.pri{background:var(--navy);color:#fff}
+.btns a:hover{background:var(--navy-soft)}
+.btns a.pri:hover{background:var(--navy-ink)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--navy);outline-offset:2px}
+/* 矩阵表 */
+table{width:100%;border-collapse:collapse;background:var(--paper);font-size:13px}
+caption{text-align:left;font-size:12px;color:var(--ink-500);padding:0 0 var(--sp-2)}
+th,td{border:1px solid var(--rule);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:var(--sunk);font-weight:600;font-size:12.5px;white-space:nowrap}
+td.c{text-align:center;font-family:var(--fm);font-size:12px}
+tbody tr:hover{background:var(--navy-soft)}
+ul.tight{margin:var(--sp-2) 0 0;padding-left:1.35em}
+ul.tight li{margin-bottom:4px}
+code{font-family:var(--fm);font-size:12.5px;background:var(--sunk);border:1px solid var(--rule);padding:0 4px}
+footer{margin-top:var(--sp-6);padding-top:var(--sp-4);border-top:1px solid var(--rule);font-size:12.5px;color:var(--ink-500)}
+@media (max-width:760px){
+  .grid{grid-template-columns:1fr}
+  dl{grid-template-columns:70px 1fr}
+  th,td{padding:5px 6px;font-size:12px}
+}
+</style>
+</head>
+<body>
+<header class="page"><div class="wrap">
+  <p class="eyebrow">第一阶段交付 · 等待你的选择</p>
+  <h1>10 套商业级前端设计方案对比</h1>
+  <p class="sub">AI Market Intelligence Studio（市场情报与智能分析平台）。10 套方案在<b>导航结构、首屏主角、信息密度、数据主角、品牌气质、交互方式</b>六个维度上各自占了不同坐标，不是换配色。每套都配一份可点开的静态原型与一份 15 节的方案文档。</p>
+  <div class="notice">
+    <b>两点必须先说清：</b>
+    ① 这些原型是<b>静态视觉方案示意</b>，里面的数值全部是占位样例，没有任何一个接了后端；每套原型顶栏都常驻一条这样的声明。
+    ② 我这台机器的内嵌浏览器<b>无法截图、也没有 GPU</b>，所以视觉好不好看必须由你在自己的浏览器里判断——我能给的验证是：10 套全部通过结构审计（零外部依赖、零 <code>backdrop-filter</code>、零 <code>@import</code>、无不可达入口、阶段耗时造假为零、内联 JS 语法与 id 引用均已校验）。
+  </div>
+</div></header>
+
+<div class="wrap">
+
+<h2><span class="no">01</span>先想清楚这三个问题，再逛原型</h2>
+<div class="pick">
+  <div>
+    <h3>谁每天打开它？</h3>
+    <p>业务决策者只想看结论；分析师要反复跑问题；平台/运维要关心任务怎么跑。</p>
+    <span class="to">决策者 → 01 / 08 / 05 · 分析师 → 03 / 06 / 07 · 运维 → 09 / 04</span>
+  </div>
+  <div>
+    <h3>首要产物是什么？</h3>
+    <p>本产品最硬的差异点是"报告里每个数字都能追回到一次具体工具调用"，不同方案把它做成不同的东西。</p>
+    <span class="to">交付文档 → 03 / 10 · 结论 → 08 / 05 · 面板 → 07 / 04 · 过程 → 02 / 09</span>
+  </div>
+  <div>
+    <h3>能接受多大改动？</h3>
+    <p>10 套的落地影响附录结论一致：<b>都不需要动后端</b>。差别在表现层工作量与风险。</p>
+    <span class="to">最省 → 06 / 03 · 中等 → 01 / 02 / 07 / 08 · 最贵 → 04 / 09（需新增暗色令牌层）、10 / 05（需全量视觉回归）</span>
+  </div>
+</div>
+
+<h2><span class="no">02</span>10 套方案卡片</h2>
+<div class="grid">
+
+  <article class="card">
+    <div class="hd"><span class="idno">01</span><span class="nm">高端企业战略指挥中心</span></div>
+    <p class="stance">决策者要的是"现在该看哪里"。</p>
+    <dl>
+      <dt>导航</dt><dd>左侧栏 240px（3 组 6 项）+ 顶部命令条</dd>
+      <dt>首屏</dt><dd>战略态势带：3 个业务问题 × 结论 × 证据数</dd>
+      <dt>密度/主题</dt><dd><span class="tag">高</span><span class="tag">亮</span>数据主角：指标 + 业务结构化表</dd>
+      <dt>原型</dt><dd>7 视图 · 61KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>首屏态势带需要把历史报告的"结论 + 证据数"排成卡片流，前端要做聚合，三条结论之外的事会被裁掉。</p>
+    <div class="ft"><span class="stars">★★★★☆<small>4/5</small></span><span class="btns"><a class="pri" href="option-01/index.html">打开原型</a><a href="../docs/design-options/option-01.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">02</span><span class="nm">AI 原生智能体工作台</span></div>
+    <p class="stance">分析是"和一组 Agent 协作"，不是"填一张表单"。</p>
+    <dl>
+      <dt>导航</dt><dd>无传统菜单：左会话列表 220px + 中指令流 + 右运行轨道 180px</dd>
+      <dt>首屏</dt><dd>一条可继续的对话式指令流（轮次流 + 输入器）</dd>
+      <dt>密度/主题</dt><dd><span class="tag">中</span><span class="tag">亮</span>数据主角：Agent 任务卡与产出物</dd>
+      <dt>原型</dt><dd>6 视图 · 95KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>"会话"这一层在现有后端是虚的（历史只有 <code>limit/offset</code>，没有跨轮追问）；<code>max_steps=8</code> 时流会拉到 3 屏以上，关键结论被稀释。</p>
+    <div class="ft"><span class="stars">★★★★☆<small>4/5</small></span><span class="btns"><a class="pri" href="option-02/index.html">打开原型</a><a href="../docs/design-options/option-02.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">03</span><span class="nm">国际咨询公司商业分析平台</span></div>
+    <p class="stance">交付物本身即界面。</p>
+    <dl>
+      <dt>导航</dt><dd>顶部横向主导航 + 页内左侧章节目录锚点</dd>
+      <dt>首屏</dt><dd>报告文档流（编号小节 01/02/03 + Endnotes）</dd>
+      <dt>密度/主题</dt><dd><span class="tag">中</span><span class="tag">亮</span>数据主角：长文正文 + 图卡四件套</dd>
+      <dt>原型</dt><dd>8 视图 · 125KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>文档流要求先读，"想马上动手"的高频分析师会在第二屏之前失去耐心；正文超约 3000 字后窄屏体验退化。</p>
+    <div class="ft"><span class="stars">★★★★☆<small>4/5</small></span><span class="btns"><a class="pri" href="option-03/index.html">打开原型</a><a href="../docs/design-options/option-03.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">04</span><span class="nm">金融机构数据终端</span></div>
+    <p class="stance">熟练用户不该碰鼠标。</p>
+    <dl>
+      <dt>导航</dt><dd>无侧栏；窗格标签 + 命令面板（Ctrl/Cmd+K）+ 键盘驱动</dd>
+      <dt>首屏</dt><dd>多窗格分屏（2×2 ↔ 1×3 真切换）</dd>
+      <dt>密度/主题</dt><dd><span class="tag">极高</span><span class="tag">暗</span>数据主角：高密度表格 + 状态阶梯</dd>
+      <dt>原型</dt><dd>6 视图 · 50KB（键盘/窗格交互已实装）</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>与现有 <code>tokens.css</code>"故意不做暗色"直接冲突；阶段时间线因后端无阶段时间戳而退化；新手成本高。</p>
+    <div class="ft"><span class="stars">★★★★<small>4/5</small></span><span class="btns"><a class="pri" href="option-04/index.html">打开原型</a><a href="../docs/design-options/option-04.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">05</span><span class="nm">极简高端数据产品</span></div>
+    <p class="stance">层级只能靠排版建立，不能靠容器。</p>
+    <dl>
+      <dt>导航</dt><dd>顶部 5 项极窄导航，无侧栏、无面包屑</dd>
+      <dt>首屏</dt><dd>一个 96px 的巨大数字 + 一句结论 + 溯源行同屏</dd>
+      <dt>密度/主题</dt><dd><span class="tag">极低</span><span class="tag">亮</span>数据主角：单个指标 / 单张图，全站零容器</dd>
+      <dt>原型</dt><dd>10 视图 · 46KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>一屏一件事让"选数据集→提问→发起→看状态"变成 2–3 屏；横向比较做不到；实现容错接近零（字号/间距错一格就垮）。</p>
+    <div class="ft"><span class="stars">★★★★☆<small>4/5</small></span><span class="btns"><a class="pri" href="option-05/index.html">打开原型</a><a href="../docs/design-options/option-05.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">06</span><span class="nm">现代 SaaS 工作台</span></div>
+    <p class="stance">高频操作路径最短。</p>
+    <dl>
+      <dt>导航</dt><dd>顶部一级导航 + 页内二级 Tab / 分段控件</dd>
+      <dt>首屏</dt><dd>模块分区：待办 → 最近运行 → 数据集（待办只由 5 条真实规则推导）</dd>
+      <dt>密度/主题</dt><dd><span class="tag">中</span><span class="tag">亮</span>数据主角：列表 + 进度（三档密度可切）</dd>
+      <dt>原型</dt><dd>8 视图 · 116KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>首屏天花板低、不"惊艳"；系统健康时待办可能只剩一条，工作台存在感被削弱。</p>
+    <div class="ft"><span class="stars">★★★★☆<small>4/5</small></span><span class="btns"><a class="pri" href="option-06/index.html">打开原型</a><a href="../docs/design-options/option-06.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">07</span><span class="nm">商业情报 BI 面板 / 探索式分析台</span></div>
+    <p class="stance">改一处筛选，相关图全部联动。</p>
+    <dl>
+      <dt>导航</dt><dd>左侧筛选器面板 260px（作用域标注）+ 顶部时间控件</dd>
+      <dt>首屏</dt><dd>12 栏栅格图表墙（面板尺寸档位可切）</dd>
+      <dt>密度/主题</dt><dd><span class="tag">高</span><span class="tag">亮</span>数据主角：图表（bar/line/pie/scatter）</dd>
+      <dt>原型</dt><dd>6 视图 · 70KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>图表是后端静态 PNG，筛选<b>不能重绘图内聚合</b>——第一次用会期待落差；筛选语义需要人工预标注，"联动"只能靠文字维持诚实。</p>
+    <div class="ft"><span class="stars">★★★★<small>4/5</small></span><span class="btns"><a class="pri" href="option-07/index.html">打开原型</a><a href="../docs/design-options/option-07.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">08</span><span class="nm">高管决策简报 / Decision Room</span></div>
+    <p class="stance">先给答案，再给理由，最后给证据。</p>
+    <dl>
+      <dt>导航</dt><dd>无导航栏：单页纵向滚动 + 右侧锚点进度条（IntersectionObserver）</dd>
+      <dt>首屏</dt><dd>关键发现卡 ≤5 张 + 取舍对比矩阵</dd>
+      <dt>密度/主题</dt><dd><span class="tag">低</span><span class="tag">亮</span>数据主角：结论卡 + 对比矩阵</dd>
+      <dt>原型</dt><dd>8 视图 · 45KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>信息上限低（一次运行回答 4 个问题会被压缩失真）；取舍矩阵若走"两次真实运行并排"，需要前端从两份自由文本里对齐同一维度，落地难度容易被低估；作为<b>唯一</b>界面会牺牲平台可操作性。</p>
+    <div class="ft"><span class="stars">★★★★<small>4/5</small></span><span class="btns"><a class="pri" href="option-08/index.html">打开原型</a><a href="../docs/design-options/option-08.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">09</span><span class="nm">企业级 AI Operations Center</span></div>
+    <p class="stance">平台可信度来自"看得见它怎么跑"。</p>
+    <dl>
+      <dt>导航</dt><dd>左侧状态泳道（点击筛右列）+ 常驻底部事件流抽屉</dd>
+      <dt>首屏</dt><dd>队列四列：等待中 / 运行中 / 已完成 / 失败</dd>
+      <dt>密度/主题</dt><dd><span class="tag">极高</span><span class="tag">暗壳+亮纸</span>数据主角：状态阶梯 + 事件流</dd>
+      <dt>原型</dt><dd>7 视图 · 81KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>双主题落地成本十套里最高（要改写 <code>tokens.css</code> 的"故意不做暗色"决策并补对比度断言）；阶段块只能等宽、放弃了"色块宽度即真实时长"这一最有说服力维度；事件流是 1000ms 轮询<b>采样差异</b>，非实时。</p>
+    <div class="ft"><span class="stars">★★★☆☆<small>3.5/5</small></span><span class="btns"><a class="pri" href="option-09/index.html">打开原型</a><a href="../docs/design-options/option-09.md">方案文档</a></span></div>
+  </article>
+
+  <article class="card">
+    <div class="hd"><span class="idno">10</span><span class="nm">商业情报杂志 + 数据分析平台</span></div>
+    <p class="stance">分析成果值得被"出版"，编号即品牌。</p>
+    <dl>
+      <dt>导航</dt><dd>三级进入：封面层 → 目录层 → 内文层</dd>
+      <dt>首屏</dt><dd>本期封面：一个选题 + 期号 <code>R-2026-10-16/01</code>（由 <code>report_id</code>/<code>generated_at</code> 派生）</dd>
+      <dt>密度/主题</dt><dd><span class="tag">低</span><span class="tag">亮</span>数据主角：跨栏图文（正文 9 + 边注 3）</dd>
+      <dt>原型</dt><dd>7 视图 · 87KB</dd>
+    </dl>
+    <p class="cost"><b>最大代价：</b>实现成本明显更高——编辑版式不是组件，跨栏/悬挂编号/图卡四件套都得手工做；低密度 × 长版面 = 首屏承载力弱，"还有另外三件事也重要"时只能等下一期。</p>
+    <div class="ft"><span class="stars">★★★★☆<small>4/5</small></span><span class="btns"><a class="pri" href="option-10/index.html">打开原型</a><a href="../docs/design-options/option-10.md">方案文档</a></span></div>
+  </article>
+
+</div>
+
+<h2><span class="no">03</span>差异矩阵（这就是"不是换色"的证据）</h2>
+<table>
+  <caption>每套方案的导航结构与首屏主角必须 10 个各不相同；数据主角至少 6 种。此表由主控在派发前定稿，是各方案作者的唯一上游依据（<code>docs/design-options/00-brief-and-matrix.md</code>）。</caption>
+  <thead><tr><th>#</th><th>导航结构</th><th>首屏主角</th><th>密度</th><th>主题</th><th>数据主角</th><th>设计立场</th></tr></thead>
+  <tbody>
+    <tr><td class="c">01</td><td>侧栏 240px + 顶部命令条</td><td>战略态势带</td><td class="c">高</td><td class="c">亮</td><td>指标 + 业务表</td><td>现在该看哪里</td></tr>
+    <tr><td class="c">02</td><td>会话列表 + 指令流 + 运行轨道</td><td>可继续的对话流</td><td class="c">中</td><td class="c">亮</td><td>Agent 任务卡</td><td>与 Agent 协作</td></tr>
+    <tr><td class="c">03</td><td>顶部导航 + 页内章节目录</td><td>报告文档流</td><td class="c">中</td><td class="c">亮</td><td>长文 + 图卡</td><td>交付物即界面</td></tr>
+    <tr><td class="c">04</td><td>无侧栏 + 命令面板 + 窗格标签</td><td>多窗格分屏</td><td class="c">极高</td><td class="c">暗</td><td>高密度表格</td><td>不该碰鼠标</td></tr>
+    <tr><td class="c">05</td><td>顶部 5 项，无侧栏无面包屑</td><td>一个巨大数字</td><td class="c">极低</td><td class="c">亮</td><td>单指标/单图</td><td>层级只靠排版</td></tr>
+    <tr><td class="c">06</td><td>顶部导航 + 页内 Tab</td><td>待办/运行/数据集分区</td><td class="c">中</td><td class="c">亮</td><td>列表 + 进度</td><td>路径最短</td></tr>
+    <tr><td class="c">07</td><td>筛选器侧栏 + 顶部时间控件</td><td>12 栏图表墙</td><td class="c">高</td><td class="c">亮</td><td>图表</td><td>筛选联动探索</td></tr>
+    <tr><td class="c">08</td><td>无导航栏 + 右侧锚点进度</td><td>关键发现卡 ≤5</td><td class="c">低</td><td class="c">亮</td><td>结论卡 + 矩阵</td><td>答案先行</td></tr>
+    <tr><td class="c">09</td><td>状态泳道 + 事件流抽屉</td><td>队列四列</td><td class="c">极高</td><td class="c">暗/亮</td><td>状态阶梯+事件</td><td>看得见怎么跑</td></tr>
+    <tr><td class="c">10</td><td>封面 → 目录 → 内文三级</td><td>本期封面 + 期号</td><td class="c">低</td><td class="c">亮</td><td>跨栏图文</td><td>编号即品牌</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="no">04</span>10 套都遵守的同一条纪律：不画后端没有的东西</h2>
+<p>这条不是审美选择，是我先把后端接口逐条核对过之后的硬边界。所以你在 10 套原型里<b>都找不到</b>下面这些常见但虚假的元件：</p>
+<ul class="tight">
+  <li><b>没有"导出报告 / 下载 PDF / 分享链接"</b> —— 后端根本没有导出接口（现有前端也已在 <code>index.html:637</code> 自陈无导出能力）。放上去就是假按钮。</li>
+  <li><b>没有"阶段耗时 / 甘特图 / 按时间的百分比"</b> —— <code>WorkflowState</code> 只有工作流级 <code>created_at/started_at/finished_at</code>，轮询接口只暴露其中两个。所有方案一律降级成 <code>step_index/total_steps</code> 阶梯 + 整条任务真实总耗时，并在界面上写明"阶段级耗时需后端补时间戳"。</li>
+  <li><b>没有"实时日志流 / 秒级推送"</b> —— 真实机制是 1000ms 轮询，09 甚至把事件流明确标注为"轮询采样差异，中间态可能没采到"。</li>
+  <li><b>没有通知铃铛、全局搜索、保存视图、协作评论、Token 成本、模型选择器</b> —— 都没有接口。数据集搜索框是保留的，因为 <code>GET /api/datasets</code> 的 <code>q</code> 参数真实存在。</li>
+  <li><b>没有"删除/重命名数据集"</b> —— 上传、详情、画像、列表之外没有别的写接口。</li>
+  <li>反过来，<b>改密</b>（<code>POST /api/auth/password</code>）和<b>多设备会话列表</b>（<code>GET /api/auth/sessions</code>）在 04/03 等方案里出现了入口——因为它们后端真的存在，只是现有前端还没做。</li>
+</ul>
+<p>每套原型都常驻一条 <code>视觉方案示意 · 数据为占位样例 · 未接入后端</code>，占位数字不会被当成真实分析结果。</p>
+
+<h2><span class="no">05</span>还有几件事我没做（如实说明）</h2>
+<ul class="tight">
+  <li><b>没有在你的浏览器里肉眼看视觉效果</b>：这台机器的内嵌浏览器截图不可用。我做的验证是结构与代码层（视图数、交互实装范围、禁用项、语法、id 引用、对比度计算），视觉判断权在你。</li>
+  <li><b>没有碰任何生产页面</b>：<code>app/web/</code> 一行没改，符合你"选择前禁止大规模重构正式页面"的要求。（<code>app/</code> 下现有 18 个已修改文件是本次会话之前就存在的未提交改动，不是我这轮产生的。）</li>
+  <li><b>多智能体是真跑的，但角色不是我自封的</b>：本轮共 21 个子智能体（3 个研究 + 2 个只读盘点 + 16 个方案作者，含一次中断后补齐）。可用的子智能体类型只有 Explore / Plan / general-purpose 三种通用类型 + 我给的角色简报，<b>不存在</b>提示词第十八节列的那 8 个内置专用 Agent 预设，我不假装它们存在。</li>
+  <li><b>方案 02 的文档有 3 处我亲自改过</b>：原稿声称 <code>#8A8C93</code> 对比度 ≥4.5:1（我复算实为 3.1:1），已按 Demo 修正为 <code>#5A5C63</code>；任务卡的 <code>kind</code> 与工具 <code>category</code> 是两个不同真实字段，已标明。另外 02 的作者把自己文档里的"SERVICE_UNAVAILABLE 才给重试"误判成违反禁止清单——我核了 <code>app.js:55</code> 的 <code>RETRYABLE</code>，那是重试 HTTP 请求不是重试任务，合法。</li>
+</ul>
+
+<footer>
+  下一步：告诉我你选哪套（例如"我选方案 03"，也可以说"03 的阅读语言 + 06 的工作台结构"这种组合，组合我会先给你一份冲突清单再动手）。<br>
+  选定后按你要求派 10–20 个子智能体，顺序是：Design System → 页面重构 → 统一 → 真实业务验证（不放假数据、不加假按钮、不破坏上传/分析/图表/报告/历史/SQLite 持久化），最后起真实服务在浏览器里跑一遍给你看。
+</footer>
+</div>
+</body>
+</html>
