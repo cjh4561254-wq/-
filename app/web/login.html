@@ -82,6 +82,29 @@
         <p class="panel__lead" data-mode="login">登录你的分析工作台，继续未完成的分析。</p>
         <p class="panel__lead" data-mode="bootstrap">这个部署还没有任何账号，第一个管理员由你在这里设定；创建成功后这个入口不会再出现。</p>
 
+        <!--
+          演示账号一键登录（方案 05 登录页的「进入演示」入口）。
+          是否显示完全由后端决定：GET /api/auth/me 的 demo_login=true 才出现；
+          没打开 DEMO_LOGIN_ENABLED 的部署，这块保持 hidden，就算有人手动显示它，
+          POST /api/auth/demo 也会回 403 —— 按钮只是结果，不是防线。
+          按钮刻意不放进 <form>：它不发用户名/密码，走的是独立的演示会话接口。
+          说明文字如实写清"共用一份数据"，这是这个入口的代价，不能藏在文档里。
+        -->
+        <div class="demo" id="demo-login-block" data-mode="login" hidden>
+          <p class="demo__text">
+            <span class="demo__badge">演示</span>
+            想先看看效果？用演示账号直接进入，不需要密码。
+          </p>
+          <button class="demo__btn" id="demo-login" type="button">
+            <svg class="demo__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <circle cx="10" cy="7" r="3.2"></circle>
+              <path d="M3.6 17 C4.4 13.5 6.9 11.7 10 11.7 C13.1 11.7 15.6 13.5 16.4 17"></path>
+            </svg>
+            <span id="demo-login-text">进入演示</span>
+          </button>
+          <p class="demo__note">演示账号与本部署共用同一份数据，只建议在存放演示数据的部署上开启。</p>
+        </div>
+
         <!-- 信息级提示（role=status）：与下面的错误分开，"会话过期"这类说明不跟"密码错了"抢同一个播报通道。 -->
         <div class="notice" id="notice" role="status" aria-live="polite" hidden>
           <span class="notice__mark" aria-hidden="true"></span>

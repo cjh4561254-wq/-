@@ -30,7 +30,8 @@
     health: "/api/health",            // 公开，故意不要求登录（app/main.py:303-307）
     me: "/api/auth/me",               // 匿名也能访问，返回 authenticated / user / needs_bootstrap / session_expires_at
     login: "/api/auth/login",
-    bootstrap: "/api/auth/bootstrap"  // 只在账号库为空时允许，库非空返回 403
+    bootstrap: "/api/auth/bootstrap", // 只在账号库为空时允许，库非空返回 403
+    demo: "/api/auth/demo"            // 演示账号一键登录；后端没开 DEMO_LOGIN_ENABLED 时 403
   };
 
   var MODE = { PENDING: "pending", LOGIN: "login", BOOTSTRAP: "bootstrap" };
@@ -81,7 +82,9 @@
     touched: { username: false, password: false, confirm: false },
     userInteracted: false,            // 用户是否真的动过表单（D-05：决定要不要先亮那句"请填写…"）
     alertFocused: false,              // 本轮 alert 是否已经接过焦点（429 倒计时每秒刷新时不许再抢）
-    alertAction: null
+    alertAction: null,
+    demoAvailable: false,             // 后端 /api/auth/me 说 demo_login=true 才展示「进入演示」
+    demoBusy: false                   // 演示登录请求在飞（独立于表单提交的 busy）
   };
   var nextTarget = { raw: "", safe: "" };
   var sessionHint = "";               // /api/auth/me 返回 401/403 时的诚实说明
@@ -509,6 +512,7 @@
       ) || "");
     }
     updateSubmitState();
+    updateDemo();
   }
 
   // 所有说明性文字集中在一次渲染里，避免"先显示再被覆盖"的闪烁。
@@ -561,6 +565,92 @@
       }
     }
     show(el.envNotice, !!envNoticeText);
+  }
+
+  /* ---------------------------------------------------------------
+   * 八点五、演示账号一键登录（只在后端 demo_login=true 时出现）
+   * ------------------------------------------------------------- */
+  // 显隐的唯一依据是后端 /api/auth/me 的 demo_login 字段：前端不猜配置。
+  // 首次部署（bootstrap 形态）与"已登录正在跳转"形态都不出现这个入口。
+  function updateDemo() {
+    if (!el.demoBlock || !el.demoBtn) { return; }
+    var visible = state.demoAvailable === true &&
+      state.mode === MODE.LOGIN &&
+      state.meFailed !== true;
+    show(el.demoBlock, visible);
+    if (!visible) { return; }
+    var busy = state.busy || state.demoBusy;
+    el.demoBtn.disabled = !!busy;
+    el.demoBtn.setAttribute("aria-busy", busy ? "true" : "false");
+    setText(el.demoBtnText, busy ? "正在进入演示…" : "进入演示");
+  }
+
+  function demoLogin() {
+    if (state.demoAvailable !== true || state.demoBusy || state.busy) { return; }
+    if (state.mode !== MODE.LOGIN || state.meFailed) { return; }
+    clearAlert();
+    state.demoBusy = true;
+    // 复用表单的 busy 语义：冻结输入、禁用主提交按钮、把进度写进按钮下方。
+    setBusy(true, "正在进入演示…");
+    updateDemo();
+    fetchJson(API.demo, { method: "POST" }).then(function (outcome) {
+      state.demoBusy = false;
+      setBusy(false);
+      updateDemo();
+      if (outcome.ok && outcome.payload && outcome.payload.ok === true) {
+        onAuthSuccess();
+        return;
+      }
+      handleDemoFailure(outcome);
+    }, function (err) {
+      state.demoBusy = false;
+      setBusy(false);
+      updateDemo();
+      setAlert({
+        kind: "error",
+        title: err && err.kind === "timeout" ? "服务没有及时响应" : "连不上服务，请确认服务已启动",
+        detail: err && err.kind === "timeout"
+          ? "演示登录请求发出去了，但 " + Math.round(REQUEST_TIMEOUT_MS / 1000) + " 秒内没有回音。请确认服务是否卡住，然后重试。"
+          : "演示登录请求没有到达服务端（可能是服务未启动、端口不对或网络中断）。确认后再点重试。",
+        actionLabel: "重试",
+        action: demoLogin
+      });
+    });
+  }
+
+  function handleDemoFailure(outcome) {
+    var info = readError(outcome.payload, DEFAULT_API_ERROR);
+    if (outcome.status === 403) {
+      // 后端明确拒绝：这个部署没开演示登录，或演示账号被停用/被真实账号占用。
+      // 把入口收起来，避免"点了就一直错"；服务端原话保留，部署者能照着改配置。
+      state.demoAvailable = false;
+      updateDemo();
+      setAlert({
+        kind: "warn",
+        title: "演示登录不可用",
+        detail: "服务端拒绝了这个入口（" + info.message + "）。可以用用户名密码正常登录。"
+      });
+      return;
+    }
+    if (outcome.status >= 500) {
+      setAlert({
+        kind: "error",
+        title: "服务暂时不可用",
+        detail: "请联系管理员或稍后重试。服务端原话：" + info.message
+          + codeSuffix(outcome.status, info.code) + "。",
+        actionLabel: "重试",
+        action: demoLogin
+      });
+      return;
+    }
+    setAlert({
+      kind: "error",
+      title: "演示登录没有成功",
+      detail: "服务端原话：" + info.message + codeSuffix(outcome.status, info.code)
+        + "。可以重试，或用用户名密码正常登录。",
+      actionLabel: "重试",
+      action: demoLogin
+    });
   }
 
   /* ---------------------------------------------------------------
@@ -689,6 +779,9 @@
     el.envText = doc.getElementById("env-text");
     el.nextLine = doc.getElementById("foot-next");
     el.nextTarget = doc.getElementById("next-target");
+    el.demoBlock = doc.getElementById("demo-login-block");
+    el.demoBtn = doc.getElementById("demo-login");
+    el.demoBtnText = doc.getElementById("demo-login-text");
 
     if (!el.form || !el.submit) { return; }
 
@@ -754,6 +847,7 @@
       applyMode(MODE.LOGIN);    // 形态先按日常登录画（不显示"创建管理员"）
       state.meFailed = true;
       updateSubmitState();
+      updateDemo();
     });
   }
 
@@ -772,6 +866,7 @@
       applyMode(MODE.LOGIN);
       state.meFailed = true;
       updateSubmitState();
+      updateDemo();
       return;
     }
 
@@ -798,11 +893,15 @@
       applyMode(MODE.LOGIN);
       state.meFailed = true;
       updateSubmitState();
+      updateDemo();
       return;
     }
 
     var data = outcome.payload.data || {};
+    // 是否展示「进入演示」只看服务端：/api/auth/me 的 demo_login 字段。
+    state.demoAvailable = data.demo_login === true;
     if (data.authenticated === true) {
+      state.demoAvailable = false;
       // 已经登录的人不该看到登录表单（docs/ux-spec-final.md §2.8 S5）
       applyMode(MODE.LOGIN);
       // 再把形态临时标成 redirecting：CSS 据此把表单整块收起（见 login.css 同名规则）。
@@ -876,6 +975,14 @@
       el.alertRetry.addEventListener("click", function () {
         var action = state.alertAction;
         if (typeof action === "function") { action(); }
+      });
+    }
+
+    // 演示账号一键登录：按钮多数时候是 hidden（后端没开 DEMO_LOGIN_ENABLED），
+    // 有引用就绑上；点的时候 demoLogin 自己还会再核对 state.demoAvailable。
+    if (el.demoBtn) {
+      el.demoBtn.addEventListener("click", function () {
+        demoLogin();
       });
     }
 

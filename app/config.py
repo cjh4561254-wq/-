@@ -154,6 +154,23 @@ class Settings(BaseSettings):
     auth_max_failed_attempts: int = Field(default=5, ge=2, le=100)
     auth_lockout_seconds: int = Field(default=300, gt=0, le=24 * 3600)
 
+    # ---------------- 演示账号一键登录 ----------------
+    #
+    # 打开后（默认打开）登录页会出现「进入演示」按钮：访问者点一下就以演示账号
+    # 身份进入，**不需要密码**。适合作品展示、给客户/同事看界面与流程。
+    #
+    # 代价要说清楚：演示账号看到的就是这个部署的数据。**如果这个部署里放着真实
+    # 业务数据，请用 DEMO_LOGIN_ENABLED=0 关掉它再启动**（改完必须重启进程）。
+    # 登录页上也会明确写出"演示账号与本部署共用一份数据"。
+    #
+    # 演示账号的密码由服务端随机生成、不落进任何文档，所以**只能通过按钮进入**，
+    # 不能从登录表单用用户名密码登录 —— 减少"演示账号密码泄漏后被长期占用"的可能。
+    demo_login_enabled: bool = True
+
+    # 演示账号的用户名。如果这个用户名已经被真实账号占用，接口会拒绝
+    # （不会把真实账号变成演示账号）；换一个 DEMO_USERNAME 即可。
+    demo_username: str = "demo"
+
     @property
     def auth_db_file(self) -> Path:
         """账号库文件的绝对路径。

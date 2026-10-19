@@ -23,10 +23,11 @@
 from __future__ import annotations
 
 import logging
+import secrets
 
 from fastapi import APIRouter, Depends, Request, Response
 
-from app.config import get_settings
+from app.config import current_settings, get_settings
 from app.core.auth import (
     LoginFailure,
     SessionUser,
@@ -46,6 +47,7 @@ from app.data.users import AuthStoreError, UserRecord, get_auth_store
 from app.errors import AppError
 from app.schemas import ApiResponse, ErrorCode
 from app.schemas_auth import (
+    USERNAME_PATTERN,
     AuthState,
     BootstrapRequest,
     ChangePasswordRequest,
@@ -57,6 +59,11 @@ from app.schemas_auth import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
+
+#: 演示账号的显示名。它同时是"这个账号是不是演示账号"的**唯一判据**：
+#: 如果 `DEMO_USERNAME` 已经被一个真实账号占用（显示名不是它），
+#: 我们宁可拒绝，也绝不能把那个人的账号变成"谁都能进"的演示账号。
+DEMO_DISPLAY_NAME = "演示账号"
 
 
 def _store():
@@ -127,7 +134,9 @@ def auth_me(request: Request) -> ApiResponse[AuthState]:
     必须知道的东西，而且只要有登录页就藏不住（初始化表单出现与否本身就是信号）。
     账号名、密码、会话数量一概不返回。
     """
-    settings = get_settings()
+    # 用 `current_settings()` 而不是导入期绑死的 `get_settings()`：这个字段
+    # 决定前端按钮显不显示，测试要能通过 monkeypatch 切开关（理由见 config.py）。
+    settings = current_settings()
     user = current_user_or_none(request)
     if user is None:
         return ApiResponse[AuthState](
@@ -136,6 +145,7 @@ def auth_me(request: Request) -> ApiResponse[AuthState]:
                 authenticated=False,
                 user=None,
                 needs_bootstrap=_needs_bootstrap(),
+                demo_login=settings.demo_login_enabled,
             ),
         )
     store = get_auth_store()
@@ -148,6 +158,7 @@ def auth_me(request: Request) -> ApiResponse[AuthState]:
             user=_user_data(record) if record else None,
             needs_bootstrap=False,
             session_expires_at=_session_expiry(token, request),
+            demo_login=settings.demo_login_enabled,
         ),
     )
 
@@ -189,7 +200,12 @@ def bootstrap(payload: BootstrapRequest, request: Request, response: Response) -
     logger.info("initialized first admin account: %s", user.username)
     return ApiResponse[AuthState](
         ok=True,
-        data=AuthState(authenticated=True, user=_user_data(user), needs_bootstrap=False),
+        data=AuthState(
+            authenticated=True,
+            user=_user_data(user),
+            needs_bootstrap=False,
+            demo_login=settings.demo_login_enabled,
+        ),
     )
 
 
@@ -238,6 +254,102 @@ def login(payload: LoginRequest, request: Request, response: Response) -> ApiRes
             user=_user_data(user),
             needs_bootstrap=False,
             session_expires_at=expires_at.isoformat(),
+            demo_login=settings.demo_login_enabled,
+        ),
+    )
+
+
+@router.post("/auth/demo", response_model=ApiResponse[AuthState], summary="演示账号一键登录")
+def demo_login(request: Request, response: Response) -> ApiResponse[AuthState]:
+    """**演示实例**专用：点一下就以演示账号身份进入，不需要密码。
+
+    这不是"简化登录"，而是"把整份数据交给所有访问者"。所以它有三道闸：
+
+      1. **默认关闭**。只有 `DEMO_LOGIN_ENABLED=1` 的部署才会响应这个接口，
+         其他部署一律 403 —— 前端按钮显不显示只是结果，不是防线；
+      2. **账号库必须有管理员**。空库时这个接口拒绝，否则演示账号会抢先
+         占掉"第一个账号"的位置，把首次部署引导窗口关死；
+      3. **不能顶替真实账号**。`DEMO_USERNAME` 已被一个真实账号占用
+         （显示名不是「演示账号」）时直接 403，不许把别人的账号变成演示账号。
+
+    演示账号的密码由服务端随机生成、不写进任何文档也不返回给前端，
+    所以它**只能从按钮进入**，从登录表单用用户名密码登不进去 ——
+    这样即使有人猜到这个用户名，也不会多出一条长期可用的凭据。
+    """
+    settings = current_settings()
+    if not settings.demo_login_enabled:
+        raise AppError(
+            ErrorCode.FORBIDDEN,
+            "这个部署没有开启演示登录（DEMO_LOGIN_ENABLED）",
+        )
+    if not USERNAME_PATTERN.match(settings.demo_username):
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "演示账号用户名不合法（DEMO_USERNAME），请改成 3-32 位字母数字开头",
+        )
+
+    store = _store()
+    try:
+        store.ensure_schema()
+        if store.count_users() == 0:
+            raise AppError(
+                ErrorCode.FORBIDDEN,
+                "这个部署还没有管理员，请先完成首次部署，再使用演示登录",
+            )
+        demo_username = settings.demo_username
+        record = store.find_user(demo_username)
+        if record is None:
+            # 随机密码：生成后立即被丢弃。没有地方能查到它，也没有办法拿它登录。
+            hashed = hash_password(secrets.token_hex(24))
+            try:
+                record = store.create_user(
+                    username=demo_username,
+                    display_name=DEMO_DISPLAY_NAME,
+                    password_hash=hashed.hash_hex,
+                    salt=hashed.salt_hex,
+                    iterations=hashed.iterations,
+                )
+            except AuthStoreError:
+                # 两个浏览器同时点按钮时，可能被另一个请求抢先创建：再查一次。
+                try:
+                    record = store.find_user(demo_username)
+                except AuthStoreError:
+                    record = None
+                if record is None:
+                    raise
+    except AppError:
+        raise
+    except AuthStoreError as exc:
+        logger.warning("demo login failed: %s", exc)
+        raise AppError(ErrorCode.INTERNAL_ERROR, "演示登录失败，请查看服务端日志") from exc
+
+    if record is None:  # pragma: no cover - 防御：上面所有分支都已保证非空
+        raise AppError(ErrorCode.INTERNAL_ERROR, "演示账号不存在")
+    if not record.is_active:
+        raise AppError(ErrorCode.FORBIDDEN, "演示账号已被停用，请联系部署者")
+    if record.display_name != DEMO_DISPLAY_NAME:
+        raise AppError(
+            ErrorCode.FORBIDDEN,
+            "演示账号用户名已被真实账号占用（DEMO_USERNAME），请换一个名字或关闭演示登录",
+        )
+
+    try:
+        store.mark_login(record.id)
+    except AuthStoreError as exc:
+        # 与登录一样：记登录时间失败不该挡住人进门。
+        logger.warning("demo login: mark_login failed for %s: %s", record.username, exc)
+
+    token, expires_at = create_session(record.id, user_agent=request.headers.get("user-agent"))
+    response.set_cookie(**session_cookie_kwargs(max_age=settings.auth_session_seconds), value=token)
+    logger.info("demo login: %s", record.username)
+    return ApiResponse[AuthState](
+        ok=True,
+        data=AuthState(
+            authenticated=True,
+            user=_user_data(record),
+            needs_bootstrap=False,
+            session_expires_at=expires_at.isoformat(),
+            demo_login=True,
         ),
     )
 
@@ -323,6 +435,7 @@ def change_password(
             user=_user_data(record),
             needs_bootstrap=False,
             session_expires_at=expires_at.isoformat(),
+            demo_login=settings.demo_login_enabled,
         ),
     )
 

@@ -819,3 +819,155 @@ def test_session_timeout_is_finite(shared_db_client):
 
     deadline = datetime.fromisoformat(expires_at)
     assert deadline.timestamp() > time.time(), "会话到期时间应该在未来"
+
+
+# ---------------------------------------------------------------------------
+# 演示账号一键登录（/api/auth/demo）
+#
+# 这个接口的性质和别的都不一样：它**故意**不需要密码。所以测试要盯的不是
+# "能不能登进去"，而是"凭什么能被允许存在"：
+#   - 能关掉（DEMO_LOGIN_ENABLED=0 时 403，且前端能知道按钮不该出现）；
+#   - 空账号库时拒绝（不许抢走首次部署的位置）；
+#   - 同名真实账号不被顶替（不能把别人的账号变成演示账号）；
+#   - 开着的时候真的建号 + 发会话 + 幂等，而演示账号密码是随机的、猜不到。
+# ---------------------------------------------------------------------------
+def _demo_settings(tmp_path, monkeypatch, *, db_name: str = "auth-demo.db", **extra):
+    """把账号库指到 tmp_path 并设定演示登录开关。返回值只用于断言。"""
+    db_path = tmp_path / db_name
+    settings = config.get_settings().model_copy(update={"auth_db_path": str(db_path), **extra})
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+
+    from app.data.users import reset_auth_store_cache
+
+    reset_auth_store_cache()
+    return settings
+
+
+def test_demo_login_can_be_turned_off(tmp_path, monkeypatch):
+    """关掉开关后接口必须 403，并且 /auth/me 明确告诉前端"别显示按钮"。
+
+    这是整条防线的第一层：前端按钮显不显示只是结果，后端认的是配置。
+    """
+    _demo_settings(tmp_path, monkeypatch, demo_login_enabled=False)
+    try:
+        with TestClient(app) as client:
+            client.cookies.clear()
+            mark_client_as_anonymous(client)
+
+            body = client.get("/api/auth/me").json()["data"]
+            assert body["demo_login"] is False
+
+            response = client.post("/api/auth/demo")
+            assert response.status_code == 403
+            error = response.json()["error"]
+            assert error["code"] == "FORBIDDEN"
+            assert "DEMO_LOGIN_ENABLED" in error["message"]
+    finally:
+        from app.data.users import reset_auth_store_cache
+
+        reset_auth_store_cache()
+
+
+def test_demo_login_refuses_to_steal_bootstrap(tmp_path, monkeypatch):
+    """空账号库时演示登录必须拒绝：否则它会占掉"第一个账号"而关死初始化入口。"""
+    _demo_settings(tmp_path, monkeypatch, demo_login_enabled=True)
+    try:
+        with TestClient(app) as client:
+            client.cookies.clear()
+            mark_client_as_anonymous(client)
+            response = client.post("/api/auth/demo")
+            assert response.status_code == 403
+            assert "首次部署" in response.json()["error"]["message"]
+            # 仍然可以正常初始化 —— 演示登录没有把库弄脏。
+            assert client.post(
+                "/api/auth/bootstrap",
+                json={"username": "admin", "display_name": "管理员", "password": "admin-pass1"},
+            ).status_code == 200
+    finally:
+        from app.data.users import reset_auth_store_cache
+
+        reset_auth_store_cache()
+
+
+def test_demo_login_creates_account_issues_session_and_is_idempotent(tmp_path, monkeypatch):
+    """打开开关后：没账号就建一个演示账号、签发会话、再点一次还是同一个账号。"""
+    settings = _demo_settings(tmp_path, monkeypatch, demo_login_enabled=True)
+    try:
+        # 先按正常流程建一个管理员（演示登录自己拒绝在空库上工作）。
+        with TestClient(app) as admin:
+            admin.cookies.clear()
+            mark_client_as_anonymous(admin)
+            assert admin.post(
+                "/api/auth/bootstrap",
+                json={"username": "admin", "display_name": "管理员", "password": "admin-pass1"},
+            ).status_code == 200
+
+        with TestClient(app) as client:
+            client.cookies.clear()
+            mark_client_as_anonymous(client)
+
+            # 还没点按钮时，/auth/me 已经告诉前端"这个部署可以演示登录"。
+            state = client.get("/api/auth/me").json()["data"]
+            assert state["authenticated"] is False
+            assert state["needs_bootstrap"] is False
+            assert state["demo_login"] is True
+
+            response = client.post("/api/auth/demo")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["authenticated"] is True
+            assert data["demo_login"] is True
+            assert data["user"]["username"] == settings.demo_username
+            assert data["user"]["display_name"] == "演示账号"
+            assert _session_cookie(client), "演示登录也要真的种会话 cookie"
+
+            # 会话真的能用（不是只返回了一个好看的响应体）。
+            me = client.get("/api/auth/me").json()["data"]
+            assert me["authenticated"] is True
+            assert me["user"]["username"] == settings.demo_username
+
+            # 幂等：第二次点不会建出第二个演示账号。
+            again = client.post("/api/auth/demo").json()["data"]
+            assert again["user"]["id"] == data["user"]["id"]
+
+            # 演示账号的密码是服务端随机丢掉的，拿常用密码从登录表单进不来。
+            with TestClient(app) as guesser:
+                guesser.cookies.clear()
+                mark_client_as_anonymous(guesser)
+                wrong = guesser.post(
+                    "/api/auth/login",
+                    json={"username": settings.demo_username, "password": "demo1234"},
+                )
+                assert wrong.status_code == 401
+    finally:
+        from app.data.users import reset_auth_store_cache
+
+        reset_auth_store_cache()
+
+
+def test_demo_login_never_impersonates_a_real_account(tmp_path, monkeypatch):
+    """同名真实账号不能被演示登录顶替：接口拒绝，且原账号密码仍然有效。"""
+    _demo_settings(tmp_path, monkeypatch, demo_login_enabled=True)
+    try:
+        with TestClient(app) as client:
+            client.cookies.clear()
+            mark_client_as_anonymous(client)
+            # 这个部署的真实管理员恰好就叫 demo，显示名不是「演示账号」。
+            assert client.post(
+                "/api/auth/bootstrap",
+                json={"username": "demo", "display_name": "真正的管理员", "password": "real-pass1"},
+            ).status_code == 200
+            assert client.post("/api/auth/logout").status_code == 200
+
+            blocked = client.post("/api/auth/demo")
+            assert blocked.status_code == 403
+            assert "占用" in blocked.json()["error"]["message"]
+
+            # 账号没有被改成演示账号：原密码照样能登录。
+            ok = client.post("/api/auth/login", json={"username": "demo", "password": "real-pass1"})
+            assert ok.status_code == 200
+            assert ok.json()["data"]["user"]["display_name"] == "真正的管理员"
+    finally:
+        from app.data.users import reset_auth_store_cache
+
+        reset_auth_store_cache()

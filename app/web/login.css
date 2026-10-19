@@ -1137,6 +1137,128 @@ html[data-auth-mode="bootstrap"] .panel__lead {
  * 七、减少动效：只压瞬时变化，不隐藏任何内容
  * ========================================================================== */
 
+/* --------------------------------------------------------------------------
+ * 3.3 演示账号一键登录：只在这个部署开启 DEMO_LOGIN_ENABLED 时出现
+ *     显隐与文案由 login.js 的 updateDemo() 依据 /api/auth/me 的 demo_login 控制。
+ *     视觉上比主按钮轻一档——它是旁观入口，不是主路径。
+ * -------------------------------------------------------------------------- */
+
+.demo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--brand-200);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--brand-50), var(--n-0));
+}
+
+.demo__text {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--ds-color-ink);
+}
+
+.demo__badge {
+  flex: none;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--ds-cmd-action);
+  color: var(--ds-cmd-action-ink);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.demo__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: var(--ds-touch-min);
+  margin-left: 0;
+  padding: 0 var(--sp-4);
+  grid-column: 2;
+  justify-self: end;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--ds-cmd-action);
+  color: var(--ds-cmd-action-ink);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-action);
+  transition:
+    background-color var(--dur-1) var(--ease),
+    box-shadow var(--dur-1) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+
+.demo__btn:hover:not(:disabled) {
+  background: var(--ds-cmd-action-hover);
+  box-shadow: var(--shadow-action-hover);
+  transform: translateY(-1px);
+}
+
+.demo__btn:active:not(:disabled) {
+  background: var(--ds-cmd-action-active);
+  box-shadow: none;
+  transform: none;
+}
+
+.demo__btn:disabled {
+  border-color: var(--ds-cmd-action-disabled-line);
+  background: var(--ds-cmd-action-disabled-surface);
+  color: var(--ds-cmd-action-disabled-ink);
+  box-shadow: none;
+  cursor: progress;
+}
+
+.demo__icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.demo__note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--ds-color-ink-subtle);
+}
+
+@media (max-width: 480px) {
+  .demo {
+    align-items: flex-start;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .demo__btn {
+    width: 100%;
+    margin-left: 0;
+    grid-column: 1;
+    justify-self: stretch;
+  }
+
+  .demo__note {
+    grid-column: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

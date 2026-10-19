@@ -170,12 +170,15 @@ class AuthState(BaseModel):
       - `authenticated`：有没有有效会话
       - `user`：是谁
       - `needs_bootstrap`：账号库是不是还空着（决定显示登录表单还是"创建第一个管理员"）
+      - `demo_login`：这个部署是否允许「进入演示」一键登录（只影响按钮显不显示，
+        真正的开关在后端：没打开时 `POST /api/auth/demo` 一律 403）
     """
 
     authenticated: bool
     user: UserData | None = None
     needs_bootstrap: bool = False
     session_expires_at: str | None = None
+    demo_login: bool = False
 
 
 class SessionData(BaseModel):
